@@ -1,15 +1,13 @@
 import { runTransientDiscord } from '../services/discordApiGuard.js';
 
 /**
- * Wrappers interactions : retry / 429 sans passer par la file globale (réponses sous contrainte de temps).
+ * Accusé de réponse initial : pas de runTransientDiscord — un retry après succès API ⇒ 40060.
+ * editReply / followUp : retries conservés (pas double ACK du token d’interaction).
  * @param {import('discord.js').ChatInputCommandInteraction} interaction
  * @param {import('discord.js').InteractionReplyOptions} options
  */
 export function interactReply(interaction, options) {
-  return runTransientDiscord(() => interaction.reply(options), {
-    kind: 'interaction.reply',
-    metadata: { command: interaction.commandName },
-  });
+  return interaction.reply(options);
 }
 
 /**
@@ -39,11 +37,7 @@ export function interactFollowUp(interaction, options) {
  * @param {import('discord.js').InteractionDeferReplyOptions} [options]
  */
 export function interactDeferReply(interaction, options) {
-  return runTransientDiscord(() => interaction.deferReply(options), {
-    kind: 'interaction.deferReply',
-    metadata: { command: interaction.commandName },
-    maxAttempts: 2,
-  });
+  return interaction.deferReply(options);
 }
 
 /**
@@ -51,9 +45,5 @@ export function interactDeferReply(interaction, options) {
  * @param {import('discord.js').ApplicationCommandOptionChoiceData[]} choices
  */
 export function interactAutocompleteRespond(interaction, choices) {
-  return runTransientDiscord(() => interaction.respond(choices), {
-    kind: 'autocomplete.respond',
-    metadata: { command: interaction.commandName },
-    maxAttempts: 2,
-  });
+  return interaction.respond(choices);
 }
