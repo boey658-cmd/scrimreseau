@@ -1,0 +1,22 @@
+{
+  "name": "scrim-network-bot",
+  "version": "1.0.0",
+  "description": "Bot Discord réseau de scrims — diffusion multi-serveurs sécurisée",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "deploy-commands": "node scripts/deploy-commands.js",
+    "upload-emojis": "node scripts/upload-game-emojis.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "better-sqlite3": "12.8.0",
+    "discord.js": "14.25.1",
+    "dotenv": "16.4.7",
+    "luxon": "^3.5.0"
+  }
+}

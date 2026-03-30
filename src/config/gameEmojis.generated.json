@@ -1,0 +1,32 @@
+{
+  "league_of_legends": {
+    "emojiName": "lol",
+    "emojiId": "1484477141428211735",
+    "emojiTag": "<:lol:1484477141428211735>"
+  },
+  "valorant": {
+    "emojiName": "valorant",
+    "emojiId": "1484477145412534354",
+    "emojiTag": "<:valorant:1484477145412534354>"
+  },
+  "rocket_league": {
+    "emojiName": "rl",
+    "emojiId": "1484477149384675348",
+    "emojiTag": "<:rl:1484477149384675348>"
+  },
+  "apex_legends": {
+    "emojiName": "apex",
+    "emojiId": "1484477153767723099",
+    "emojiTag": "<:apex:1484477153767723099>"
+  },
+  "fortnite": {
+    "emojiName": "fortnite",
+    "emojiId": "1484477157823484024",
+    "emojiTag": "<:fortnite:1484477157823484024>"
+  },
+  "dota_2": {
+    "emojiName": "dota2",
+    "emojiId": "1484477161850273843",
+    "emojiTag": "<:dota2:1484477161850273843>"
+  }
+}
