@@ -28,7 +28,11 @@ export async function startBot() {
   const stmts = prepareStatements(db);
 
   const client = new Client({
-    intents: [GatewayIntentBits.Guilds],
+    intents: [
+      GatewayIntentBits.Guilds,
+      /** Requis pour vérifier l’appartenance au serveur public ( /recherche-scrim ). */
+      GatewayIntentBits.GuildMembers,
+    ],
   });
 
   /** @type {Collection<string, typeof commandList[number]>} */

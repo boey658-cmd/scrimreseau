@@ -47,6 +47,7 @@ import {
   interactReply,
 } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
+import { checkScrimReseauPublicGuildMembership } from '../utils/scrimPublicGuildGate.js';
 import {
   FORMAT_SCRIM_SERIE_KEY,
   getScrimCommunityServerUrlFromEnv,
@@ -178,6 +179,18 @@ export const rechercheScrim = {
       await interactReply(interaction, {
         content:
           '❌ Cette commande ne peut être utilisée que dans un serveur.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const publicGuildGate = await checkScrimReseauPublicGuildMembership(
+      interaction.client,
+      interaction.user.id,
+    );
+    if (!publicGuildGate.ok) {
+      await interactReply(interaction, {
+        content: publicGuildGate.content,
         flags: MessageFlags.Ephemeral,
       });
       return;
