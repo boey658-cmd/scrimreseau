@@ -5,11 +5,8 @@ import {
   EmbedBuilder,
 } from 'discord.js';
 import { getEmbedColorForGame } from '../config/gameEmbedColors.js';
-import { getGame } from '../config/games.js';
 import { getScrimEmoji } from '../utils/emojis.js';
-import { getGameEmoji } from '../utils/gameEmoji.js';
 import { SCRIM_TIMEZONE } from '../utils/scrimScheduledAt.js';
-import { buildMultiOpggEmbedFieldValue } from '../utils/validateMultiOpgg.js';
 
 /** Contenu du message Discord une fois la scrim fermée (embeds supprimés). */
 export const SCRIM_CLOSED_MESSAGE_CONTENT = '────────────';
@@ -255,22 +252,21 @@ export function formatFearlessLineForEmbed(fearless) {
 const MAX_CONTACT_USERNAME_LEN = 200;
 
 /**
- * Lignes contact en fin de description : mention + ligne 📋 username si connu.
+ * Ligne contact : mention + pseudo Discord sur une seule ligne si connu.
  * @param {string} contactUserId
  * @param {string | null | undefined} contactUsername
  * @returns {string[]}
  */
 function buildScrimContactDescriptionLines(contactUserId, contactUsername) {
-  const lines = [`👤 <@${contactUserId}>`];
   const u = typeof contactUsername === 'string' ? contactUsername.trim() : '';
-  if (u) {
-    const safe =
-      u.length > MAX_CONTACT_USERNAME_LEN
-        ? `${u.slice(0, MAX_CONTACT_USERNAME_LEN)}…`
-        : u;
-    lines.push(`📋 ${safe}`);
+  const safe =
+    u.length > MAX_CONTACT_USERNAME_LEN
+      ? `${u.slice(0, MAX_CONTACT_USERNAME_LEN)}…`
+      : u;
+  if (safe) {
+    return [`👤 <@${contactUserId}> • ${safe}`];
   }
-  return lines;
+  return [`👤 <@${contactUserId}>`];
 }
 
 /** Explication courte sous le contact (bouton lien sous le message). */
@@ -362,10 +358,6 @@ export function buildScrimClosedMessageEditOptions(status) {
  * @returns {EmbedBuilder}
  */
 export function buildScrimEmbed(payload) {
-  const game = getGame(payload.gameKey);
-  const gameLabel = game?.label ?? payload.gameKey;
-  const gameEmoji = getGameEmoji(payload.gameKey);
-
   let dateStr = payload.dateStr;
   let timeStr = payload.timeStr;
 
@@ -405,13 +397,15 @@ export function buildScrimEmbed(payload) {
     payload.fearless ?? null,
   );
 
+  const formatBlock = `${getScrimEmoji('format')} ${formatLine}`;
+  const formatAndFearlessLine = fearlessLine
+    ? `${formatBlock} • ${fearlessLine}`
+    : formatBlock;
+
   const description = [
-    `${gameEmoji} **${gameLabel}**`,
-    '',
     `${getScrimEmoji('date')} ${dateStr}`,
     `${getScrimEmoji('heure')} ${timeStr}`,
-    `${getScrimEmoji('format')} ${formatLine}`,
-    ...(fearlessLine ? [fearlessLine] : []),
+    formatAndFearlessLine,
     `${getScrimEmoji('rang')} ${payload.rank}`,
     ...buildScrimContactDescriptionLines(
       payload.contactUserId,
@@ -425,15 +419,13 @@ export function buildScrimEmbed(payload) {
 
   const embed = new EmbedBuilder()
     .setColor(color)
-    .setTitle('🔎 Recherche de scrim')
-    .setDescription(description)
-    .setTimestamp(new Date());
+    .setDescription(description);
 
   const multiUrl = payload.multiOpggUrl;
   if (typeof multiUrl === 'string' && multiUrl.length > 0) {
     embed.addFields({
-      name: 'Multi OP.GG',
-      value: buildMultiOpggEmbedFieldValue(multiUrl),
+      name: '\u200B',
+      value: `Multi OP.GG : [Ouvrir](${multiUrl})`,
       inline: false,
     });
   }
