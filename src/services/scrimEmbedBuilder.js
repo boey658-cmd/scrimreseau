@@ -4,12 +4,19 @@ import {
   ButtonStyle,
   EmbedBuilder,
 } from 'discord.js';
-import { getEmbedColorForGame } from '../config/gameEmbedColors.js';
 import { getScrimEmoji } from '../utils/emojis.js';
 import { SCRIM_TIMEZONE } from '../utils/scrimScheduledAt.js';
 
-/** Contenu du message Discord une fois la scrim fermée (embeds supprimés). */
-export const SCRIM_CLOSED_MESSAGE_CONTENT = '────────────';
+/** Embed scrim disponible (publication / réseau). */
+export const SCRIM_EMBED_COLOR_ACTIVE = 0x57f287;
+/** Embed fermé manuellement (/scrim-trouve). */
+export const SCRIM_EMBED_COLOR_CLOSED_MANUAL = 0xed4245;
+/** Embed fermé par expiration automatique. */
+export const SCRIM_EMBED_COLOR_CLOSED_EXPIRED = 0x4f545c;
+
+const SCRIM_STATUS_LINE_ACTIVE = '🟢 Disponible';
+const SCRIM_STATUS_LINE_CLOSED_MANUAL = '🔴 Scrim trouvé — indisponible';
+const SCRIM_STATUS_LINE_CLOSED_EXPIRED = '⚫ Scrim expiré — indisponible';
 
 /** @type {Intl.DateTimeFormat} */
 let _parisDateFormatter;
@@ -337,27 +344,10 @@ export function formatScrimFormatLineForEmbed(formatKey, nombreDeGames) {
 }
 
 /**
- * Édition Discord après fermeture : texte minimal, aucun embed (remplace l’embed actif).
- * @param {'closed_manual' | 'closed_expired'} status
- * @returns {{ content: string, embeds: [] }}
- */
-export function buildScrimClosedMessageEditOptions(status) {
-  if (status === 'closed_manual' || status === 'closed_expired') {
-    return {
-      content: SCRIM_CLOSED_MESSAGE_CONTENT,
-      embeds: [],
-      /** Retire le bouton lien éventuellement présent sur l’annonce ouverte. */
-      components: [],
-    };
-  }
-  throw new Error(`buildScrimClosedMessageEditOptions: statut inconnu (${String(status)})`);
-}
-
-/**
  * @param {ScrimEmbedPayload} payload
- * @returns {EmbedBuilder}
+ * @returns {{ dateStr: string, timeStr: string }}
  */
-export function buildScrimEmbed(payload) {
+function resolveScrimDisplaySchedule(payload) {
   let dateStr = payload.dateStr;
   let timeStr = payload.timeStr;
 
@@ -388,21 +378,34 @@ export function buildScrimEmbed(payload) {
     }
   }
 
+  return { dateStr, timeStr };
+}
+
+/**
+ * @param {ScrimEmbedPayload} payload
+ * @param {string} statusLine
+ * @param {{ includeContactHints?: boolean }} [options]
+ * @returns {string}
+ */
+function buildScrimEmbedDescription(payload, statusLine, options = {}) {
+  const { dateStr, timeStr } = resolveScrimDisplaySchedule(payload);
+
   const formatLine = formatScrimFormatLineForEmbed(
     payload.format,
     payload.nombreDeGames ?? null,
   );
 
-  const fearlessLine = formatFearlessLineForEmbed(
-    payload.fearless ?? null,
-  );
+  const fearlessLine = formatFearlessLineForEmbed(payload.fearless ?? null);
 
   const formatBlock = `${getScrimEmoji('format')} ${formatLine}`;
   const formatAndFearlessLine = fearlessLine
     ? `${formatBlock} • ${fearlessLine}`
     : formatBlock;
 
-  const description = [
+  /** @type {string[]} */
+  const lines = [
+    statusLine,
+    '',
     `${getScrimEmoji('date')} ${dateStr}`,
     `${getScrimEmoji('heure')} ${timeStr}`,
     formatAndFearlessLine,
@@ -411,15 +414,26 @@ export function buildScrimEmbed(payload) {
       payload.contactUserId,
       payload.contactDisplayName ?? null,
     ),
-    '',
-    ...SCRIM_CONTACT_BUTTON_HINT_LINES,
-  ].join('\n');
+  ];
 
-  const color = getEmbedColorForGame(payload.gameKey);
+  if (options.includeContactHints) {
+    lines.push('', ...SCRIM_CONTACT_BUTTON_HINT_LINES);
+  }
 
+  return lines.join('\n');
+}
+
+/**
+ * @param {ScrimEmbedPayload} payload
+ * @param {number} color
+ * @param {string} statusLine
+ * @param {{ includeContactHints?: boolean }} [options]
+ * @returns {EmbedBuilder}
+ */
+function buildScrimEmbedWithStatus(payload, color, statusLine, options = {}) {
   const embed = new EmbedBuilder()
     .setColor(color)
-    .setDescription(description);
+    .setDescription(buildScrimEmbedDescription(payload, statusLine, options));
 
   const multiUrl = payload.multiOpggUrl;
   if (typeof multiUrl === 'string' && multiUrl.length > 0) {
@@ -431,6 +445,58 @@ export function buildScrimEmbed(payload) {
   }
 
   return embed;
+}
+
+/**
+ * Édition Discord après fermeture : embed coloré + statut (conserve les infos utiles).
+ * @param {'closed_manual' | 'closed_expired'} status
+ * @param {Record<string, unknown>} dbRow ligne `scrim_posts` après fermeture
+ * @returns {{ content: null, embeds: EmbedBuilder[], components: [] }}
+ */
+export function buildScrimClosedMessageEditOptions(status, dbRow) {
+  const payload = scrimDbRowToEmbedPayload(dbRow);
+
+  if (status === 'closed_manual') {
+    return {
+      content: null,
+      embeds: [
+        buildScrimEmbedWithStatus(
+          payload,
+          SCRIM_EMBED_COLOR_CLOSED_MANUAL,
+          SCRIM_STATUS_LINE_CLOSED_MANUAL,
+        ),
+      ],
+      /** Retire le bouton lien éventuellement présent sur l’annonce ouverte. */
+      components: [],
+    };
+  }
+  if (status === 'closed_expired') {
+    return {
+      content: null,
+      embeds: [
+        buildScrimEmbedWithStatus(
+          payload,
+          SCRIM_EMBED_COLOR_CLOSED_EXPIRED,
+          SCRIM_STATUS_LINE_CLOSED_EXPIRED,
+        ),
+      ],
+      components: [],
+    };
+  }
+  throw new Error(`buildScrimClosedMessageEditOptions: statut inconnu (${String(status)})`);
+}
+
+/**
+ * @param {ScrimEmbedPayload} payload
+ * @returns {EmbedBuilder}
+ */
+export function buildScrimEmbed(payload) {
+  return buildScrimEmbedWithStatus(
+    payload,
+    SCRIM_EMBED_COLOR_ACTIVE,
+    SCRIM_STATUS_LINE_ACTIVE,
+    { includeContactHints: true },
+  );
 }
 
 /**

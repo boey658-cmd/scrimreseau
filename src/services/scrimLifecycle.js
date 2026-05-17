@@ -73,7 +73,7 @@ export async function updateScrimPostMessagesEmbeds(client, stmts, dbRow) {
     });
     return;
   }
-  const editOptions = buildScrimClosedMessageEditOptions(status);
+  const editOptions = buildScrimClosedMessageEditOptions(status, dbRow);
 
   for (let i = 0; i < messages.length; i += 1) {
     const m = messages[i];
