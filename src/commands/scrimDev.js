@@ -3,6 +3,7 @@ import { interactReply } from '../utils/interactionDiscord.js';
 import { executeBlacklistCore } from './blacklist.js';
 import { executeScrimDevGuildAccessCore } from './scrimDevGuildAccess.js';
 import { executeScrimDevHealthCore } from './scrimDevHealth.js';
+import { executeScrimDevReceptionListCore } from './scrimDevReceptionList.js';
 import { executeUnblacklistCore } from './unblacklist.js';
 
 const MSG_DURATION_REQUISE =
@@ -15,6 +16,13 @@ const data = new SlashCommandBuilder()
     sub
       .setName('health')
       .setDescription('État de santé du bot (dev uniquement)'),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName('reception-list')
+      .setDescription(
+        'Liste les serveurs ayant configuré un salon de réception scrim',
+      ),
   )
   .addSubcommand((sub) =>
     sub
@@ -119,6 +127,9 @@ export const scrimDev = {
     const sub = interaction.options.getSubcommand(true);
     if (sub === 'health') {
       return executeScrimDevHealthCore(interaction, ctx);
+    }
+    if (sub === 'reception-list') {
+      return executeScrimDevReceptionListCore(interaction, ctx);
     }
     if (sub === 'blacklist') {
       const action = interaction.options.getString('action', true);

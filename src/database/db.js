@@ -455,6 +455,15 @@ export function prepareStatements(db) {
       SELECT guild_id, channel_id FROM guild_game_channels
       WHERE game_key = ?
     `),
+    countGuildGameChannels: db.prepare(`
+      SELECT COUNT(*) AS n FROM guild_game_channels
+    `),
+    listGuildGameChannelsRecent: db.prepare(`
+      SELECT guild_id, channel_id, game_key, created_at
+      FROM guild_game_channels
+      ORDER BY created_at DESC
+      LIMIT ?
+    `),
     /** Dernière création (ligne la plus récente par `created_at`), tous statuts — base du cooldown court entre créations. */
     getLatestScrimCreationByAuthor: db.prepare(`
       SELECT created_at
