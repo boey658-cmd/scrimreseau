@@ -1,5 +1,8 @@
 import { logger } from '../utils/logger.js';
-import { buildScrimClosedMessageEditOptions } from './scrimEmbedBuilder.js';
+import {
+  buildScrimClosedMessageEditOptions,
+  buildScrimSupersededMessageEditOptions,
+} from './scrimEmbedBuilder.js';
 import { runTransientDiscord } from './discordApiGuard.js';
 import { safeScrimEmbedMessageEdit } from './safeDiscordMessageEdit.js';
 
@@ -50,6 +53,117 @@ export function allocateScrimPublicId(stmts) {
 
     for (let i = start; i <= end; i += 1) {
       if (!used.has(i)) return i;
+    }
+  }
+}
+
+/**
+ * Marque visuellement des messages réseau comme « ancienne annonce » (repost).
+ *
+ * @param {import('discord.js').Client} client
+ * @param {ReturnType<import('../database/db.js')['prepareStatements']>} stmts
+ * @param {Record<string, unknown>} dbRow ligne `scrim_posts` (toujours active)
+ * @param {{ guild_id: string, channel_id: string, message_id: string }[]} messages snapshot avant broadcast
+ */
+export async function markScrimPostMessagesSuperseded(
+  client,
+  stmts,
+  dbRow,
+  messages,
+) {
+  if (messages.length === 0) return;
+
+  const editOptions = buildScrimSupersededMessageEditOptions(dbRow);
+  const targetStatus = 'superseded_repost';
+  const scrimPostDbId = Number(dbRow.id);
+
+  for (let i = 0; i < messages.length; i += 1) {
+    const m = messages[i];
+    if (i > 0) await sleep(SCRIM_EDIT_DELAY_MS);
+    try {
+      const guild = await runTransientDiscord(
+        () => client.guilds.fetch(m.guild_id),
+        {
+          kind: 'scrim_supersede_prefetch_guild',
+          metadata: { guild_id: m.guild_id, scrim_post_db_id: scrimPostDbId },
+        },
+      ).catch(() => null);
+      if (!guild) {
+        logger.warn('markScrimPostMessagesSuperseded: guilde introuvable', {
+          guild_id: m.guild_id,
+          scrim_post_db_id: scrimPostDbId,
+        });
+        continue;
+      }
+      const channel = await runTransientDiscord(
+        () => guild.channels.fetch(m.channel_id),
+        {
+          kind: 'scrim_supersede_prefetch_channel',
+          metadata: {
+            guild_id: m.guild_id,
+            channel_id: m.channel_id,
+            scrim_post_db_id: scrimPostDbId,
+          },
+        },
+      ).catch(() => null);
+      if (!channel?.isTextBased()) {
+        logger.warn('markScrimPostMessagesSuperseded: salon introuvable ou non texte', {
+          channel_id: m.channel_id,
+          scrim_post_db_id: scrimPostDbId,
+        });
+        continue;
+      }
+      const msg = await runTransientDiscord(
+        () => channel.messages.fetch(m.message_id),
+        {
+          kind: 'scrim_supersede_prefetch_message',
+          metadata: {
+            guild_id: m.guild_id,
+            channel_id: m.channel_id,
+            message_id: m.message_id,
+            scrim_post_db_id: scrimPostDbId,
+          },
+        },
+      ).catch(() => null);
+      if (!msg) {
+        logger.warn('markScrimPostMessagesSuperseded: message introuvable', {
+          message_id: m.message_id,
+          scrim_post_db_id: scrimPostDbId,
+        });
+        continue;
+      }
+      try {
+        await safeScrimEmbedMessageEdit({
+          client,
+          stmts,
+          scrimPostDbId,
+          guildId: m.guild_id,
+          channelId: m.channel_id,
+          messageId: m.message_id,
+          targetStatus,
+          editOptions,
+          message: msg,
+        });
+      } catch (unexpected) {
+        logger.warn('markScrimPostMessagesSuperseded: exception inattendue', {
+          scrim_post_db_id: scrimPostDbId,
+          guild_id: m.guild_id,
+          channel_id: m.channel_id,
+          message_id: m.message_id,
+          message:
+            unexpected instanceof Error
+              ? unexpected.message
+              : String(unexpected),
+        });
+      }
+    } catch (err) {
+      logger.warn('markScrimPostMessagesSuperseded: erreur avant édition', {
+        scrim_post_db_id: scrimPostDbId,
+        guild_id: m.guild_id,
+        channel_id: m.channel_id,
+        message_id: m.message_id,
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 }

@@ -13,10 +13,14 @@ export const SCRIM_EMBED_COLOR_ACTIVE = 0x57f287;
 export const SCRIM_EMBED_COLOR_CLOSED_MANUAL = 0xed4245;
 /** Embed fermé par expiration automatique. */
 export const SCRIM_EMBED_COLOR_CLOSED_EXPIRED = 0x4f545c;
+/** Ancienne annonce réseau remplacée par un repost (gris foncé — pas « trouvé »). */
+export const SCRIM_EMBED_COLOR_SUPERSEDED = 0x4f545c;
 
-const SCRIM_STATUS_LINE_ACTIVE = '🟢 Disponible';
+const SCRIM_STATUS_LINE_ACTIVE = '🟢 Recherche en cours';
 const SCRIM_STATUS_LINE_CLOSED_MANUAL = '🔴 Scrim trouvé — indisponible';
 const SCRIM_STATUS_LINE_CLOSED_EXPIRED = '⚫ Scrim expiré — indisponible';
+const SCRIM_STATUS_LINE_SUPERSEDED =
+  '🔴 Ancienne annonce — une nouvelle annonce a été repostée';
 
 /** @type {Intl.DateTimeFormat} */
 let _parisDateFormatter;
@@ -445,6 +449,26 @@ function buildScrimEmbedWithStatus(payload, color, statusLine, options = {}) {
   }
 
   return embed;
+}
+
+/**
+ * Édition Discord : vague réseau remplacée par un repost (scrim toujours actif en DB).
+ * @param {Record<string, unknown>} dbRow ligne `scrim_posts`
+ * @returns {{ content: null, embeds: EmbedBuilder[], components: [] }}
+ */
+export function buildScrimSupersededMessageEditOptions(dbRow) {
+  const payload = scrimDbRowToEmbedPayload(dbRow);
+  return {
+    content: null,
+    embeds: [
+      buildScrimEmbedWithStatus(
+        payload,
+        SCRIM_EMBED_COLOR_SUPERSEDED,
+        SCRIM_STATUS_LINE_SUPERSEDED,
+      ),
+    ],
+    components: [],
+  };
 }
 
 /**

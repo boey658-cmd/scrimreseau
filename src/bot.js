@@ -11,6 +11,7 @@ import { startDailyDevReportJob } from './services/dailyDevReportJob.js';
 import { startDiscordEditRetryJob } from './services/discordEditRetryJob.js';
 import { startDiscordTaskQueue } from './services/discordTaskQueue.js';
 import { startScrimExpirationJob } from './services/scrimExpirationJob.js';
+import { startScrimRepostJob } from './services/scrimRepostJob.js';
 import {
   interactAutocompleteRespond,
   interactFollowUp,
@@ -55,6 +56,7 @@ export async function startBot() {
     });
     startDiscordTaskQueue();
     startScrimExpirationJob(readyClient, db, stmts);
+    startScrimRepostJob(readyClient, db, stmts);
     startDiscordEditRetryJob(readyClient, stmts);
     startDailyDevReportJob(readyClient, db);
   });

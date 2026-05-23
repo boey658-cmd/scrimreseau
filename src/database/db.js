@@ -8,9 +8,12 @@ import { logger } from '../utils/logger.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultPath = path.join(__dirname, '..', '..', 'data', 'scrim.db');
 
-const dbPath = process.env.SQLITE_PATH || defaultPath;
-
 let dbInstance = null;
+
+/** Chemin effectif du fichier SQLite (relu à chaque ouverture pour tests / override env). */
+function resolveDbPath() {
+  return process.env.SQLITE_PATH || defaultPath;
+}
 
 function ensureDirSync(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -385,8 +388,32 @@ function migrateScrimPostsScheduledAtEnd(db) {
   });
 }
 
+/**
+ * Repost automatique : ancre temporelle + compteur (idempotent).
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateScrimPostsRepost(db) {
+  if (!tableHasColumn(db, 'scrim_posts', 'last_repost_at')) {
+    db.exec(`ALTER TABLE scrim_posts ADD COLUMN last_repost_at TEXT`);
+    logger.info('Migration SQLite', {
+      change: 'scrim_posts.last_repost_at',
+      action: 'ADD_COLUMN',
+    });
+  }
+  if (!tableHasColumn(db, 'scrim_posts', 'repost_count')) {
+    db.exec(
+      `ALTER TABLE scrim_posts ADD COLUMN repost_count INTEGER NOT NULL DEFAULT 0`,
+    );
+    logger.info('Migration SQLite', {
+      change: 'scrim_posts.repost_count',
+      action: 'ADD_COLUMN',
+    });
+  }
+}
+
 export function getDb() {
   if (dbInstance) return dbInstance;
+  const dbPath = resolveDbPath();
   ensureDirSync(dbPath);
   dbInstance = new Database(dbPath);
   dbInstance.pragma('journal_mode = WAL');
@@ -401,6 +428,7 @@ export function getDb() {
   migrateFixDuplicateActivePublicIds(dbInstance);
   migrateUniqueActiveScrimPublicIdIndex(dbInstance);
   migrateScrimPostsScheduledAtEnd(dbInstance);
+  migrateScrimPostsRepost(dbInstance);
   logger.info(
     'SQLite initialisée : mode WAL, busy_timeout=5000 ms. Une seule instance writer attendue sur ce fichier.',
     { path: dbPath, busy_timeout_ms: 5000, journal_mode: 'WAL' },
@@ -414,7 +442,7 @@ export function getDb() {
  */
 export function closeDb() {
   if (!dbInstance) return;
-  const closedPath = dbPath;
+  const closedPath = resolveDbPath();
   try {
     dbInstance.close();
     try {
@@ -602,6 +630,36 @@ export function prepareStatements(db) {
           OR COALESCE(NULLIF(trim(scheduled_at_end), ''), scheduled_at) < @now_iso
         )
     `),
+    /**
+     * Scrims actifs éligibles au repost : ancre = last_repost_at ou création (ISO depuis created_at ms).
+     * Comparaison lexicographique ISO UTC (alignée sur toISOString()).
+     */
+    findActiveScrimPostsDueForRepost: db.prepare(`
+      SELECT id, scrim_public_id, created_at, last_repost_at, repost_count
+      FROM scrim_posts
+      WHERE status = 'active'
+        AND (
+          CASE
+            WHEN last_repost_at IS NOT NULL AND trim(last_repost_at) != ''
+              THEN last_repost_at
+            ELSE strftime('%Y-%m-%dT%H:%M:%S.000Z', created_at / 1000, 'unixepoch')
+          END
+        ) <= @cutoff_iso
+      ORDER BY (
+        CASE
+          WHEN last_repost_at IS NOT NULL AND trim(last_repost_at) != ''
+            THEN last_repost_at
+          ELSE strftime('%Y-%m-%dT%H:%M:%S.000Z', created_at / 1000, 'unixepoch')
+        END
+      ) ASC
+      LIMIT @max_per_pass
+    `),
+    recordScrimPostRepostSuccess: db.prepare(`
+      UPDATE scrim_posts
+      SET last_repost_at = @last_repost_at,
+          repost_count = COALESCE(repost_count, 0) + 1
+      WHERE id = @id AND status = 'active'
+    `),
     insertScrimPostMessage: db.prepare(`
       INSERT INTO scrim_post_messages (
         scrim_post_db_id, guild_id, channel_id, message_id
@@ -619,6 +677,7 @@ export function prepareStatements(db) {
       SELECT channel_id, message_id
       FROM scrim_post_messages
       WHERE scrim_post_db_id = ? AND guild_id = ?
+      ORDER BY id DESC
       LIMIT 1
     `),
     deleteScrimPostMessagesForPost: db.prepare(`

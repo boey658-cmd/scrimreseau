@@ -5,6 +5,7 @@ import { stopDailyDevReportJob } from './src/services/dailyDevReportJob.js';
 import { stopDiscordEditRetryJob } from './src/services/discordEditRetryJob.js';
 import { stopDiscordTaskQueue } from './src/services/discordTaskQueue.js';
 import { stopScrimExpirationJob } from './src/services/scrimExpirationJob.js';
+import { stopScrimRepostJob } from './src/services/scrimRepostJob.js';
 import { logger } from './src/utils/logger.js';
 import { recordUncaughtException, recordUnhandledRejection } from './src/utils/processHealth.js';
 
@@ -86,6 +87,23 @@ async function gracefulShutdown(signal) {
     try {
       logger.error('Arrêt propre — échec stopDiscordEditRetryJob', {
         phase: 'edit_retry_job_stop_error',
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  try {
+    logger.info('Arrêt propre — arrêt du job repost scrims', {
+      phase: 'repost_job_stop',
+    });
+    await stopScrimRepostJob();
+  } catch (err) {
+    try {
+      logger.error('Arrêt propre — échec stopScrimRepostJob', {
+        phase: 'repost_job_stop_error',
         message: err instanceof Error ? err.message : String(err),
         stack: err instanceof Error ? err.stack : undefined,
       });
