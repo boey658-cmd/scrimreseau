@@ -71,6 +71,10 @@ export async function executeSetupScrimChannelCore(interaction, ctx) {
         bypassRow,
       )
     ) {
+      logger.info('setup-scrim-channel — réception non validée', {
+        guild_id: guildId,
+        member_count: interaction.guild?.memberCount,
+      });
       await interactEditReply(interaction, {
         content: buildScrimReceptionConfigRefusalContent(),
       });

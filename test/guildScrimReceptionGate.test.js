@@ -7,50 +7,20 @@ import {
   mayConfigureScrimReceptionChannel,
 } from '../src/utils/guildScrimReceptionGate.js';
 
-const ENV_KEY = 'SCRIM_RECEPTION_MIN_MEMBERS';
+const ENV_MIN_KEY = 'SCRIM_RECEPTION_MIN_MEMBERS';
+const ENV_TICKET_KEY = 'SCRIM_RECEPTION_TICKET_URL';
 
 describe('guildScrimReceptionGate', () => {
   afterEach(() => {
-    delete process.env[ENV_KEY];
+    delete process.env[ENV_MIN_KEY];
+    delete process.env[ENV_TICKET_KEY];
   });
 
-  it('seuil : env absent → 150 ; autorisé à partir du seuil sans bypass', () => {
-    assert.strictEqual(getScrimReceptionMinMembers(), 150);
-    assert.strictEqual(mayConfigureScrimReceptionChannel(150, undefined), true);
-    assert.strictEqual(mayConfigureScrimReceptionChannel(1000, undefined), true);
-  });
-
-  it('sous le seuil sans bypass → refus', () => {
-    assert.strictEqual(mayConfigureScrimReceptionChannel(149, undefined), false);
+  it('sans bypass → refus quel que soit memberCount', () => {
+    assert.strictEqual(mayConfigureScrimReceptionChannel(150, undefined), false);
+    assert.strictEqual(mayConfigureScrimReceptionChannel(1000, undefined), false);
     assert.strictEqual(mayConfigureScrimReceptionChannel(0, undefined), false);
-  });
-
-  it('env entier > 0 → seuil personnalisé', () => {
-    process.env[ENV_KEY] = '200';
-    assert.strictEqual(getScrimReceptionMinMembers(), 200);
-    assert.strictEqual(mayConfigureScrimReceptionChannel(199, undefined), false);
-    assert.strictEqual(mayConfigureScrimReceptionChannel(200, undefined), true);
-  });
-
-  it('env invalide → fallback 150', () => {
-    for (const v of ['0', '-1', '1.5', 'abc', '']) {
-      process.env[ENV_KEY] = v;
-      assert.strictEqual(
-        getScrimReceptionMinMembers(),
-        150,
-        `attendu fallback pour ${JSON.stringify(v)}`,
-      );
-    }
-    delete process.env[ENV_KEY];
-    assert.strictEqual(getScrimReceptionMinMembers(), 150);
-  });
-
-  it('message de refus contient le seuil effectif', () => {
-    process.env[ENV_KEY] = '42';
-    assert.match(
-      buildScrimReceptionConfigRefusalContent(),
-      /Un minimum de 42 membres est requis/,
-    );
+    assert.strictEqual(mayConfigureScrimReceptionChannel(NaN, undefined), false);
   });
 
   it('bypass actif (1) → autorisé même avec peu de membres', () => {
@@ -65,7 +35,41 @@ describe('guildScrimReceptionGate', () => {
     assert.strictEqual(isGuildReceptionBypassActive({ bypass_member_minimum: 0 }), false);
   });
 
-  it('memberCount non fini → refus sans bypass', () => {
-    assert.strictEqual(mayConfigureScrimReceptionChannel(NaN, undefined), false);
+  it('getScrimReceptionMinMembers reste disponible (compat) sans lier l’autorisation', () => {
+    assert.strictEqual(getScrimReceptionMinMembers(), 150);
+    process.env[ENV_MIN_KEY] = '200';
+    assert.strictEqual(getScrimReceptionMinMembers(), 200);
+    assert.strictEqual(mayConfigureScrimReceptionChannel(200, undefined), false);
+    assert.strictEqual(mayConfigureScrimReceptionChannel(199, undefined), false);
+  });
+
+  it('getScrimReceptionMinMembers : env invalide → fallback 150', () => {
+    for (const v of ['0', '-1', '1.5', 'abc', '']) {
+      process.env[ENV_MIN_KEY] = v;
+      assert.strictEqual(
+        getScrimReceptionMinMembers(),
+        150,
+        `attendu fallback pour ${JSON.stringify(v)}`,
+      );
+    }
+  });
+
+  it('message de refus : validation manuelle, sans seuil membres', () => {
+    const content = buildScrimReceptionConfigRefusalContent();
+    assert.match(content, /validée manuellement/);
+    assert.match(content, /lien de votre serveur/);
+    assert.doesNotMatch(content, /minimum de \d+ membres/i);
+    assert.doesNotMatch(content, /membres est requis/i);
+  });
+
+  it('message de refus : SCRIM_RECEPTION_TICKET_URL si défini', () => {
+    process.env[ENV_TICKET_KEY] = 'https://discord.gg/scrim-ticket';
+    const content = buildScrimReceptionConfigRefusalContent();
+    assert.match(content, /https:\/\/discord\.gg\/scrim-ticket/);
+  });
+
+  it('message de refus : placeholder si URL ticket absente', () => {
+    const content = buildScrimReceptionConfigRefusalContent();
+    assert.match(content, /\[ton lien\]/);
   });
 });
