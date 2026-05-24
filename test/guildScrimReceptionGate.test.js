@@ -56,8 +56,9 @@ describe('guildScrimReceptionGate', () => {
 
   it('message de refus : validation manuelle, sans seuil membres', () => {
     const content = buildScrimReceptionConfigRefusalContent();
-    assert.match(content, /validée manuellement/);
+    assert.match(content, /activée manuellement/);
     assert.match(content, /lien de votre serveur/);
+    assert.match(content, /salon prévu pour les scrims/);
     assert.doesNotMatch(content, /minimum de \d+ membres/i);
     assert.doesNotMatch(content, /membres est requis/i);
   });
@@ -68,8 +69,8 @@ describe('guildScrimReceptionGate', () => {
     assert.match(content, /https:\/\/discord\.gg\/scrim-ticket/);
   });
 
-  it('message de refus : placeholder si URL ticket absente', () => {
+  it('message de refus : URL par défaut si SCRIM_RECEPTION_TICKET_URL absente', () => {
     const content = buildScrimReceptionConfigRefusalContent();
-    assert.match(content, /\[ton lien\]/);
+    assert.match(content, /https:\/\/discord\.gg\/dcjhQq5Ur9/);
   });
 });
