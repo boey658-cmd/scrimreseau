@@ -91,7 +91,7 @@ const data = new SlashCommandBuilder()
             opt
               .setName('roles')
               .setDescription(
-                'Rôle autorisé (requis si mode = rôles spécifiques)',
+                'Ajoute un rôle autorisé (max 5, requis si mode = rôles spécifiques)',
               )
               .setRequired(false),
           ),

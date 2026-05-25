@@ -10,16 +10,6 @@ const MSG_OK_PREFIX = '✅ Configuration mise à jour.';
 const MSG_OK_SUFFIX =
   '⚠️ Cette configuration s’applique uniquement à ce serveur.';
 
-/**
- * @param {import('discord.js').Role[]} roles
- * @returns {string}
- */
-function formatRolesAllowlist(roles) {
-  if (!roles.length) return '';
-  const lines = roles.map((r) => `- <@&${r.id}>`);
-  return `\n\nRôles autorisés :\n${lines.join('\n')}`;
-}
-
 const MSG_NEED_GUILD =
   '❌ Cette commande doit être utilisée sur un serveur.';
 
@@ -32,12 +22,61 @@ const MSG_ROLE_NOT_IN_GUILD =
 const MSG_DB_ERROR =
   '❌ Impossible d’enregistrer la configuration. Réessayez plus tard.';
 
+export const SCRIM_ALLOWED_ROLES_MAX = 5;
+
+export const MSG_MAX_ROLES =
+  'Vous ne pouvez pas configurer plus de 5 rôles autorisés.';
+
+export const MSG_ROLE_ALREADY_ALLOWED = 'Ce rôle est déjà autorisé.';
+
+/**
+ * @param {string[]} roleIds
+ * @returns {string}
+ */
+function formatRoleIdsAllowlist(roleIds) {
+  if (!roleIds.length) return '';
+  const lines = roleIds.map((id) => `- <@&${id}>`);
+  return `\n\nRôles autorisés :\n${lines.join('\n')}`;
+}
+
+/**
+ * @param {string[]} existingRoleIds
+ * @param {string} newRoleId
+ * @returns {{ ok: true } | { ok: false, reason: 'duplicate' | 'max' }}
+ */
+export function validateScrimAllowedRoleAppend(existingRoleIds, newRoleId) {
+  if (existingRoleIds.includes(newRoleId)) {
+    return { ok: false, reason: 'duplicate' };
+  }
+  if (existingRoleIds.length >= SCRIM_ALLOWED_ROLES_MAX) {
+    return { ok: false, reason: 'max' };
+  }
+  return { ok: true };
+}
+
+/**
+ * Ajoute un rôle autorisé sans effacer les existants (mode roles).
+ * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']>, db: import('better-sqlite3').Database }} ctx
+ * @param {string} guildId
+ * @param {string} roleId
+ */
+export function transactionAppendScrimAllowedRole(ctx, guildId, roleId) {
+  const trx = ctx.db.transaction(() => {
+    ctx.stmts.insertScrimAllowedRole.run(guildId, roleId);
+    ctx.stmts.upsertScrimPermissionMode.run({
+      guild_id: guildId,
+      mode: 'roles',
+    });
+  });
+  trx();
+}
+
 /**
  * Réinitialise les permissions scrim au mode « tout le monde » (même transaction que mode everyone).
  * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']>, db: import('better-sqlite3').Database }} ctx
  * @param {string} guildId
  */
-function transactionSetEveryoneMode(ctx, guildId) {
+export function transactionSetEveryoneMode(ctx, guildId) {
   const trx = ctx.db.transaction(() => {
     ctx.stmts.deleteScrimAllowedRoles.run(guildId);
     ctx.stmts.upsertScrimPermissionMode.run({
@@ -169,20 +208,56 @@ export async function executeConfigScrimPermissionsCore(interaction, ctx) {
       return;
     }
 
-    const roles = [role];
+    let existingRows;
+    try {
+      existingRows = ctx.stmts.listScrimAllowedRoles.all(guildId);
+    } catch (err) {
+      logger.error('config-scrim-permissions — lecture rôles existants', {
+        guild_id: guildId,
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+      await interactEditReply(interaction, { content: MSG_DB_ERROR });
+      return;
+    }
+
+    const existingIds = existingRows.map((r) => r.role_id);
+    const validation = validateScrimAllowedRoleAppend(existingIds, role.id);
+    if (!validation.ok) {
+      const content =
+        validation.reason === 'duplicate'
+          ? MSG_ROLE_ALREADY_ALLOWED
+          : MSG_MAX_ROLES;
+      logger.info('config-scrim-permissions — refus ajout rôle', {
+        guild_id: guildId,
+        role_id: role.id,
+        reason: validation.reason,
+        existing_count: existingIds.length,
+        user_id: interaction.user.id,
+      });
+      await interactEditReply(interaction, { content });
+      return;
+    }
 
     try {
-      const trx = ctx.db.transaction(() => {
-        ctx.stmts.deleteScrimAllowedRoles.run(guildId);
-        ctx.stmts.insertScrimAllowedRole.run(guildId, role.id);
-        ctx.stmts.upsertScrimPermissionMode.run({
-          guild_id: guildId,
-          mode: 'roles',
-        });
-      });
-      trx();
+      transactionAppendScrimAllowedRole(ctx, guildId, role.id);
     } catch (err) {
       logger.error('config-scrim-permissions — transaction roles', {
+        guild_id: guildId,
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+      await interactEditReply(interaction, { content: MSG_DB_ERROR });
+      return;
+    }
+
+    let allRoleIds;
+    try {
+      allRoleIds = ctx.stmts.listScrimAllowedRoles
+        .all(guildId)
+        .map((r) => r.role_id);
+    } catch (err) {
+      logger.error('config-scrim-permissions — lecture rôles après ajout', {
         guild_id: guildId,
         message: err instanceof Error ? err.message : String(err),
         stack: err instanceof Error ? err.stack : undefined,
@@ -194,11 +269,12 @@ export async function executeConfigScrimPermissionsCore(interaction, ctx) {
     logger.info('config-scrim-permissions', {
       guild_id: guildId,
       mode: 'roles',
-      role_count: 1,
+      role_count: allRoleIds.length,
+      added_role_id: role.id,
       user_id: interaction.user.id,
     });
     await interactEditReply(interaction, {
-      content: `${MSG_OK_PREFIX}${formatRolesAllowlist(roles)}\n\n${MSG_OK_SUFFIX}`,
+      content: `${MSG_OK_PREFIX}${formatRoleIdsAllowlist(allRoleIds)}\n\n${MSG_OK_SUFFIX}`,
     });
   } catch (err) {
     logger.error('config-scrim-permissions — execute', {
