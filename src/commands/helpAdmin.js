@@ -47,8 +47,8 @@ const FIELD_BONNES_PRATIQUES =
 
 export const helpAdmin = {
   data: new SlashCommandBuilder()
-    .setName('helpadmin')
-    .setDescription('Aide administrateur — configuration et modération')
+    .setName('helpadmin-scrim')
+    .setDescription('Aide administrateur — configuration et modération scrim')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   /**

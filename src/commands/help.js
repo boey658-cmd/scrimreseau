@@ -10,8 +10,8 @@ const EMBED_COLOR = getEmbedColorForGame('');
 
 export const help = {
   data: new SlashCommandBuilder()
-    .setName('help')
-    .setDescription('Aide générale sur ScrimRéseau'),
+    .setName('help-scrim')
+    .setDescription('Aide générale sur ScrimRéseau — scrims'),
 
   /**
    * @param {import('discord.js').ChatInputCommandInteraction} interaction
@@ -31,7 +31,7 @@ export const help = {
         {
           name: '📌 Gérer tes scrims',
           value:
-            '`/mes-demandes` → affiche tes demandes de scrim en cours\n' +
+            '`/mes-demandes-scrim` → affiche tes demandes de scrim en cours\n' +
             '`/scrim-trouve` → ferme une de tes demandes quand tu as trouvé un scrim',
         },
         {

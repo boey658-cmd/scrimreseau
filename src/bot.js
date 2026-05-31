@@ -6,10 +6,11 @@ import {
   MessageFlags,
 } from 'discord.js';
 import { commandList } from './commands/index.js';
-import { getDb, prepareStatements } from './database/db.js';
+import { getDb, preparePlayerSearchStatements, prepareStatements } from './database/db.js';
 import { startDailyDevReportJob } from './services/dailyDevReportJob.js';
 import { startDiscordEditRetryJob } from './services/discordEditRetryJob.js';
 import { startDiscordTaskQueue } from './services/discordTaskQueue.js';
+import { startPlayerSearchExpirationJob } from './jobs/playerSearchExpirationJob.js';
 import { startScrimExpirationJob } from './services/scrimExpirationJob.js';
 import { startScrimRepostJob } from './services/scrimRepostJob.js';
 import {
@@ -27,6 +28,7 @@ export async function startBot() {
 
   const db = getDb();
   const stmts = prepareStatements(db);
+  const playerSearchStmts = preparePlayerSearchStatements(db);
 
   const client = new Client({
     intents: [
@@ -57,6 +59,7 @@ export async function startBot() {
     startDiscordTaskQueue();
     startScrimExpirationJob(readyClient, db, stmts);
     startScrimRepostJob(readyClient, db, stmts);
+    startPlayerSearchExpirationJob(readyClient, db, playerSearchStmts);
     startDiscordEditRetryJob(readyClient, stmts);
     startDailyDevReportJob(readyClient, db);
   });
@@ -102,7 +105,7 @@ export async function startBot() {
         user_id: interaction.user.id,
         guild_id: interaction.guildId,
       });
-      await command.execute(interaction, { stmts, db });
+      await command.execute(interaction, { stmts, db, playerSearchStmts });
     } catch (err) {
       logger.error('Erreur lors de l’exécution de la commande', {
         command: interaction.commandName,

@@ -38,7 +38,7 @@ function formatCreatedParis(ms) {
 
 export const mesDemandes = {
   data: new SlashCommandBuilder()
-    .setName('mes-demandes')
+    .setName('mes-demandes-scrim')
     .setDescription('Affiche tes recherches de scrim actives'),
 
   /**

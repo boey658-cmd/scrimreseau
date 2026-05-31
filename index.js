@@ -4,6 +4,7 @@ import { closeDb } from './src/database/db.js';
 import { stopDailyDevReportJob } from './src/services/dailyDevReportJob.js';
 import { stopDiscordEditRetryJob } from './src/services/discordEditRetryJob.js';
 import { stopDiscordTaskQueue } from './src/services/discordTaskQueue.js';
+import { stopPlayerSearchExpirationJob } from './src/jobs/playerSearchExpirationJob.js';
 import { stopScrimExpirationJob } from './src/services/scrimExpirationJob.js';
 import { stopScrimRepostJob } from './src/services/scrimRepostJob.js';
 import { logger } from './src/utils/logger.js';
@@ -104,6 +105,23 @@ async function gracefulShutdown(signal) {
     try {
       logger.error('Arrêt propre — échec stopScrimRepostJob', {
         phase: 'repost_job_stop_error',
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  try {
+    logger.info('Arrêt propre — arrêt du job d’expiration recherches joueur', {
+      phase: 'player_search_expiration_job_stop',
+    });
+    await stopPlayerSearchExpirationJob();
+  } catch (err) {
+    try {
+      logger.error('Arrêt propre — échec stopPlayerSearchExpirationJob', {
+        phase: 'player_search_expiration_job_stop_error',
         message: err instanceof Error ? err.message : String(err),
         stack: err instanceof Error ? err.stack : undefined,
       });

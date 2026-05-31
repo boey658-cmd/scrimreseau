@@ -411,6 +411,119 @@ function migrateScrimPostsRepost(db) {
   }
 }
 
+const PLAYER_SEARCH_INIT_SQL = `
+CREATE TABLE IF NOT EXISTS player_search_posts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  player_search_public_id TEXT NOT NULL,
+  author_user_id TEXT NOT NULL,
+  origin_guild_id TEXT NOT NULL,
+  source_guild_id TEXT NOT NULL,
+  roles_json TEXT NOT NULL,
+  ranks_json TEXT NOT NULL,
+  player_count INTEGER NOT NULL CHECK(player_count >= 1 AND player_count <= 5),
+  session_type TEXT NOT NULL,
+  ambiance TEXT NOT NULL,
+  description TEXT,
+  contact_user_id TEXT NOT NULL,
+  scheduled_date TEXT NOT NULL,
+  scheduled_time TEXT NOT NULL,
+  scheduled_at TEXT NOT NULL,
+  scheduled_at_end TEXT,
+  tags_json TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK(status IN ('active', 'closed_manual', 'closed_expired')),
+  closed_at TEXT,
+  closed_reason TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_player_search_posts_author_created
+  ON player_search_posts (author_user_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_player_search_posts_expire
+  ON player_search_posts (status, scheduled_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_player_search_public_id_active_unique
+  ON player_search_posts (player_search_public_id)
+  WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS player_search_post_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  player_search_post_db_id INTEGER NOT NULL,
+  guild_id TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  UNIQUE (guild_id, channel_id, message_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pspm_post
+  ON player_search_post_messages (player_search_post_db_id);
+
+CREATE TABLE IF NOT EXISTS guild_player_search_channels (
+  guild_id TEXT PRIMARY KEY NOT NULL,
+  channel_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS guild_player_search_usage_channel (
+  guild_id TEXT PRIMARY KEY NOT NULL,
+  channel_id TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS guild_player_search_permissions (
+  guild_id TEXT PRIMARY KEY NOT NULL,
+  mode TEXT NOT NULL CHECK(mode IN ('everyone', 'roles'))
+);
+
+CREATE TABLE IF NOT EXISTS guild_player_search_allowed_roles (
+  guild_id TEXT NOT NULL,
+  role_id TEXT NOT NULL,
+  PRIMARY KEY (guild_id, role_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_guild_player_search_allowed_roles_guild
+  ON guild_player_search_allowed_roles (guild_id);
+
+CREATE TABLE IF NOT EXISTS player_search_message_edit_retries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  player_search_post_db_id INTEGER NOT NULL,
+  guild_id TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  target_status TEXT NOT NULL
+    CHECK(target_status IN ('closed_manual', 'closed_expired')),
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT NOT NULL,
+  last_error_code TEXT,
+  last_error_message TEXT,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  resolved_at TEXT,
+  abandoned_at TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ps_edit_retry_active_unique
+  ON player_search_message_edit_retries (guild_id, channel_id, message_id, target_status)
+  WHERE resolved_at IS NULL AND abandoned_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_ps_edit_retry_due
+  ON player_search_message_edit_retries (next_attempt_at)
+  WHERE resolved_at IS NULL AND abandoned_at IS NULL;
+`;
+
+/**
+ * Schéma Recherche Joueur — tables dédiées, additive uniquement.
+ * @param {import('better-sqlite3').Database} db
+ */
+function migratePlayerSearchInit(db) {
+  db.exec(PLAYER_SEARCH_INIT_SQL);
+  logger.info('Migration SQLite', {
+    change: 'player_search_*',
+    action: 'CREATE_TABLE_IF_NOT_EXISTS',
+  });
+}
+
 export function getDb() {
   if (dbInstance) return dbInstance;
   const dbPath = resolveDbPath();
@@ -429,6 +542,7 @@ export function getDb() {
   migrateUniqueActiveScrimPublicIdIndex(dbInstance);
   migrateScrimPostsScheduledAtEnd(dbInstance);
   migrateScrimPostsRepost(dbInstance);
+  migratePlayerSearchInit(dbInstance);
   logger.info(
     'SQLite initialisée : mode WAL, busy_timeout=5000 ms. Une seule instance writer attendue sur ce fichier.',
     { path: dbPath, busy_timeout_ms: 5000, journal_mode: 'WAL' },
@@ -812,6 +926,110 @@ export function prepareStatements(db) {
       FROM guild_scrim_reception_bypass
       ORDER BY updated_at DESC
       LIMIT 50
+    `),
+  };
+}
+
+/** @param {import('better-sqlite3').Database} db */
+export function preparePlayerSearchStatements(db) {
+  return {
+    insertPlayerSearchPostRow: db.prepare(`
+      INSERT INTO player_search_posts (
+        player_search_public_id, author_user_id, origin_guild_id, source_guild_id,
+        roles_json, ranks_json, player_count, session_type, ambiance, description,
+        contact_user_id, scheduled_date, scheduled_time, scheduled_at, scheduled_at_end,
+        tags_json, created_at, status, closed_at, closed_reason
+      ) VALUES (
+        @player_search_public_id, @author_user_id, @origin_guild_id, @source_guild_id,
+        @roles_json, @ranks_json, @player_count, @session_type, @ambiance, @description,
+        @contact_user_id, @scheduled_date, @scheduled_time, @scheduled_at, @scheduled_at_end,
+        @tags_json, @created_at, @status, NULL, NULL
+      )
+    `),
+    listActivePlayerSearchPublicIds: db.prepare(`
+      SELECT player_search_public_id FROM player_search_posts WHERE status = 'active'
+    `),
+    getPlayerSearchPostById: db.prepare(`
+      SELECT * FROM player_search_posts WHERE id = ?
+    `),
+    getPlayerSearchPostActiveByPublicId: db.prepare(`
+      SELECT * FROM player_search_posts
+      WHERE player_search_public_id = ? AND status = 'active'
+    `),
+    getPlayerSearchPostByPublicIdAny: db.prepare(`
+      SELECT * FROM player_search_posts WHERE player_search_public_id = ? LIMIT 1
+    `),
+    closePlayerSearchPostIfActive: db.prepare(`
+      UPDATE player_search_posts
+      SET status = @status,
+          closed_at = @closed_at,
+          closed_reason = @closed_reason
+      WHERE id = @id AND status = 'active'
+    `),
+    findExpiredActivePlayerSearchPosts: db.prepare(`
+      SELECT id,
+        player_search_public_id,
+        scheduled_at,
+        scheduled_at_end,
+        CASE
+          WHEN scheduled_at IS NULL OR scheduled_at = '' THEN 1
+          ELSE 0
+        END AS missing_schedule
+      FROM player_search_posts
+      WHERE status = 'active'
+    `),
+    deletePlayerSearchPostById: db.prepare(`
+      DELETE FROM player_search_posts WHERE id = ?
+    `),
+    listActivePlayerSearchPostsByAuthor: db.prepare(`
+      SELECT player_search_public_id,
+        roles_json,
+        ranks_json,
+        player_count,
+        session_type,
+        ambiance,
+        scheduled_date,
+        scheduled_time,
+        scheduled_at,
+        scheduled_at_end,
+        created_at
+      FROM player_search_posts
+      WHERE author_user_id = ? AND status = 'active'
+      ORDER BY created_at DESC
+    `),
+    insertPlayerSearchPostMessage: db.prepare(`
+      INSERT INTO player_search_post_messages (
+        player_search_post_db_id, guild_id, channel_id, message_id
+      ) VALUES (
+        @player_search_post_db_id, @guild_id, @channel_id, @message_id
+      )
+    `),
+    listPlayerSearchPostMessagesByPostId: db.prepare(`
+      SELECT guild_id, channel_id, message_id
+      FROM player_search_post_messages
+      WHERE player_search_post_db_id = ?
+    `),
+    deletePlayerSearchPostMessagesForPost: db.prepare(`
+      DELETE FROM player_search_post_messages WHERE player_search_post_db_id = ?
+    `),
+    upsertGuildPlayerSearchChannel: db.prepare(`
+      INSERT INTO guild_player_search_channels (guild_id, channel_id, created_at)
+      VALUES (@guild_id, @channel_id, @created_at)
+      ON CONFLICT(guild_id) DO UPDATE SET
+        channel_id = excluded.channel_id,
+        created_at = excluded.created_at
+    `),
+    deleteGuildPlayerSearchChannel: db.prepare(`
+      DELETE FROM guild_player_search_channels WHERE guild_id = ?
+    `),
+    listPlayerSearchChannels: db.prepare(`
+      SELECT guild_id, channel_id FROM guild_player_search_channels
+    `),
+    countGuildPlayerSearchChannels: db.prepare(`
+      SELECT COUNT(*) AS n FROM guild_player_search_channels
+    `),
+    getGuildPlayerSearchChannel: db.prepare(`
+      SELECT channel_id FROM guild_player_search_channels WHERE guild_id = ?
     `),
   };
 }

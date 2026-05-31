@@ -37,7 +37,7 @@ if (!clientId?.trim()) {
 }
 
 const publicBody = commandListWithoutDev.map((c) => c.data.toJSON());
-const scrimDevBody = [scrimDev.data.toJSON()];
+const devOnlyBody = [scrimDev.data.toJSON()];
 const devGuildId = process.env.DEV_GUILD_ID?.trim() ?? '';
 
 if (!devGuildId) {
@@ -82,6 +82,8 @@ logger.info('Déploiement slash — résumé', {
   mode,
   publicCommandCount: publicBody.length,
   scrimDevGuildOnly: Boolean(devGuildId),
+  devOnlyCommandCount: devOnlyBody.length,
+  devOnlyCommandNames: devOnlyBody.map((c) => c.name),
   publicCommandNames: commandListWithoutDev.map((c) => c.data.name),
   clearGlobalBeforeDeploy: preClearGlobalCommands,
   clearGuildBeforeDeploy: preClearGuildCommands,
@@ -140,13 +142,13 @@ try {
       try {
         const body =
           devGuildId && guildId === devGuildId
-            ? [...publicBody, ...scrimDevBody]
+            ? [...publicBody, ...devOnlyBody]
             : publicBody;
         await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
           body,
         });
         logger.info(`Déploiement sur guilde ${guildId} réussi`, {
-          includesScrimDev: Boolean(devGuildId && guildId === devGuildId),
+          includesDevCommands: Boolean(devGuildId && guildId === devGuildId),
         });
       } catch (err) {
         logger.error('Échec du déploiement sur une guilde', {
@@ -163,11 +165,11 @@ try {
         await rest.put(
           Routes.applicationGuildCommands(clientId, devGuildId),
           {
-            body: [...publicBody, ...scrimDevBody],
+            body: [...publicBody, ...devOnlyBody],
           },
         );
         logger.info(
-          `Déploiement guilde dev ${devGuildId} (liste complète incluant /scrim-dev)`,
+          `Déploiement guilde dev ${devGuildId} (liste complète incluant commandes dev)`,
         );
       } catch (err) {
         logger.error('Échec du déploiement sur la guilde dev', {
@@ -202,10 +204,10 @@ try {
     if (devGuildId) {
       await rest.put(
         Routes.applicationGuildCommands(clientId, devGuildId),
-        { body: scrimDevBody },
+        { body: devOnlyBody },
       );
       logger.info(
-        `/scrim-dev enregistrée uniquement sur la guilde dev ${devGuildId}`,
+        `Commandes dev enregistrées uniquement sur la guilde dev ${devGuildId}`,
       );
     }
   }
