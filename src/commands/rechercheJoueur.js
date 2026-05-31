@@ -21,6 +21,7 @@ import {
   resolvePlayerSearchRankFromSlashValue,
   validatePlayerSearchRoleCountMatch,
 } from '../utils/playerSearchValidation.js';
+import { buildPlayerSearchSuccessReplyContent } from '../utils/playerSearchSuccessReply.js';
 import { computeScheduledAtIso } from '../utils/scrimScheduledAt.js';
 import {
   interactDeferReply,
@@ -404,9 +405,10 @@ export const rechercheJoueur = {
       });
 
       await interactEditReply(interaction, {
-        content: `Recherche joueur publiée.
-ID : ${created.publicId}
-Pour fermer : /joueur-trouve id:${created.publicId}`,
+        content: buildPlayerSearchSuccessReplyContent(
+          created.publicId,
+          successCount,
+        ),
       });
     } catch (err) {
       logger.error('player_search:recherche-joueur', {

@@ -326,7 +326,7 @@ test('mes-demandes-joueur — commande publique enregistrée', () => {
   assert.match(cmdSource, /\.setName\('mes-demandes-joueur'\)/);
   assert.match(cmdSource, /listActivePlayerSearchPostsByAuthor/);
   assert.match(cmdSource, /Tu n’as aucune recherche joueur active/);
-  assert.match(cmdSource, /Pour fermer une recherche : \/joueur-trouve id:J1/);
+  assert.match(cmdSource, /\/joueur-trouve id:J1/);
   assert.doesNotMatch(cmdSource, /\[DEV\]/);
 });
 
@@ -466,8 +466,9 @@ test('recherche-joueur — choices role_1 et rang unique', () => {
   assert.match(source, /validatePlayerSearchRoleCountMatch/);
   assert.doesNotMatch(source, /mayConfigurePlayerSearchReceptionChannel/);
   assert.doesNotMatch(source, /getGuildScrimReceptionBypass/);
-  assert.match(source, /Recherche joueur publiée/);
-  assert.match(source, /Pour fermer : \/joueur-trouve id:/);
+  assert.match(source, /buildPlayerSearchSuccessReplyContent/);
+  assert.match(source, /successCount/);
+  assert.doesNotMatch(source, /Recherche joueur publiée/);
 });
 
 test('recherche-joueur — diffusion via salons dédiés uniquement', () => {
