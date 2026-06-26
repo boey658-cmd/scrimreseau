@@ -4,7 +4,7 @@ import {
   buildScrimSupersededMessageEditOptions,
 } from './scrimEmbedBuilder.js';
 import { runTransientDiscord } from './discordApiGuard.js';
-import { safeScrimEmbedMessageEdit } from './safeDiscordMessageEdit.js';
+import { syncInactiveScrimMessageByPolicy } from './scrimMessagePolicy.js';
 
 /** Délai entre éditions d’embeds (anti rate-limit Discord), en ms. */
 export const SCRIM_EDIT_DELAY_MS = 75;
@@ -133,15 +133,16 @@ export async function markScrimPostMessagesSuperseded(
         continue;
       }
       try {
-        await safeScrimEmbedMessageEdit({
+        await syncInactiveScrimMessageByPolicy({
           client,
           stmts,
+          messageRow: { guild_id: m.guild_id, channel_id: m.channel_id, message_id: m.message_id },
           scrimPostDbId,
-          guildId: m.guild_id,
-          channelId: m.channel_id,
-          messageId: m.message_id,
+          eventType: 'superseded_repost',
           targetStatus,
           editOptions,
+          guild,
+          channel,
           message: msg,
         });
       } catch (unexpected) {
@@ -245,15 +246,16 @@ export async function updateScrimPostMessagesEmbeds(client, stmts, dbRow) {
         continue;
       }
       try {
-        await safeScrimEmbedMessageEdit({
+        await syncInactiveScrimMessageByPolicy({
           client,
           stmts,
+          messageRow: { guild_id: m.guild_id, channel_id: m.channel_id, message_id: m.message_id },
           scrimPostDbId: Number(dbRow.id),
-          guildId: m.guild_id,
-          channelId: m.channel_id,
-          messageId: m.message_id,
+          eventType: /** @type {'closed_manual' | 'closed_expired'} */ (status),
           targetStatus: status,
           editOptions,
+          guild,
+          channel,
           message: msg,
         });
       } catch (unexpected) {

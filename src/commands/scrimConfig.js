@@ -6,6 +6,10 @@ import { assertGuildAdministrator } from '../utils/guildAdministratorGuard.js';
 import { executeConfigScrimChannelResetCore } from './configScrimChannelReset.js';
 import { executeConfigScrimChannelUsageCore } from './configScrimChannelUsage.js';
 import {
+  executeConfigScrimMessagePolicyResetCore,
+  executeConfigScrimMessagePolicySetCore,
+} from './configScrimMessagePolicy.js';
+import {
   executeConfigScrimPermissionsCore,
   executeConfigScrimPermissionsRemoveCore,
 } from './configScrimPermissions.js';
@@ -104,6 +108,35 @@ const data = new SlashCommandBuilder()
           ),
       ),
   )
+  .addSubcommandGroup((group) =>
+    group
+      .setName('messages')
+      .setDescription('Comportement des messages de scrims terminés ou remplacés dans ce serveur')
+      .addSubcommand((sub) =>
+        sub
+          .setName('set')
+          .setDescription(
+            'Définit le comportement des messages de scrims terminés / remplacés',
+          )
+          .addStringOption((opt) =>
+            opt
+              .setName('mode')
+              .setDescription('Messages des scrims terminés / remplacés')
+              .setRequired(true)
+              .addChoices(
+                { name: 'Garder et marquer les messages', value: 'keep' },
+                { name: 'Supprimer automatiquement', value: 'delete' },
+              ),
+          ),
+      )
+      .addSubcommand((sub) =>
+        sub
+          .setName('reset')
+          .setDescription(
+            'Réinitialise le comportement par défaut (garder et marquer)',
+          ),
+      ),
+  )
   .addSubcommand((sub) =>
     sub
       .setName('view')
@@ -148,6 +181,15 @@ export const scrimConfig = {
       }
       if (sub === 'remove') {
         return executeConfigScrimPermissionsRemoveCore(interaction, ctx);
+      }
+    }
+
+    if (group === 'messages') {
+      if (sub === 'set') {
+        return executeConfigScrimMessagePolicySetCore(interaction, ctx);
+      }
+      if (sub === 'reset') {
+        return executeConfigScrimMessagePolicyResetCore(interaction, ctx);
       }
     }
 

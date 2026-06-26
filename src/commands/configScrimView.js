@@ -7,6 +7,7 @@ import {
   interactReply,
 } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
+import { POLICY_LABEL } from './configScrimMessagePolicy.js';
 
 const MSG_NEED_GUILD =
   '❌ Cette commande doit être utilisée sur un serveur.';
@@ -33,10 +34,12 @@ export async function executeConfigScrimViewCore(interaction, ctx) {
       let modeRow;
       let roleRows;
       let usageRow;
+      let policyRow;
       try {
         modeRow = ctx.stmts.getScrimPermissionMode.get(guildId);
         roleRows = ctx.stmts.listScrimAllowedRoles.all(guildId);
         usageRow = ctx.stmts.getScrimUsageChannel.get(guildId);
+        policyRow = ctx.stmts.getScrimMessageLifecyclePolicy.get(guildId);
       } catch (err) {
         logger.error('config-scrim-view — lecture DB', {
           guild_id: guildId,
@@ -68,6 +71,9 @@ export async function executeConfigScrimViewCore(interaction, ctx) {
         ? `<#${usageRow.channel_id}>`
         : 'Aucune restriction';
 
+      const currentPolicy = policyRow?.policy === 'delete' ? 'delete' : 'keep';
+      const policyText = POLICY_LABEL[currentPolicy] ?? 'Garder et marquer les messages';
+
       const staleCount = countStaleScrimConfiguredRoles(roleRows, guild);
 
       const embed = new EmbedBuilder()
@@ -79,6 +85,11 @@ export async function executeConfigScrimViewCore(interaction, ctx) {
           {
             name: 'Salon /recherche-scrim',
             value: salonText,
+            inline: false,
+          },
+          {
+            name: 'Messages des scrims terminés / remplacés',
+            value: policyText,
             inline: false,
           },
         )

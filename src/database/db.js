@@ -142,6 +142,13 @@ CREATE TABLE IF NOT EXISTS guild_scrim_reception_bypass (
   updated_at TEXT NOT NULL,
   note TEXT
 );
+
+CREATE TABLE IF NOT EXISTS guild_scrim_message_lifecycle_policy (
+  guild_id TEXT PRIMARY KEY NOT NULL,
+  policy TEXT NOT NULL DEFAULT 'keep'
+    CHECK(policy IN ('keep', 'delete')),
+  updated_at TEXT NOT NULL
+);
 `;
 
 const MULTI_OPGG_COLUMN = 'multi_opgg_url';
@@ -926,6 +933,24 @@ export function prepareStatements(db) {
       FROM guild_scrim_reception_bypass
       ORDER BY updated_at DESC
       LIMIT 50
+    `),
+
+    getScrimMessageLifecyclePolicy: db.prepare(`
+      SELECT policy FROM guild_scrim_message_lifecycle_policy WHERE guild_id = ?
+    `),
+    upsertScrimMessageLifecyclePolicy: db.prepare(`
+      INSERT INTO guild_scrim_message_lifecycle_policy (guild_id, policy, updated_at)
+      VALUES (@guild_id, @policy, @updated_at)
+      ON CONFLICT(guild_id) DO UPDATE SET
+        policy = excluded.policy,
+        updated_at = excluded.updated_at
+    `),
+    deleteScrimMessageLifecyclePolicy: db.prepare(`
+      DELETE FROM guild_scrim_message_lifecycle_policy WHERE guild_id = ?
+    `),
+    /** Salon de réception scrim pour une guilde + jeu précis (lecture pour vérif permissions). */
+    getGuildGameChannel: db.prepare(`
+      SELECT channel_id FROM guild_game_channels WHERE guild_id = ? AND game_key = ?
     `),
   };
 }
