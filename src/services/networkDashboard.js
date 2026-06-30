@@ -436,34 +436,6 @@ async function generateDashboardImage(client, stats) {
       }
     }
 
-    // ── Header ──────────────────────────────────────────────────────────
-    ctx.textAlign = 'center';
-
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 48px sans-serif';
-    ctx.textBaseline = 'alphabetic';
-    ctx.fillText('SCRIMRÉSEAU', CANVAS_W / 2, 56);
-
-    ctx.fillStyle = 'rgba(255,255,255,0.36)';
-    ctx.font = '14px sans-serif';
-    ctx.fillText('Le réseau ScrimRéseau', CANVAS_W / 2, 78);
-
-    // Séparateur dégradé centré
-    {
-      const sw = CANVAS_W * 0.36;
-      const sx = (CANVAS_W - sw) / 2;
-      const g = ctx.createLinearGradient(sx, 0, sx + sw, 0);
-      g.addColorStop(0, 'rgba(88,101,242,0)');
-      g.addColorStop(0.5, 'rgba(88,101,242,0.45)');
-      g.addColorStop(1, 'rgba(88,101,242,0)');
-      ctx.strokeStyle = g;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(sx, 90);
-      ctx.lineTo(sx + sw, 90);
-      ctx.stroke();
-    }
-
     // ── Carte réseau ─────────────────────────────────────────────────────
     // Données partenaires — même source que stats.partnerCount
     const allPartnerIds = [...stats.partnerGuildIds];
@@ -496,7 +468,7 @@ async function generateDashboardImage(client, stats) {
       if (!positions[i]) continue;
       const { x: px, y: py } = positions[i];
 
-      // C — Passe 1 : glow plus large et plus lumineux
+      // Passe 1 : glow large et doux
       const g1 = ctx.createLinearGradient(CX, CY, px, py);
       g1.addColorStop(0, 'rgba(88,101,242,0.22)');
       g1.addColorStop(1, 'rgba(124,58,237,0.05)');
@@ -507,7 +479,7 @@ async function generateDashboardImage(client, stats) {
       ctx.lineTo(px, py);
       ctx.stroke();
 
-      // C — Passe 2 : ligne précise, légèrement plus épaisse
+      // Passe 2 : ligne précise bleu→violet
       const g2 = ctx.createLinearGradient(CX, CY, px, py);
       g2.addColorStop(0, 'rgba(88,101,242,0.65)');
       g2.addColorStop(1, 'rgba(124,58,237,0.14)');
@@ -559,36 +531,70 @@ async function generateDashboardImage(client, stats) {
       ctx.fillText(`+${overflow}`, ox, oy);
     }
 
-    // ── Compteur principal — E : remonté pour réduire le vide ─────────────
-    ctx.textAlign = 'center';
+    // ═══════════════════════════════════════════════════════════════════
+    // TEXTES — dessinés EN DERNIER pour ne jamais être recouverts par
+    // un élément graphique (glow, fill, arc) de la carte réseau.
+    // Reset complet du contexte avant chaque section.
+    // ═══════════════════════════════════════════════════════════════════
 
-    // Glow derrière le chiffre
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.shadowBlur = 0;
+    ctx.shadowColor = 'transparent';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+
+    // ── Header ──────────────────────────────────────────────────────────
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 48px sans-serif';
+    ctx.fillText('SCRIMRÉSEAU', CANVAS_W / 2, 56);
+
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = '15px sans-serif';
+    ctx.fillText('Le réseau ScrimRéseau', CANVAS_W / 2, 78);
+
+    // Séparateur dégradé centré
     {
-      const cg = ctx.createRadialGradient(CANVAS_W / 2, 580, 0, CANVAS_W / 2, 580, 130);
-      cg.addColorStop(0, 'rgba(88,101,242,0.20)');
-      cg.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = cg;
-      ctx.fillRect(CANVAS_W / 2 - 130, 526, 260, 96);
+      const sw = CANVAS_W * 0.36;
+      const sx = (CANVAS_W - sw) / 2;
+      const sepG = ctx.createLinearGradient(sx, 0, sx + sw, 0);
+      sepG.addColorStop(0, 'rgba(88,101,242,0)');
+      sepG.addColorStop(0.5, 'rgba(88,101,242,0.50)');
+      sepG.addColorStop(1, 'rgba(88,101,242,0)');
+      ctx.strokeStyle = sepG;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(sx, 90);
+      ctx.lineTo(sx + sw, 90);
+      ctx.stroke();
     }
 
-    ctx.fillStyle = '#5c6ef0';
+    // ── Compteur principal ───────────────────────────────────────────────
+    // Glow derrière le chiffre
+    {
+      const cg = ctx.createRadialGradient(CANVAS_W / 2, 574, 0, CANVAS_W / 2, 574, 140);
+      cg.addColorStop(0, 'rgba(88,101,242,0.22)');
+      cg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = cg;
+      ctx.fillRect(CANVAS_W / 2 - 140, 520, 280, 100);
+    }
+
+    ctx.fillStyle = '#6b7bff';
     ctx.font = 'bold 76px sans-serif';
-    ctx.textBaseline = 'alphabetic';
     ctx.fillText(String(stats.partnerCount), CANVAS_W / 2, 582);
 
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 14px sans-serif';
-    ctx.fillText('COMMUNAUTÉS CONNECTÉES', CANVAS_W / 2, 602);
+    ctx.fillText('SERVEURS PARTENAIRES', CANVAS_W / 2, 602);
 
     // ── Footer ──────────────────────────────────────────────────────────
     const now = new Date();
     const dateStr = now.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
     const timeStr = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 
-    ctx.fillStyle = 'rgba(255,255,255,0.18)';
-    ctx.font = '11px sans-serif';
-    ctx.textBaseline = 'alphabetic';
-    ctx.fillText(`Mise à jour le ${dateStr} à ${timeStr}`, CANVAS_W / 2, CANVAS_H - 11);
+    ctx.fillStyle = 'rgba(255,255,255,0.38)';
+    ctx.font = '12px sans-serif';
+    ctx.fillText(`Mise à jour le ${dateStr} à ${timeStr}`, CANVAS_W / 2, CANVAS_H - 12);
 
     return canvas.toBuffer('image/png');
   } catch (err) {
