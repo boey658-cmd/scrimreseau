@@ -20,6 +20,10 @@ import { logger } from '../utils/logger.js';
 const _dir = dirname(fileURLToPath(import.meta.url));
 /** Chemin absolu vers le logo ScrimRéseau (assets/logo-scrim.png). */
 const LOGO_PATH = join(_dir, '..', '..', 'assets', 'logo-scrim.png');
+/** Chemin absolu vers la fonte Inter embarquée (assets/fonts/Inter.ttf). */
+const FONT_PATH = join(_dir, '..', '..', 'assets', 'fonts', 'Inter.ttf');
+/** Nom de famille utilisé dans ctx.font après enregistrement. */
+const FONT_FAMILY = 'Inter';
 
 // ---------------------------------------------------------------------------
 // Constantes
@@ -42,6 +46,8 @@ let isUpdating = false;
 /** @type {ReturnType<typeof setInterval> | null} */
 let refreshHandle = null;
 let refreshJobStarted = false;
+/** true une fois la fonte Inter enregistrée via GlobalFonts, false = fallback sans-serif. */
+let _fontReady = false;
 
 // ---------------------------------------------------------------------------
 // Stats
@@ -188,8 +194,9 @@ function computeOrbitPositions(count, centerX, centerY, hasOverflow = false) {
  * @param {number} x
  * @param {number} y
  * @param {import('@napi-rs/canvas').Image | null} [logo]
+ * @param {string} [ff] Famille de fonte à utiliser pour le texte fallback "SR"
  */
-function drawCentralNode(ctx, x, y, logo = null) {
+function drawCentralNode(ctx, x, y, logo = null, ff = 'sans-serif') {
   const R = 68; // B : +20 % (était 57)
   const PI2 = Math.PI * 2;
 
@@ -298,7 +305,7 @@ function drawCentralNode(ctx, x, y, logo = null) {
     ctx.restore();
   } else {
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 32px sans-serif';
+    ctx.font = `bold 32px ${ff}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('SR', x, y);
@@ -320,8 +327,9 @@ function drawCentralNode(ctx, x, y, logo = null) {
  * @param {number} cx
  * @param {number} cy
  * @param {number} r
+ * @param {string} [ff] Famille de fonte pour les initiales fallback
  */
-function drawPartnerNode(ctx, img, initial, cx, cy, r) {
+function drawPartnerNode(ctx, img, initial, cx, cy, r, ff = 'sans-serif') {
   // Glow autour du nœud
   const glow = ctx.createRadialGradient(cx, cy, r * 0.5, cx, cy, r * 2.8);
   glow.addColorStop(0, 'rgba(88,101,242,0.20)');
@@ -342,7 +350,7 @@ function drawPartnerNode(ctx, img, initial, cx, cy, r) {
     ctx.fillStyle = '#1e2260';
     ctx.fill();
     ctx.fillStyle = '#ffffff';
-    ctx.font = `bold ${Math.round(r * 0.85)}px sans-serif`;
+    ctx.font = `bold ${Math.round(r * 0.85)}px ${ff}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(initial.toUpperCase(), cx, cy + 1);
@@ -367,13 +375,33 @@ function drawPartnerNode(ctx, img, initial, cx, cy, r) {
  * @returns {Promise<Buffer | null>} null si la génération échoue
  */
 async function generateDashboardImage(client, stats) {
-  let createCanvas, loadImage;
+  let createCanvas, loadImage, GlobalFonts;
   try {
-    ({ createCanvas, loadImage } = await import('@napi-rs/canvas'));
+    ({ createCanvas, loadImage, GlobalFonts } = await import('@napi-rs/canvas'));
   } catch {
     logger.warn('networkDashboard: @napi-rs/canvas indisponible — fallback embed');
     return null;
   }
+
+  // ── Enregistrement de la fonte embarquée (une seule fois par session) ──────
+  if (!_fontReady && GlobalFonts) {
+    try {
+      if (existsSync(FONT_PATH)) {
+        GlobalFonts.registerFromPath(FONT_PATH, FONT_FAMILY);
+        _fontReady = true;
+        logger.info('networkDashboard: fonte Inter enregistrée', { path: FONT_PATH });
+      } else {
+        logger.warn('networkDashboard: fichier fonte absent — fallback sans-serif', { path: FONT_PATH });
+      }
+    } catch (err) {
+      logger.warn('networkDashboard: échec enregistrement fonte — fallback sans-serif', {
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /** Famille à utiliser dans ctx.font. Fallback sans-serif si la fonte n'est pas dispo. */
+  const FF = _fontReady ? FONT_FAMILY : 'sans-serif';
 
   try {
     const canvas = createCanvas(CANVAS_W, CANVAS_H);
@@ -493,7 +521,7 @@ async function generateDashboardImage(client, stats) {
 
     // Nœud central (dessiné après les lignes pour apparaître au-dessus)
     const logoImg = await loadLogoImage(loadImage);
-    drawCentralNode(ctx, CX, CY, logoImg);
+    drawCentralNode(ctx, CX, CY, logoImg, FF);
 
     // Nœuds partenaires
     for (let i = 0; i < count; i++) {
@@ -506,7 +534,7 @@ async function generateDashboardImage(client, stats) {
         try { img = await loadImage(bufResult.value); } catch { /* fallback */ }
       }
       const initial = guild ? (guild.name ?? '?').charAt(0) : '?';
-      drawPartnerNode(ctx, img, initial, x, y, iconR);
+      drawPartnerNode(ctx, img, initial, x, y, iconR, FF);
     }
 
     // Nœud overflow "+X"
@@ -525,7 +553,7 @@ async function generateDashboardImage(client, stats) {
       ctx.arc(ox, oy, or_, 0, Math.PI * 2);
       ctx.stroke();
       ctx.fillStyle = '#ffffff';
-      ctx.font = `bold ${Math.max(10, or_ - 4)}px sans-serif`;
+      ctx.font = `bold ${Math.max(10, or_ - 4)}px ${FF}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(`+${overflow}`, ox, oy);
@@ -533,34 +561,14 @@ async function generateDashboardImage(client, stats) {
 
     // ═══════════════════════════════════════════════════════════════════
     // TEXTES — dessinés EN DERNIER, après tous les éléments graphiques.
+    // Police : Inter embarquée (FF), fallback sans-serif si absent.
     // ═══════════════════════════════════════════════════════════════════
-
-    // Coordonnées des textes — vérification anti-NaN / hors canvas
-    const titleY    = 56;
-    const subtitleY = 78;
-    const sepY      = 90;
-    const counterY  = 582;
-    const labelY    = 602;
-    const footerY   = CANVAS_H - 12; // 663
 
     const now = new Date();
     const dateStr = now.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
     const timeStr = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-    const generatedAtText = `Mise à jour le ${dateStr} à ${timeStr}`;
 
-    // ── LOG DIAGNOSTIC ──────────────────────────────────────────────────
-    logger.info('networkDashboard: drawing text layer', {
-      canvasW: CANVAS_W,
-      canvasH: CANVAS_H,
-      partnerCount: stats.partnerCount,
-      generatedAt: generatedAtText,
-      coords: { titleY, subtitleY, sepY, counterY, labelY, footerY },
-      coordsOk: [titleY, subtitleY, counterY, labelY, footerY].every(
-        (v) => typeof v === 'number' && !Number.isNaN(v) && v >= 0 && v <= CANVAS_H,
-      ),
-    });
-
-    // ── Reset strict du contexte canvas ─────────────────────────────────
+    // Reset strict du contexte avant tout rendu texte
     ctx.save();
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
@@ -571,23 +579,14 @@ async function generateDashboardImage(client, stats) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
 
-    // ── DEBUG : rectangles de fond pour confirmer l'exécution du bloc ───
-    // Titre : fond rouge semi-transparent
-    ctx.fillStyle = 'rgba(180,0,0,0.45)';
-    ctx.fillRect(CANVAS_W / 2 - 280, titleY - 44, 560, 52);
-    // Compteur : fond rouge semi-transparent
-    ctx.fillStyle = 'rgba(180,0,0,0.45)';
-    ctx.fillRect(CANVAS_W / 2 - 200, counterY - 72, 400, 88);
-
     // ── Header ──────────────────────────────────────────────────────────
     ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#ffffff';
-    ctx.font = 'bold 44px sans-serif';
-    ctx.fillText('SCRIMRESEAU', CANVAS_W / 2, titleY);
+    ctx.font = `bold 44px ${FF}`;
+    ctx.fillText('SCRIMRÉSEAU', CANVAS_W / 2, 56);
 
-    ctx.fillStyle = 'rgba(255,255,255,0.80)';
-    ctx.font = '16px sans-serif';
-    ctx.fillText('Le reseau ScrimReseau', CANVAS_W / 2, subtitleY);
+    ctx.fillStyle = 'rgba(255,255,255,0.60)';
+    ctx.font = `16px ${FF}`;
+    ctx.fillText('Le réseau ScrimRéseau', CANVAS_W / 2, 78);
 
     // Séparateur dégradé centré
     {
@@ -595,29 +594,38 @@ async function generateDashboardImage(client, stats) {
       const sx = (CANVAS_W - sw) / 2;
       const sepG = ctx.createLinearGradient(sx, 0, sx + sw, 0);
       sepG.addColorStop(0, 'rgba(88,101,242,0)');
-      sepG.addColorStop(0.5, 'rgba(88,101,242,0.60)');
+      sepG.addColorStop(0.5, 'rgba(88,101,242,0.55)');
       sepG.addColorStop(1, 'rgba(88,101,242,0)');
       ctx.strokeStyle = sepG;
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(sx, sepY);
-      ctx.lineTo(sx + sw, sepY);
+      ctx.moveTo(sx, 90);
+      ctx.lineTo(sx + sw, 90);
       ctx.stroke();
     }
 
     // ── Compteur principal ───────────────────────────────────────────────
-    ctx.fillStyle = '#8899ff';
-    ctx.font = 'bold 76px sans-serif';
-    ctx.fillText(String(stats.partnerCount), CANVAS_W / 2, counterY);
+    // Glow discret derrière le chiffre
+    {
+      const cg = ctx.createRadialGradient(CANVAS_W / 2, 574, 0, CANVAS_W / 2, 574, 140);
+      cg.addColorStop(0, 'rgba(88,101,242,0.20)');
+      cg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = cg;
+      ctx.fillRect(CANVAS_W / 2 - 140, 520, 280, 100);
+    }
+
+    ctx.fillStyle = '#7b8fff';
+    ctx.font = `bold 76px ${FF}`;
+    ctx.fillText(String(stats.partnerCount), CANVAS_W / 2, 582);
 
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 15px sans-serif';
-    ctx.fillText('SERVEURS PARTENAIRES', CANVAS_W / 2, labelY);
+    ctx.font = `bold 15px ${FF}`;
+    ctx.fillText('SERVEURS PARTENAIRES', CANVAS_W / 2, 602);
 
     // ── Footer ──────────────────────────────────────────────────────────
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.font = '13px sans-serif';
-    ctx.fillText(generatedAtText, CANVAS_W / 2, footerY);
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.font = `13px ${FF}`;
+    ctx.fillText(`Mise à jour le ${dateStr} à ${timeStr}`, CANVAS_W / 2, CANVAS_H - 12);
 
     ctx.restore();
 
