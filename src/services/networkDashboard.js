@@ -532,26 +532,62 @@ async function generateDashboardImage(client, stats) {
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // TEXTES — dessinés EN DERNIER pour ne jamais être recouverts par
-    // un élément graphique (glow, fill, arc) de la carte réseau.
-    // Reset complet du contexte avant chaque section.
+    // TEXTES — dessinés EN DERNIER, après tous les éléments graphiques.
     // ═══════════════════════════════════════════════════════════════════
 
+    // Coordonnées des textes — vérification anti-NaN / hors canvas
+    const titleY    = 56;
+    const subtitleY = 78;
+    const sepY      = 90;
+    const counterY  = 582;
+    const labelY    = 602;
+    const footerY   = CANVAS_H - 12; // 663
+
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const timeStr = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    const generatedAtText = `Mise à jour le ${dateStr} à ${timeStr}`;
+
+    // ── LOG DIAGNOSTIC ──────────────────────────────────────────────────
+    logger.info('networkDashboard: drawing text layer', {
+      canvasW: CANVAS_W,
+      canvasH: CANVAS_H,
+      partnerCount: stats.partnerCount,
+      generatedAt: generatedAtText,
+      coords: { titleY, subtitleY, sepY, counterY, labelY, footerY },
+      coordsOk: [titleY, subtitleY, counterY, labelY, footerY].every(
+        (v) => typeof v === 'number' && !Number.isNaN(v) && v >= 0 && v <= CANVAS_H,
+      ),
+    });
+
+    // ── Reset strict du contexte canvas ─────────────────────────────────
+    ctx.save();
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
     ctx.shadowBlur = 0;
-    ctx.shadowColor = 'transparent';
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.shadowColor = 'rgba(0,0,0,0)';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
 
+    // ── DEBUG : rectangles de fond pour confirmer l'exécution du bloc ───
+    // Titre : fond rouge semi-transparent
+    ctx.fillStyle = 'rgba(180,0,0,0.45)';
+    ctx.fillRect(CANVAS_W / 2 - 280, titleY - 44, 560, 52);
+    // Compteur : fond rouge semi-transparent
+    ctx.fillStyle = 'rgba(180,0,0,0.45)';
+    ctx.fillRect(CANVAS_W / 2 - 200, counterY - 72, 400, 88);
+
     // ── Header ──────────────────────────────────────────────────────────
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 48px sans-serif';
-    ctx.fillText('SCRIMRÉSEAU', CANVAS_W / 2, 56);
+    ctx.strokeStyle = '#ffffff';
+    ctx.font = 'bold 44px sans-serif';
+    ctx.fillText('SCRIMRESEAU', CANVAS_W / 2, titleY);
 
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.font = '15px sans-serif';
-    ctx.fillText('Le réseau ScrimRéseau', CANVAS_W / 2, 78);
+    ctx.fillStyle = 'rgba(255,255,255,0.80)';
+    ctx.font = '16px sans-serif';
+    ctx.fillText('Le reseau ScrimReseau', CANVAS_W / 2, subtitleY);
 
     // Séparateur dégradé centré
     {
@@ -559,42 +595,31 @@ async function generateDashboardImage(client, stats) {
       const sx = (CANVAS_W - sw) / 2;
       const sepG = ctx.createLinearGradient(sx, 0, sx + sw, 0);
       sepG.addColorStop(0, 'rgba(88,101,242,0)');
-      sepG.addColorStop(0.5, 'rgba(88,101,242,0.50)');
+      sepG.addColorStop(0.5, 'rgba(88,101,242,0.60)');
       sepG.addColorStop(1, 'rgba(88,101,242,0)');
       ctx.strokeStyle = sepG;
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(sx, 90);
-      ctx.lineTo(sx + sw, 90);
+      ctx.moveTo(sx, sepY);
+      ctx.lineTo(sx + sw, sepY);
       ctx.stroke();
     }
 
     // ── Compteur principal ───────────────────────────────────────────────
-    // Glow derrière le chiffre
-    {
-      const cg = ctx.createRadialGradient(CANVAS_W / 2, 574, 0, CANVAS_W / 2, 574, 140);
-      cg.addColorStop(0, 'rgba(88,101,242,0.22)');
-      cg.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = cg;
-      ctx.fillRect(CANVAS_W / 2 - 140, 520, 280, 100);
-    }
-
-    ctx.fillStyle = '#6b7bff';
+    ctx.fillStyle = '#8899ff';
     ctx.font = 'bold 76px sans-serif';
-    ctx.fillText(String(stats.partnerCount), CANVAS_W / 2, 582);
+    ctx.fillText(String(stats.partnerCount), CANVAS_W / 2, counterY);
 
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 14px sans-serif';
-    ctx.fillText('SERVEURS PARTENAIRES', CANVAS_W / 2, 602);
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillText('SERVEURS PARTENAIRES', CANVAS_W / 2, labelY);
 
     // ── Footer ──────────────────────────────────────────────────────────
-    const now = new Date();
-    const dateStr = now.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-    const timeStr = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = '13px sans-serif';
+    ctx.fillText(generatedAtText, CANVAS_W / 2, footerY);
 
-    ctx.fillStyle = 'rgba(255,255,255,0.38)';
-    ctx.font = '12px sans-serif';
-    ctx.fillText(`Mise à jour le ${dateStr} à ${timeStr}`, CANVAS_W / 2, CANVAS_H - 12);
+    ctx.restore();
 
     return canvas.toBuffer('image/png');
   } catch (err) {
