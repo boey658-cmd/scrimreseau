@@ -1,3 +1,4 @@
+import { dashboardReseau } from './dashboardReseau.js';
 import { help } from './help.js';
 import { helpAdmin } from './helpAdmin.js';
 import { helpAdminJoueur } from './helpAdminJoueur.js';
@@ -15,7 +16,7 @@ import { scrimDev } from './scrimDev.js';
 import { scrimModeration } from './scrimModeration.js';
 import { scrimTrouve } from './scrimTrouve.js';
 
-/** Commandes déployées partout (global ou guildes), sans /scrim-dev. */
+/** Commandes déployées partout (global ou guildes), sans commandes owner/dev. */
 export const commandListWithoutDev = [
   scrimConfig,
   scrimModeration,
@@ -34,7 +35,8 @@ export const commandListWithoutDev = [
   helpAdminJoueur,
 ];
 
-export { scrimDev };
+/** Commandes réservées à la guilde dev/owner (DEV_GUILD_ID). Invisibles ailleurs. */
+export { dashboardReseau, scrimDev };
 
-/** Toutes les commandes (résolution runtime, y compris dev-only). */
-export const commandList = [...commandListWithoutDev, scrimDev];
+/** Toutes les commandes (résolution runtime, y compris owner/dev). */
+export const commandList = [...commandListWithoutDev, dashboardReseau, scrimDev];

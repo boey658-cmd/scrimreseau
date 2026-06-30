@@ -7,6 +7,7 @@ import { stopDiscordTaskQueue } from './src/services/discordTaskQueue.js';
 import { stopPlayerSearchExpirationJob } from './src/jobs/playerSearchExpirationJob.js';
 import { stopScrimExpirationJob } from './src/services/scrimExpirationJob.js';
 import { stopScrimRepostJob } from './src/services/scrimRepostJob.js';
+import { stopDashboardRefreshJob } from './src/services/networkDashboard.js';
 import { logger } from './src/utils/logger.js';
 import { recordUncaughtException, recordUnhandledRejection } from './src/utils/processHealth.js';
 
@@ -60,6 +61,23 @@ async function gracefulShutdown(signal) {
     logger.health('Arrêt propre — début', { signal, phase: 'shutdown_start' });
   } catch {
     /* ignore */
+  }
+
+  try {
+    logger.info('Arrêt propre — arrêt du job dashboard réseau', {
+      phase: 'dashboard_refresh_job_stop',
+    });
+    stopDashboardRefreshJob();
+  } catch (err) {
+    try {
+      logger.error('Arrêt propre — échec stopDashboardRefreshJob', {
+        phase: 'dashboard_refresh_job_stop_error',
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+    } catch {
+      /* ignore */
+    }
   }
 
   try {

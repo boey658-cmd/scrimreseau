@@ -15,6 +15,7 @@ import {
   mayConfigureScrimReceptionChannel,
 } from '../utils/guildScrimReceptionGate.js';
 import { logger } from '../utils/logger.js';
+import { scheduleNetworkDashboardUpdate } from '../services/networkDashboard.js';
 
 const DEBUG = 'DEBUG setup-scrim-channel';
 
@@ -130,6 +131,9 @@ export async function executeSetupScrimChannelCore(interaction, ctx) {
       game_key: gameKey,
       user_id: interaction.user.id,
     });
+
+    // Mettre à jour le dashboard réseau : ce serveur devient (ou reste) partenaire
+    scheduleNetworkDashboardUpdate(interaction.client, ctx.stmts);
 
     logger.info(DEBUG, { step: 'avant_editreply_final' });
     await interactEditReply(interaction, {

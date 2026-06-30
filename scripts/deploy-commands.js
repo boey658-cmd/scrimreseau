@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { REST, Routes } from 'discord.js';
 import {
   commandListWithoutDev,
+  dashboardReseau,
   scrimDev,
 } from '../src/commands/index.js';
 import { logger } from '../src/utils/logger.js';
@@ -37,7 +38,8 @@ if (!clientId?.trim()) {
 }
 
 const publicBody = commandListWithoutDev.map((c) => c.data.toJSON());
-const devOnlyBody = [scrimDev.data.toJSON()];
+// /scrim-dev et /dashboard-reseau : guilde dev uniquement, invisibles ailleurs
+const devOnlyBody = [scrimDev.data.toJSON(), dashboardReseau.data.toJSON()];
 const devGuildId = process.env.DEV_GUILD_ID?.trim() ?? '';
 
 if (!devGuildId) {
@@ -81,7 +83,7 @@ const guildsToClear =
 logger.info('Déploiement slash — résumé', {
   mode,
   publicCommandCount: publicBody.length,
-  scrimDevGuildOnly: Boolean(devGuildId),
+  ownerDevGuildOnly: Boolean(devGuildId),
   devOnlyCommandCount: devOnlyBody.length,
   devOnlyCommandNames: devOnlyBody.map((c) => c.name),
   publicCommandNames: commandListWithoutDev.map((c) => c.data.name),

@@ -149,6 +149,16 @@ CREATE TABLE IF NOT EXISTS guild_scrim_message_lifecycle_policy (
     CHECK(policy IN ('keep', 'delete')),
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS network_dashboard_config (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  guild_id TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  message_id TEXT,
+  created_by TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(guild_id, channel_id)
+);
 `;
 
 const MULTI_OPGG_COLUMN = 'multi_opgg_url';
@@ -951,6 +961,40 @@ export function prepareStatements(db) {
     /** Salon de réception scrim pour une guilde + jeu précis (lecture pour vérif permissions). */
     getGuildGameChannel: db.prepare(`
       SELECT channel_id FROM guild_game_channels WHERE guild_id = ? AND game_key = ?
+    `),
+
+    /** Dashboard réseau : nombre de guildes distinctes avec au moins un salon scrim. */
+    countDistinctPartnerGuilds: db.prepare(`
+      SELECT COUNT(DISTINCT guild_id) AS n FROM guild_game_channels
+    `),
+    /** Dashboard réseau : liste de tous les guild_id distincts ayant un salon scrim. */
+    listDistinctPartnerGuildIds: db.prepare(`
+      SELECT DISTINCT guild_id FROM guild_game_channels ORDER BY guild_id
+    `),
+
+    /** Dashboard réseau : tous les dashboards configurés. */
+    getAllNetworkDashboards: db.prepare(`
+      SELECT id, guild_id, channel_id, message_id, created_by, updated_at
+      FROM network_dashboard_config
+      ORDER BY updated_at DESC
+    `),
+    /** Dashboard réseau : upsert d'un dashboard (guild_id + channel_id unique). */
+    upsertNetworkDashboard: db.prepare(`
+      INSERT INTO network_dashboard_config (guild_id, channel_id, message_id, created_by, updated_at)
+      VALUES (@guild_id, @channel_id, @message_id, @created_by, @updated_at)
+      ON CONFLICT(guild_id, channel_id) DO UPDATE SET
+        message_id = excluded.message_id,
+        updated_at = excluded.updated_at
+    `),
+    /** Dashboard réseau : mise à jour du message_id et updated_at après (re)création. */
+    updateNetworkDashboardMessageId: db.prepare(`
+      UPDATE network_dashboard_config
+      SET message_id = @message_id, updated_at = @updated_at
+      WHERE guild_id = @guild_id AND channel_id = @channel_id
+    `),
+    /** Dashboard réseau : suppression d'un dashboard configuré. */
+    deleteNetworkDashboard: db.prepare(`
+      DELETE FROM network_dashboard_config WHERE guild_id = ? AND channel_id = ?
     `),
   };
 }

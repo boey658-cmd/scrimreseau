@@ -14,6 +14,11 @@ import { startPlayerSearchExpirationJob } from './jobs/playerSearchExpirationJob
 import { startScrimExpirationJob } from './services/scrimExpirationJob.js';
 import { startScrimRepostJob } from './services/scrimRepostJob.js';
 import {
+  scheduleNetworkDashboardUpdate,
+  startDashboardRefreshJob,
+  updateNetworkDashboard,
+} from './services/networkDashboard.js';
+import {
   interactAutocompleteRespond,
   interactFollowUp,
   interactReply,
@@ -62,6 +67,9 @@ export async function startBot() {
     startPlayerSearchExpirationJob(readyClient, db, playerSearchStmts);
     startDiscordEditRetryJob(readyClient, stmts);
     startDailyDevReportJob(readyClient, db);
+    // Dashboard réseau : update initiale au démarrage + job 1h
+    void updateNetworkDashboard(readyClient, stmts).catch(() => {});
+    startDashboardRefreshJob(readyClient, stmts);
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
@@ -133,6 +141,17 @@ export async function startBot() {
         });
       }
     }
+  });
+
+  // Mise à jour dashboard quand le bot rejoint ou quitte un serveur
+  client.on(Events.GuildCreate, (guild) => {
+    logger.info('Bot rejoint un nouveau serveur — dashboard refresh', { guild_id: guild.id });
+    scheduleNetworkDashboardUpdate(client, stmts);
+  });
+
+  client.on(Events.GuildDelete, (guild) => {
+    logger.info('Bot a quitté un serveur — dashboard refresh', { guild_id: guild.id });
+    scheduleNetworkDashboardUpdate(client, stmts);
   });
 
   await client.login(token);

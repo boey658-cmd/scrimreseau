@@ -2,6 +2,7 @@ import { MessageFlags } from 'discord.js';
 import { UI_PRIMARY_GAME_KEY } from '../config/games.js';
 import { interactReply } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
+import { scheduleNetworkDashboardUpdate } from '../services/networkDashboard.js';
 
 /**
  * @param {import('discord.js').ChatInputCommandInteraction} interaction
@@ -36,6 +37,9 @@ export async function executeRemoveScrimChannelCore(interaction, ctx) {
     });
     return;
   }
+
+  // Mettre à jour le dashboard réseau : ce serveur n'est plus partenaire
+  scheduleNetworkDashboardUpdate(interaction.client, ctx.stmts);
 
   await interactReply(interaction, {
     content:
