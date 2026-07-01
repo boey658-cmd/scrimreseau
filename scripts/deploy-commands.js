@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { REST, Routes } from 'discord.js';
 import {
   commandListWithoutDev,
+  dashboardAdmin,
   dashboardReseau,
   scrimDev,
 } from '../src/commands/index.js';
@@ -38,8 +39,8 @@ if (!clientId?.trim()) {
 }
 
 const publicBody = commandListWithoutDev.map((c) => c.data.toJSON());
-// /scrim-dev et /dashboard-reseau : guilde dev uniquement, invisibles ailleurs
-const devOnlyBody = [scrimDev.data.toJSON(), dashboardReseau.data.toJSON()];
+// /scrim-dev, /dashboard-reseau et /dashboard-admin : guilde dev uniquement, invisibles ailleurs
+const devOnlyBody = [scrimDev.data.toJSON(), dashboardReseau.data.toJSON(), dashboardAdmin.data.toJSON()];
 const devGuildId = process.env.DEV_GUILD_ID?.trim() ?? '';
 
 if (!devGuildId) {

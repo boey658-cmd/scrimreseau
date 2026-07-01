@@ -1,3 +1,4 @@
+import { dashboardAdmin } from './dashboardAdmin.js';
 import { dashboardReseau } from './dashboardReseau.js';
 import { help } from './help.js';
 import { helpAdmin } from './helpAdmin.js';
@@ -36,7 +37,7 @@ export const commandListWithoutDev = [
 ];
 
 /** Commandes réservées à la guilde dev/owner (DEV_GUILD_ID). Invisibles ailleurs. */
-export { dashboardReseau, scrimDev };
+export { dashboardAdmin, dashboardReseau, scrimDev };
 
 /** Toutes les commandes (résolution runtime, y compris owner/dev). */
-export const commandList = [...commandListWithoutDev, dashboardReseau, scrimDev];
+export const commandList = [...commandListWithoutDev, dashboardAdmin, dashboardReseau, scrimDev];
