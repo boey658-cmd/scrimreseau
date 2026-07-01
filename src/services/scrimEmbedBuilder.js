@@ -22,6 +22,85 @@ const SCRIM_STATUS_LINE_CLOSED_EXPIRED = '⚫ Scrim expiré — indisponible';
 const SCRIM_STATUS_LINE_SUPERSEDED =
   '🔴 Ancienne annonce — une nouvelle annonce a été repostée';
 
+// ---------------------------------------------------------------------------
+// Emojis custom rangs + OP.GG
+// ---------------------------------------------------------------------------
+
+/** Balises custom Discord pour les rangs et OP.GG. */
+const CUSTOM_EMOJIS = Object.freeze({
+  iron:        '<:iron:1521794187006316615>',
+  bronze:      '<:bronze:1521794229951660053>',
+  silver:      '<:silver:1521794275702997032>',
+  gold:        '<:gold:1521794312642232400>',
+  platinum:    '<:platinum:1521794349539655770>',
+  emerald:     '<:emerald:1521794386642337822>',
+  diamond:     '<:diamond:1521794418787749938>',
+  master:      '<:master:1521794452111364228>',
+  grandmaster: '<:grandmaster:1521794486102134824>',
+  challenger:  '<:challenger:1521794520860069988>',
+  opgg:        '<:opgg:1521794035990138921>',
+  heure:       '<:heur:1521799737412419725>',
+  fearless:    '<:fearless:1521804294062608505>',
+});
+
+/**
+ * Tiers du rang, du plus bas (index 0) au plus élevé (index 9).
+ * `keys` : noms français et anglais reconnus (comparaison exacte, insensible à la casse).
+ *
+ * @type {ReadonlyArray<{ readonly keys: readonly string[], readonly tier: keyof typeof CUSTOM_EMOJIS }>}
+ */
+const RANK_TIERS = Object.freeze([
+  { keys: Object.freeze(['fer', 'iron']),                                                    tier: 'iron' },
+  { keys: Object.freeze(['bronze']),                                                         tier: 'bronze' },
+  { keys: Object.freeze(['argent', 'silver']),                                               tier: 'silver' },
+  { keys: Object.freeze(['or', 'gold']),                                                     tier: 'gold' },
+  { keys: Object.freeze(['platine', 'platinum']),                                            tier: 'platinum' },
+  { keys: Object.freeze(['émeraude', 'emeraude', 'emerald']),                               tier: 'emerald' },
+  { keys: Object.freeze(['diamant', 'diamond']),                                             tier: 'diamond' },
+  { keys: Object.freeze(['master']),                                                         tier: 'master' },
+  { keys: Object.freeze(['grandmaster', 'grand maître', 'grand maitre', 'grand-maître']),   tier: 'grandmaster' },
+  { keys: Object.freeze(['challenger']),                                                     tier: 'challenger' },
+]);
+
+/**
+ * Indice de tier (0 = plus bas) pour un segment de rang normalisé.
+ * Comparaison exacte sur le segment complet (évite le match 'master' dans 'grandmaster').
+ * @param {string} segment
+ * @returns {number} -1 si inconnu
+ */
+function getRankTierIndex(segment) {
+  const norm = segment.toLowerCase().trim();
+  for (let i = 0; i < RANK_TIERS.length; i++) {
+    if (/** @type {readonly string[]} */ (RANK_TIERS[i].keys).includes(norm)) return i;
+  }
+  return -1;
+}
+
+/**
+ * Retourne l'emoji custom du rang le plus élevé trouvé dans la chaîne.
+ * Accepte les formats "Or", "Or / Platine", "Émeraude / Diamant", etc.
+ * Si aucun rang reconnu : fallback `🏆`.
+ *
+ * @param {string | null | undefined} rankStr
+ * @returns {string}
+ */
+export function getRankEmoji(rankStr) {
+  if (typeof rankStr !== 'string' || !rankStr.trim()) return '🏆';
+
+  let highestIndex = -1;
+  let highestTier  = /** @type {keyof typeof CUSTOM_EMOJIS | null} */ (null);
+
+  for (const segment of rankStr.split('/')) {
+    const idx = getRankTierIndex(segment);
+    if (idx > highestIndex) {
+      highestIndex = idx;
+      highestTier  = RANK_TIERS[idx].tier;
+    }
+  }
+
+  return highestTier !== null ? CUSTOM_EMOJIS[highestTier] : '🏆';
+}
+
 /** @type {Intl.DateTimeFormat} */
 let _parisDateFormatter;
 /** @type {Intl.DateTimeFormat} */
@@ -174,7 +253,7 @@ export const FEARLESS_VALUE_NON = 'non';
 export const FEARLESS_VALUE_NIMPORTE = 'nimporte';
 
 /** Préfixe ligne Fearless dans la description d’embed (emoji custom du serveur). */
-const FEARLESS_LINE_PREFIX = '<:fearless:1484869493992849519>';
+const FEARLESS_LINE_PREFIX = CUSTOM_EMOJIS.fearless;
 
 /**
  * @typedef {{
@@ -283,8 +362,8 @@ function buildScrimContactDescriptionLines(contactUserId, contactUsername) {
 /** Explication courte sous le contact (bouton lien sous le message). */
 const SCRIM_CONTACT_BUTTON_HINT_LINES = [
   "⚠️ Si la mention du contact ci-dessus n'est pas cliquable",
-  '👉 rejoignez le serveur ScrimRéseau avec le bouton ci-dessous',
-  '👉 cela permet généralement de rendre la mention cliquable',
+  '👉 Rejoignez le serveur ScrimRéseau avec le bouton ci-dessous',
+  '👉 Cela permet généralement de rendre la mention cliquable',
 ];
 
 /**
@@ -391,7 +470,7 @@ function resolveScrimDisplaySchedule(payload) {
  * @param {{ includeContactHints?: boolean }} [options]
  * @returns {string}
  */
-function buildScrimEmbedDescription(payload, statusLine, options = {}) {
+function buildScrimEmbedDescription(payload, options = {}) {
   const { dateStr, timeStr } = resolveScrimDisplaySchedule(payload);
 
   const formatLine = formatScrimFormatLineForEmbed(
@@ -401,27 +480,36 @@ function buildScrimEmbedDescription(payload, statusLine, options = {}) {
 
   const fearlessLine = formatFearlessLineForEmbed(payload.fearless ?? null);
 
-  const formatBlock = `${getScrimEmoji('format')} ${formatLine}`;
-  const formatAndFearlessLine = fearlessLine
-    ? `${formatBlock} • ${fearlessLine}`
-    : formatBlock;
+  // ── Ligne 1 : date • heure ──────────────────────────────────────────
+  const line1 = `${getScrimEmoji('date')} ${dateStr} • ${CUSTOM_EMOJIS.heure} ${timeStr}`;
+
+  // ── Ligne 2 : format (• fearless) • rang ───────────────────────────
+  const rankEmoji = getRankEmoji(payload.rank);
+  const line2 = fearlessLine
+    ? `${getScrimEmoji('format')} ${formatLine} • ${fearlessLine} • ${rankEmoji} ${payload.rank}`
+    : `${getScrimEmoji('format')} ${formatLine} • ${rankEmoji} ${payload.rank}`;
+
+  // ── Ligne 3 : contact ───────────────────────────────────────────────
+  const contactLine = buildScrimContactDescriptionLines(
+    payload.contactUserId,
+    payload.contactDisplayName ?? null,
+  )[0] ?? '';
+
+  const multiUrl =
+    typeof payload.multiOpggUrl === 'string' && payload.multiOpggUrl.length > 0
+      ? payload.multiOpggUrl
+      : null;
 
   /** @type {string[]} */
-  const lines = [
-    statusLine,
-    '',
-    `${getScrimEmoji('date')} ${dateStr}`,
-    `${getScrimEmoji('heure')} ${timeStr}`,
-    formatAndFearlessLine,
-    `${getScrimEmoji('rang')} ${payload.rank}`,
-    ...buildScrimContactDescriptionLines(
-      payload.contactUserId,
-      payload.contactDisplayName ?? null,
-    ),
-  ];
+  const lines = [line1, line2, contactLine];
+
+  // ── Ligne 4 (optionnelle) : OP.GG sur sa propre ligne ───────────────
+  if (multiUrl) {
+    lines.push(`${CUSTOM_EMOJIS.opgg} Multi OP.GG : [Ouvrir](${multiUrl})`);
+  }
 
   if (options.includeContactHints) {
-    lines.push('', ...SCRIM_CONTACT_BUTTON_HINT_LINES);
+    lines.push(...SCRIM_CONTACT_BUTTON_HINT_LINES);
   }
 
   return lines.join('\n');
@@ -434,21 +522,10 @@ function buildScrimEmbedDescription(payload, statusLine, options = {}) {
  * @param {{ includeContactHints?: boolean }} [options]
  * @returns {EmbedBuilder}
  */
-function buildScrimEmbedWithStatus(payload, color, statusLine, options = {}) {
-  const embed = new EmbedBuilder()
+function buildScrimEmbedWithStatus(payload, color, _statusLine, options = {}) {
+  return new EmbedBuilder()
     .setColor(color)
-    .setDescription(buildScrimEmbedDescription(payload, statusLine, options));
-
-  const multiUrl = payload.multiOpggUrl;
-  if (typeof multiUrl === 'string' && multiUrl.length > 0) {
-    embed.addFields({
-      name: '\u200B',
-      value: `Multi OP.GG : [Ouvrir](${multiUrl})`,
-      inline: false,
-    });
-  }
-
-  return embed;
+    .setDescription(buildScrimEmbedDescription(payload, options));
 }
 
 /**

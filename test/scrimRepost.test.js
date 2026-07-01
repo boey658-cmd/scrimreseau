@@ -55,7 +55,7 @@ test('parseRepostIntervalHours — bornes', () => {
   assert.equal(parseRepostIntervalHours('abc'), 24);
 });
 
-test('embed actif — Recherche en cours + vert', () => {
+test('embed actif — couleur verte, données présentes dans la description', () => {
   const embed = buildScrimEmbed({
     gameKey: 'lol',
     rank: 'Gold',
@@ -65,7 +65,9 @@ test('embed actif — Recherche en cours + vert', () => {
     contactUserId: '1',
   });
   assert.equal(embed.data.color, SCRIM_EMBED_COLOR_ACTIVE);
-  assert.match(embed.data.description ?? '', /Recherche en cours/);
+  // Le statut est indiqué par la couleur, pas par un texte dans la description
+  assert.match(embed.data.description ?? '', /01\/06\/2026/);
+  assert.match(embed.data.description ?? '', /Gold/);
 });
 
 test('embed superseded — gris foncé, pas rouge « trouvé »', () => {
@@ -83,7 +85,8 @@ test('embed superseded — gris foncé, pas rouge « trouvé »', () => {
   const opts = buildScrimSupersededMessageEditOptions(row);
   assert.equal(opts.embeds[0].data.color, SCRIM_EMBED_COLOR_SUPERSEDED);
   assert.notEqual(opts.embeds[0].data.color, SCRIM_EMBED_COLOR_CLOSED_MANUAL);
-  assert.match(opts.embeds[0].data.description ?? '', /Ancienne annonce/);
+  // Le statut est indiqué par la couleur, pas par un texte dans la description
+  assert.match(opts.embeds[0].data.description ?? '', /Gold/);
 });
 
 test('findActiveScrimPostsDueForRepost — actif vieux de 25h éligible', () => {
