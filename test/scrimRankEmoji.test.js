@@ -127,18 +127,74 @@ describe('buildScrimEmbed — emoji rang complet dans la description', () => {
     );
   });
 
-  test('OP.GG → balise complète <:opgg:1521794035990138921>', () => {
+  test('OP.GG déplacé en bouton — absent de la description', () => {
     const desc = buildScrimEmbed(
       makePayload('Gold', { multiOpggUrl: 'https://op.gg/multisearch/euw?summoners=x' }),
     ).data.description ?? '';
     assert.ok(
-      desc.includes('<:opgg:1521794035990138921> Multi OP.GG'),
-      `Attendu l'emoji opgg complet. Description reçue:\n${desc}`,
+      !desc.includes('OP.GG'),
+      `OP.GG ne doit plus être dans la description (il est en bouton). Description reçue:\n${desc}`,
     );
   });
 
-  test('pas d\'OP.GG → ligne OP.GG absente', () => {
+  test('sans OP.GG → ligne OP.GG absente', () => {
     const desc = buildScrimEmbed(makePayload('Gold')).data.description ?? '';
     assert.ok(!desc.includes('OP.GG'), `Ligne OP.GG ne devrait pas apparaître. Description:\n${desc}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests du layout 4 lignes
+// ---------------------------------------------------------------------------
+
+describe('buildScrimEmbed — layout 4 lignes', () => {
+  test('ligne 1 : date + heure inline sans emoji heure séparé', () => {
+    const desc = buildScrimEmbed(makePayload('Gold')).data.description ?? '';
+    const line1 = desc.split('\n')[0];
+    assert.ok(line1.includes('01/07/2026'), `Ligne 1 doit contenir la date. Got: ${line1}`);
+    assert.ok(line1.includes('22h00'), `Ligne 1 doit contenir l\'heure. Got: ${line1}`);
+    assert.ok(!line1.includes('<:heur:'), `Ligne 1 ne doit plus contenir l\'emoji heure. Got: ${line1}`);
+  });
+
+  test('ligne 2 Fearless Oui — texte sans emoji fearless', () => {
+    const desc = buildScrimEmbed(makePayload('Gold', { fearless: 'oui' })).data.description ?? '';
+    const line2 = desc.split('\n')[1];
+    assert.ok(line2.includes('Fearless : Oui'), `Ligne 2 doit contenir Fearless : Oui. Got: ${line2}`);
+    assert.ok(!line2.includes('<:fearless:'), `Ligne 2 ne doit pas contenir l\'emoji fearless. Got: ${line2}`);
+  });
+
+  test('ligne 2 Fearless Non — texte sans emoji fearless', () => {
+    const desc = buildScrimEmbed(makePayload('Gold', { fearless: 'non' })).data.description ?? '';
+    const line2 = desc.split('\n')[1];
+    assert.ok(line2.includes('Fearless : Non'), `Ligne 2 doit contenir Fearless : Non. Got: ${line2}`);
+  });
+
+  test('ligne 2 sans Fearless — format seul', () => {
+    const desc = buildScrimEmbed(makePayload('Gold', { fearless: null })).data.description ?? '';
+    const line2 = desc.split('\n')[1];
+    assert.ok(!line2.includes('Fearless'), `Ligne 2 sans fearless ne doit pas contenir Fearless. Got: ${line2}`);
+  });
+
+  test('ligne 3 : rang seul — Grandmaster / Challenger avec emoji challenger', () => {
+    const desc = buildScrimEmbed(makePayload('Grandmaster / Challenger')).data.description ?? '';
+    const line3 = desc.split('\n')[2];
+    assert.ok(
+      line3.includes('<:challenger:1521794520860069988> Grandmaster / Challenger'),
+      `Ligne 3 doit être le rang avec emoji. Got: ${line3}`,
+    );
+  });
+
+  test('ligne 3 : Émeraude / Diamant → emoji diamond', () => {
+    const desc = buildScrimEmbed(makePayload('Émeraude / Diamant')).data.description ?? '';
+    const line3 = desc.split('\n')[2];
+    assert.ok(
+      line3.includes('<:diamond:1521794418787749938> Émeraude / Diamant'),
+      `Ligne 3 doit contenir l\'emoji diamond. Got: ${line3}`,
+    );
+  });
+
+  test('embed actif — bloc aide présent', () => {
+    const desc = buildScrimEmbed(makePayload('Gold')).data.description ?? '';
+    assert.ok(desc.includes('cliquable'), 'Embed actif doit avoir le bloc aide');
   });
 });

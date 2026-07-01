@@ -118,7 +118,7 @@ export async function broadcastScrimRequest(args) {
         scheduledAtEndIso: payload.scheduledAtEndIso ?? null,
       });
 
-      const communityRows = buildScrimCommunityServerActionRows();
+      const communityRows = buildScrimCommunityServerActionRows(payload.multiOpggUrl ?? null);
       const sendPayload =
         communityRows.length > 0
           ? { embeds: [embed], components: communityRows }

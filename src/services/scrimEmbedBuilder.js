@@ -256,6 +256,19 @@ export const FEARLESS_VALUE_NIMPORTE = 'nimporte';
 const FEARLESS_LINE_PREFIX = CUSTOM_EMOJIS.fearless;
 
 /**
+ * Texte Fearless pour la ligne format, sans emoji (ex. "Fearless : Oui").
+ * Retourne null si fearless absent / inconnu.
+ * @param {string | null | undefined} fearless
+ * @returns {string | null}
+ */
+function getFearlessText(fearless) {
+  if (fearless === FEARLESS_VALUE_OUI) return 'Fearless : Oui';
+  if (fearless === FEARLESS_VALUE_NON) return 'Fearless : Non';
+  if (fearless === FEARLESS_VALUE_NIMPORTE) return "Fearless : N'importe";
+  return null;
+}
+
+/**
  * @typedef {{
  *   gameKey: string,
  *   rank: string,
@@ -393,20 +406,37 @@ export function getScrimCommunityServerUrlFromEnv() {
 }
 
 /**
- * Bouton lien vers le serveur ScrimRéseau (messages de diffusion scrim).
+ * Boutons de diffusion scrim : lien serveur ScrimRéseau + bouton OP.GG optionnel.
+ * @param {string | null | undefined} [multiOpggUrl] URL Multi OP.GG (si présente, bouton ajouté)
  * @returns {import('discord.js').ActionRowBuilder<import('discord.js').ButtonBuilder>[]}
  */
-export function buildScrimCommunityServerActionRows() {
-  const url = getScrimCommunityServerUrlFromEnv();
-  if (!url) return [];
+export function buildScrimCommunityServerActionRows(multiOpggUrl) {
+  const communityUrl = getScrimCommunityServerUrlFromEnv();
 
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setLabel('🔗 Rejoindre le serveur ScrimRéseau')
-      .setStyle(ButtonStyle.Link)
-      .setURL(url),
-  );
-  return [row];
+  /** @type {import('discord.js').ButtonBuilder[]} */
+  const buttons = [];
+
+  if (communityUrl) {
+    buttons.push(
+      new ButtonBuilder()
+        .setLabel('🔗 Rejoindre le serveur ScrimRéseau')
+        .setStyle(ButtonStyle.Link)
+        .setURL(communityUrl),
+    );
+  }
+
+  if (typeof multiOpggUrl === 'string' && multiOpggUrl.length > 0) {
+    buttons.push(
+      new ButtonBuilder()
+        .setLabel('Multi OP.GG')
+        .setEmoji({ name: 'opgg', id: '1521794035990138921' })
+        .setStyle(ButtonStyle.Link)
+        .setURL(multiOpggUrl),
+    );
+  }
+
+  if (buttons.length === 0) return [];
+  return [/** @type {any} */ (new ActionRowBuilder().addComponents(...buttons))];
 }
 
 /**
@@ -478,35 +508,27 @@ function buildScrimEmbedDescription(payload, options = {}) {
     payload.nombreDeGames ?? null,
   );
 
-  const fearlessLine = formatFearlessLineForEmbed(payload.fearless ?? null);
+  // ── Ligne 1 : date • heure (heure inline, pas d'emoji séparé) ───────
+  const line1 = `${getScrimEmoji('date')} ${dateStr} • ${timeStr}`;
 
-  // ── Ligne 1 : date • heure ──────────────────────────────────────────
-  const line1 = `${getScrimEmoji('date')} ${dateStr} • ${CUSTOM_EMOJIS.heure} ${timeStr}`;
+  // ── Ligne 2 : format (• Fearless texte si présent) ──────────────────
+  const fearlessText = getFearlessText(payload.fearless ?? null);
+  const line2 = fearlessText
+    ? `${getScrimEmoji('format')} ${formatLine} • ${fearlessText}`
+    : `${getScrimEmoji('format')} ${formatLine}`;
 
-  // ── Ligne 2 : format (• fearless) • rang ───────────────────────────
+  // ── Ligne 3 : rang (emoji + texte, ligne dédiée) ────────────────────
   const rankEmoji = getRankEmoji(payload.rank);
-  const line2 = fearlessLine
-    ? `${getScrimEmoji('format')} ${formatLine} • ${fearlessLine} • ${rankEmoji} ${payload.rank}`
-    : `${getScrimEmoji('format')} ${formatLine} • ${rankEmoji} ${payload.rank}`;
+  const line3 = `${rankEmoji} ${payload.rank}`;
 
-  // ── Ligne 3 : contact ───────────────────────────────────────────────
+  // ── Ligne 4 : contact ───────────────────────────────────────────────
   const contactLine = buildScrimContactDescriptionLines(
     payload.contactUserId,
     payload.contactDisplayName ?? null,
   )[0] ?? '';
 
-  const multiUrl =
-    typeof payload.multiOpggUrl === 'string' && payload.multiOpggUrl.length > 0
-      ? payload.multiOpggUrl
-      : null;
-
   /** @type {string[]} */
-  const lines = [line1, line2, contactLine];
-
-  // ── Ligne 4 (optionnelle) : OP.GG sur sa propre ligne ───────────────
-  if (multiUrl) {
-    lines.push(`${CUSTOM_EMOJIS.opgg} Multi OP.GG : [Ouvrir](${multiUrl})`);
-  }
+  const lines = [line1, line2, line3, contactLine];
 
   if (options.includeContactHints) {
     lines.push(...SCRIM_CONTACT_BUTTON_HINT_LINES);
