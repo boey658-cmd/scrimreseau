@@ -42,6 +42,8 @@ function sleep(ms) {
  *     multiOpggUrl?: string | null,
  *     scheduledAtIso?: string | null,
  *     scheduledAtEndIso?: string | null,
+ *     structureNameSnapshot?: string | null,
+ *     structureInviteUrl?: string | null,
  *   },
  * }} args
  */
@@ -116,6 +118,8 @@ export async function broadcastScrimRequest(args) {
         multiOpggUrl: payload.multiOpggUrl ?? null,
         scheduledAtIso: payload.scheduledAtIso ?? null,
         scheduledAtEndIso: payload.scheduledAtEndIso ?? null,
+        structureNameSnapshot: payload.structureNameSnapshot ?? null,
+        structureInviteUrl: payload.structureInviteUrl ?? null,
       });
 
       const communityRows = buildScrimCommunityServerActionRows(payload.multiOpggUrl ?? null);

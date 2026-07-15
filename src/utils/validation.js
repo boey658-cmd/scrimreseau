@@ -355,3 +355,64 @@ export function validateContactUser(user) {
   }
   return { ok: true, userId: user.id };
 }
+
+/**
+ * Valide et normalise un lien d'invitation Discord.
+ *
+ * Liens acceptés :
+ *   https://discord.gg/<code>
+ *   https://discord.com/invite/<code>
+ *   https://discordapp.com/invite/<code>
+ *   discord.gg/<code>  (normalisé automatiquement en https://discord.gg/<code>)
+ *
+ * Le code d'invitation doit être non vide et ne contenir que des caractères alphanumériques,
+ * tirets et underscores.
+ *
+ * @param {string | null | undefined} raw
+ * @returns {{ ok: true, value: string } | { ok: false, error: string }}
+ */
+export function validateDiscordInviteUrl(raw) {
+  const ERR = 'Merci d\'indiquer un lien d\'invitation Discord valide (ex. https://discord.gg/xxxx).';
+
+  if (typeof raw !== 'string' || !raw.trim()) {
+    return { ok: false, error: ERR };
+  }
+
+  let input = raw.trim();
+
+  // Normalisation discord.gg/code sans schéma
+  if (/^discord\.gg\//i.test(input)) {
+    input = `https://${input}`;
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(input);
+  } catch {
+    return { ok: false, error: ERR };
+  }
+
+  // Schéma obligatoirement https
+  if (parsed.protocol !== 'https:') {
+    return { ok: false, error: ERR };
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  let code = null;
+
+  if (host === 'discord.gg') {
+    // /code ou /invite/code
+    const match = parsed.pathname.match(/^\/(?:invite\/)?([A-Za-z0-9_-]+)\/?$/);
+    if (match) code = match[1];
+  } else if (host === 'discord.com' || host === 'discordapp.com') {
+    const match = parsed.pathname.match(/^\/invite\/([A-Za-z0-9_-]+)\/?$/);
+    if (match) code = match[1];
+  }
+
+  if (!code || code.length < 2) {
+    return { ok: false, error: ERR };
+  }
+
+  // Normalise toujours vers discord.gg pour un affichage propre
+  return { ok: true, value: `https://discord.gg/${code}` };
+}

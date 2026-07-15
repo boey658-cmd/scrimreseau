@@ -108,6 +108,9 @@ test('findActiveScrimPostsDueForRepost — actif vieux de 25h éligible', () => 
       scheduled_at_end: null,
       tags: '[]',
       multi_opgg_url: null,
+      structure_guild_id: null,
+      structure_name_snapshot: null,
+      structure_invite_url_snapshot: null,
       created_at: created25hAgo,
       status: 'active',
     });
@@ -140,6 +143,9 @@ test('findActiveScrimPostsDueForRepost — repost récent exclu (< 24h)', () => 
       scheduled_at_end: null,
       tags: '[]',
       multi_opgg_url: null,
+      structure_guild_id: null,
+      structure_name_snapshot: null,
+      structure_invite_url_snapshot: null,
       created_at: created48hAgo,
       status: 'active',
     });
@@ -175,6 +181,9 @@ test('findActiveScrimPostsDueForRepost — closed_manual et closed_expired exclu
       scheduled_at_end: null,
       tags: '[]',
       multi_opgg_url: null,
+      structure_guild_id: null,
+      structure_name_snapshot: null,
+      structure_invite_url_snapshot: null,
       created_at: old,
     };
     stmts.insertScrimPostRow.run({
@@ -214,6 +223,9 @@ test('recordScrimPostRepostSuccess — conserve scrim_public_id et status active
       scheduled_at_end: null,
       tags: '[]',
       multi_opgg_url: null,
+      structure_guild_id: null,
+      structure_name_snapshot: null,
+      structure_invite_url_snapshot: null,
       created_at: now - 30 * 60 * 60 * 1000,
       status: 'active',
     });
@@ -251,6 +263,9 @@ test('findActiveScrimPostsDueForRepost — max 5 par passe', () => {
         scheduled_at_end: null,
         tags: '[]',
         multi_opgg_url: null,
+        structure_guild_id: null,
+        structure_name_snapshot: null,
+        structure_invite_url_snapshot: null,
         created_at: old + i,
         status: 'active',
       });
@@ -281,6 +296,9 @@ test('getScrimPostMessageForGuild — dernier message (ORDER BY id DESC)', () =>
       scheduled_at_end: null,
       tags: '[]',
       multi_opgg_url: null,
+      structure_guild_id: null,
+      structure_name_snapshot: null,
+      structure_invite_url_snapshot: null,
       created_at: Date.now(),
       status: 'active',
     });

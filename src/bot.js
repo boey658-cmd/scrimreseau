@@ -77,7 +77,7 @@ export async function startBot() {
       const command = commands.get(interaction.commandName);
       try {
         if (command?.autocomplete) {
-          await command.autocomplete(interaction);
+          await command.autocomplete(interaction, { stmts, db, playerSearchStmts });
         } else {
           await interactAutocompleteRespond(interaction, []);
         }

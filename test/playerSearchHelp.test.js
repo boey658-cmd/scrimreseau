@@ -54,12 +54,14 @@ test('helpadmin-joueur — admin, sans tag DEV', () => {
   assert.doesNotMatch(source, /\[DEV\]/);
 });
 
-test('index — commandes joueur dans commandListWithoutDev', () => {
+test('index — commandes joueur désactivées (absentes de commandListWithoutDev)', () => {
   const source = readSrc('src/commands/index.js');
   assert.doesNotMatch(source, /playerSearchDevCommandList/);
+  // Les imports joueur sont commentés : les noms ne doivent pas apparaître
+  // hors commentaire dans la zone commandListWithoutDev
   const publicBlock = source.slice(
-    source.indexOf('commandListWithoutDev'),
-    source.indexOf('export { scrimDev }'),
+    source.indexOf('export const commandListWithoutDev'),
+    source.indexOf('export { dashboardAdmin'),
   );
   for (const name of [
     'joueurConfig',
@@ -69,20 +71,25 @@ test('index — commandes joueur dans commandListWithoutDev', () => {
     'helpJoueur',
     'helpAdminJoueur',
   ]) {
-    assert.match(publicBlock, new RegExp(name));
+    assert.doesNotMatch(publicBlock, new RegExp(`^\\s*${name},`, 'm'));
   }
 });
 
-test('commandListWithoutDev — noms uniques incluant joueur', () => {
+test('commandListWithoutDev — noms uniques, sans commandes joueur désactivées', () => {
   const names = commandListWithoutDev.map((c) => c.data.name);
   assert.equal(new Set(names).size, names.length);
-  assert.ok(names.includes('recherche-joueur'));
-  assert.ok(names.includes('help-joueur'));
-  assert.ok(names.includes('helpadmin-joueur'));
-  assert.ok(names.includes('joueur-config'));
-  assert.ok(names.includes('mes-demandes-joueur'));
-  assert.ok(names.includes('joueur-trouve'));
-  assert.equal(names.length, 15);
+  // Commandes joueur ne doivent plus être déployées
+  assert.ok(!names.includes('recherche-joueur'));
+  assert.ok(!names.includes('help-joueur'));
+  assert.ok(!names.includes('helpadmin-joueur'));
+  assert.ok(!names.includes('joueur-config'));
+  assert.ok(!names.includes('mes-demandes-joueur'));
+  assert.ok(!names.includes('joueur-trouve'));
+  // Commandes ScrimRéseau actives toujours présentes
+  assert.ok(names.includes('recherche-scrim'));
+  assert.ok(names.includes('scrim-trouve'));
+  assert.ok(names.includes('structure-lien'));
+  assert.equal(names.length, 10);
 });
 
 test('scrimDev — seule commande hors liste publique', () => {

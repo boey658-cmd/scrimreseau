@@ -58,6 +58,41 @@ import {
 const DEFAULT_SCRIM_COMMUNITY_TIP_URL = 'https://discord.gg/ton-invite';
 
 /**
+ * Génère les suggestions autocomplete pour le champ `structure`.
+ * Retourne max 25 guildes partenaires (ayant un salon de réception scrim configuré),
+ * filtrées selon la saisie de l'utilisateur.
+ *
+ * @param {import('discord.js').Client} client
+ * @param {ReturnType<import('../database/db.js')['prepareStatements']> | null} stmts
+ * @param {string} query valeur tapée par l'utilisateur
+ * @returns {{ name: string, value: string }[]}
+ */
+function buildStructureAutocompleteChoices(client, stmts, query) {
+  if (!stmts) return [];
+  try {
+    const rows = stmts.listDistinctPartnerGuildIds.all();
+    const q = query.trim().toLowerCase();
+    /** @type {{ name: string, value: string }[]} */
+    const choices = [];
+    for (const row of rows) {
+      const guildId = String(row.guild_id);
+      const guild = client.guilds.cache.get(guildId);
+      const name = guild?.name ?? guildId;
+      if (!q || name.toLowerCase().includes(q)) {
+        choices.push({ name, value: guildId });
+      }
+      if (choices.length >= 25) break;
+    }
+    return choices;
+  } catch (err) {
+    logger.warn('structure autocomplete — erreur lecture DB', {
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return [];
+  }
+}
+
+/**
  * `tags` : JSON `{ fearless, nombre_de_games? }` — pas de migration SQLite.
  * @param {string} fearlessStored `oui` | `non` | `nimporte`
  * @param {number | null} nombreDeGamesOpt
@@ -145,6 +180,13 @@ export const rechercheScrim = {
         .setName('multi_opgg')
         .setDescription('Lien HTTPS OP.GG uniquement')
         .setRequired(false),
+    )
+    .addStringOption((opt) =>
+      opt
+        .setName('structure')
+        .setDescription('Sélectionnez votre structure partenaire ScrimRéseau')
+        .setRequired(false)
+        .setAutocomplete(true),
     )
     .addIntegerOption((opt) =>
       opt
@@ -324,6 +366,32 @@ export const rechercheScrim = {
     }
     const multiOpggUrl = multiOpggRes.value;
 
+    // ── Structure partenaire (optionnelle) ──────────────────────────────
+    const structureRaw = interaction.options.getString('structure');
+    /** @type {string | null} */
+    let structureGuildId = null;
+    /** @type {string | null} */
+    let structureNameSnapshot = null;
+    /** @type {string | null} */
+    let structureInviteUrlSnapshot = null;
+
+    if (structureRaw) {
+      const partnerRow = ctx.stmts.getPartnerGuildByGuildId.get(structureRaw.trim());
+      if (!partnerRow) {
+        await interactReply(interaction, {
+          content: `❌ La structure sélectionnée n'est pas reconnue comme partenaire ScrimRéseau. Utilise l'autocomplétion pour choisir une structure valide.`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+      structureGuildId = structureRaw.trim();
+      const structureGuild = interaction.client.guilds.cache.get(structureGuildId);
+      structureNameSnapshot = structureGuild?.name ?? structureGuildId;
+      // Snapshot du lien Discord au moment de la création (stable même si retiré ensuite)
+      const linkRow = ctx.stmts.getStructureDiscordLink.get(structureGuildId);
+      structureInviteUrlSnapshot = (linkRow?.discord_invite_url ?? null) || null;
+    }
+
     const activeLimit = checkActiveScrimLimit(ctx.stmts, interaction.user.id);
     if (!activeLimit.ok) {
       await interactReply(interaction, {
@@ -450,6 +518,9 @@ export const rechercheScrim = {
           scheduled_at_end: scheduledAtEndIso,
           tags: tagsForInsert,
           multi_opgg_url: multiOpggUrl,
+          structure_guild_id: structureGuildId,
+          structure_name_snapshot: structureNameSnapshot,
+          structure_invite_url_snapshot: structureInviteUrlSnapshot,
           created_at: now,
           status: 'active',
         });
@@ -602,8 +673,9 @@ ${tipInviteUrl}
 
   /**
    * @param {import('discord.js').AutocompleteInteraction} interaction
+   * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']> }} [ctx]
    */
-  async autocomplete(interaction) {
+  async autocomplete(interaction, ctx) {
     let choices = [];
     try {
       const focused = interaction.options.getFocused(true);
@@ -625,6 +697,12 @@ ${tipInviteUrl}
         choices = buildRankAutocompleteChoices(gameKeyResolved, focused.value);
       } else if (focused.name === 'format') {
         choices = buildFormatAutocompleteChoices(gameKeyResolved, focused.value);
+      } else if (focused.name === 'structure') {
+        choices = buildStructureAutocompleteChoices(
+          interaction.client,
+          ctx?.stmts ?? null,
+          focused.value,
+        );
       } else {
         choices = [];
       }

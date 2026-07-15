@@ -282,6 +282,8 @@ function getFearlessText(fearless) {
  *   scheduledAtEndIso?: string | null,
  *   nombreDeGames?: number | null,
  *   fearless?: string | null,
+ *   structureNameSnapshot?: string | null,
+ *   structureInviteUrl?: string | null,
  * }} ScrimEmbedPayload
  */
 
@@ -530,6 +532,21 @@ function buildScrimEmbedDescription(payload, options = {}) {
   /** @type {string[]} */
   const lines = [line1, line2, line3, contactLine];
 
+  // ── Ligne 5 (optionnelle) : structure (avec lien cliquable si disponible) ──
+  if (payload.structureNameSnapshot) {
+    const name = payload.structureNameSnapshot;
+    const url = payload.structureInviteUrl ?? null;
+    let structurePart;
+    if (url) {
+      // Échappement des caractères markdown dans le nom pour éviter l'injection de liens
+      const safeName = name.replace(/[\[\]()]/g, '\\$&');
+      structurePart = `[${safeName}](${url})`;
+    } else {
+      structurePart = name;
+    }
+    lines.push(`\uD83C\uDF10 Structure : ${structurePart}`);
+  }
+
   if (options.includeContactHints) {
     lines.push(...SCRIM_CONTACT_BUTTON_HINT_LINES);
   }
@@ -651,5 +668,13 @@ export function scrimDbRowToEmbedPayload(row) {
     scheduledAtEndIso: scheduledAtEnd,
     nombreDeGames: parseNombreDeGamesFromTags(tagsRaw),
     fearless: parseFearlessFromTags(tagsRaw),
+    structureNameSnapshot:
+      typeof row.structure_name_snapshot === 'string' && row.structure_name_snapshot.trim()
+        ? row.structure_name_snapshot.trim()
+        : null,
+    structureInviteUrl:
+      typeof row.structure_invite_url_snapshot === 'string' && row.structure_invite_url_snapshot.trim()
+        ? row.structure_invite_url_snapshot.trim()
+        : null,
   };
 }

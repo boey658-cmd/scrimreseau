@@ -406,6 +406,53 @@ function migrateScrimPostsScheduledAtEnd(db) {
 }
 
 /**
+ * Structure partenaire : guild_id + snapshot du nom + snapshot du lien d'invitation.
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateScrimPostsStructure(db) {
+  if (!tableHasColumn(db, 'scrim_posts', 'structure_guild_id')) {
+    db.exec(`ALTER TABLE scrim_posts ADD COLUMN structure_guild_id TEXT`);
+    logger.info('Migration SQLite', {
+      change: 'scrim_posts.structure_guild_id',
+      action: 'ADD_COLUMN',
+    });
+  }
+  if (!tableHasColumn(db, 'scrim_posts', 'structure_name_snapshot')) {
+    db.exec(`ALTER TABLE scrim_posts ADD COLUMN structure_name_snapshot TEXT`);
+    logger.info('Migration SQLite', {
+      change: 'scrim_posts.structure_name_snapshot',
+      action: 'ADD_COLUMN',
+    });
+  }
+  if (!tableHasColumn(db, 'scrim_posts', 'structure_invite_url_snapshot')) {
+    db.exec(`ALTER TABLE scrim_posts ADD COLUMN structure_invite_url_snapshot TEXT`);
+    logger.info('Migration SQLite', {
+      change: 'scrim_posts.structure_invite_url_snapshot',
+      action: 'ADD_COLUMN',
+    });
+  }
+}
+
+/**
+ * Liens d'invitation Discord configurés par les structures partenaires (idempotent).
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateStructureDiscordLinks(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS structure_discord_links (
+      guild_id    TEXT PRIMARY KEY NOT NULL,
+      discord_invite_url TEXT NOT NULL,
+      updated_at  TEXT NOT NULL,
+      updated_by  TEXT NOT NULL
+    )
+  `);
+  logger.info('Migration SQLite', {
+    change: 'structure_discord_links',
+    action: 'CREATE_TABLE_IF_NOT_EXISTS',
+  });
+}
+
+/**
  * Repost automatique : ancre temporelle + compteur (idempotent).
  * @param {import('better-sqlite3').Database} db
  */
@@ -559,6 +606,8 @@ export function getDb() {
   migrateUniqueActiveScrimPublicIdIndex(dbInstance);
   migrateScrimPostsScheduledAtEnd(dbInstance);
   migrateScrimPostsRepost(dbInstance);
+  migrateScrimPostsStructure(dbInstance);
+  migrateStructureDiscordLinks(dbInstance);
   migratePlayerSearchInit(dbInstance);
   logger.info(
     'SQLite initialisée : mode WAL, busy_timeout=5000 ms. Une seule instance writer attendue sur ce fichier.',
@@ -713,11 +762,13 @@ export function prepareStatements(db) {
         scrim_public_id, author_user_id, origin_guild_id, source_guild_id,
         game_key, rank_key, format_key, contact_user_id,
         scheduled_date, scheduled_time, scheduled_at, scheduled_at_end, tags, multi_opgg_url,
+        structure_guild_id, structure_name_snapshot, structure_invite_url_snapshot,
         created_at, status, closed_at, closed_reason
       ) VALUES (
         @scrim_public_id, @author_user_id, @origin_guild_id, @source_guild_id,
         @game_key, @rank_key, @format_key, @contact_user_id,
         @scheduled_date, @scheduled_time, @scheduled_at, @scheduled_at_end, @tags, @multi_opgg_url,
+        @structure_guild_id, @structure_name_snapshot, @structure_invite_url_snapshot,
         @created_at, @status, NULL, NULL
       )
     `),
@@ -970,6 +1021,27 @@ export function prepareStatements(db) {
     /** Dashboard réseau : liste de tous les guild_id distincts ayant un salon scrim. */
     listDistinctPartnerGuildIds: db.prepare(`
       SELECT DISTINCT guild_id FROM guild_game_channels ORDER BY guild_id
+    `),
+    /** Structure partenaire : vérifie qu'un guild_id a bien un salon scrim configuré. */
+    getPartnerGuildByGuildId: db.prepare(`
+      SELECT guild_id FROM guild_game_channels WHERE guild_id = ? LIMIT 1
+    `),
+    /** Lien d'invitation Discord configuré pour une structure partenaire. */
+    getStructureDiscordLink: db.prepare(`
+      SELECT discord_invite_url FROM structure_discord_links WHERE guild_id = ?
+    `),
+    /** Enregistre ou met à jour le lien d'invitation Discord d'une structure partenaire. */
+    upsertStructureDiscordLink: db.prepare(`
+      INSERT INTO structure_discord_links (guild_id, discord_invite_url, updated_at, updated_by)
+      VALUES (@guild_id, @discord_invite_url, @updated_at, @updated_by)
+      ON CONFLICT(guild_id) DO UPDATE SET
+        discord_invite_url = excluded.discord_invite_url,
+        updated_at = excluded.updated_at,
+        updated_by = excluded.updated_by
+    `),
+    /** Supprime le lien d'invitation Discord d'une structure partenaire. */
+    deleteStructureDiscordLink: db.prepare(`
+      DELETE FROM structure_discord_links WHERE guild_id = ?
     `),
 
     /** Dashboard réseau : tous les dashboards configurés. */
