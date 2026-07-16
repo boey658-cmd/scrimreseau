@@ -34,11 +34,36 @@ export function getGuildScrimMessageLifecyclePolicy(stmts, guildId) {
 }
 
 /**
+ * Marque un message comme supprimé côté Discord dans scrim_post_messages.
+ * Idempotent (la colonne n'est mise à jour que si elle est encore NULL).
+ *
+ * @param {ReturnType<import('../database/db.js')['prepareStatements']>} stmts
+ * @param {{ guild_id: string, channel_id: string, message_id: string }} messageRow
+ */
+function markMessageDiscordDeleted(stmts, messageRow) {
+  try {
+    stmts.markScrimPostMessageDiscordDeleted.run({
+      discord_deleted_at: new Date().toISOString(),
+      guild_id: messageRow.guild_id,
+      channel_id: messageRow.channel_id,
+      message_id: messageRow.message_id,
+    });
+  } catch (dbErr) {
+    logger.warn('scrimMessagePolicy: impossible de marquer message supprimé en DB', {
+      guild_id: messageRow.guild_id,
+      message_id: messageRow.message_id,
+      message: dbErr instanceof Error ? dbErr.message : String(dbErr),
+    });
+  }
+}
+
+/**
  * Tente de supprimer un message scrim via la file Discord.
  * Sécurité absolue : vérifie que les IDs du message Discord correspondent exactement
  * à ceux stockés en base avant toute suppression.
  *
  * @param {{
+ *   stmts: ReturnType<import('../database/db.js')['prepareStatements']>,
  *   guild: import('discord.js').Guild,
  *   channel: import('discord.js').TextBasedChannel,
  *   message: import('discord.js').Message,
@@ -48,7 +73,7 @@ export function getGuildScrimMessageLifecyclePolicy(stmts, guildId) {
  * }} p
  * @returns {Promise<boolean>} true si supprimé (ou déjà absent), false si impossible
  */
-async function tryDeleteScrimMessage({ guild, channel, message, messageRow, scrimPostDbId, eventType }) {
+async function tryDeleteScrimMessage({ stmts, guild, channel, message, messageRow, scrimPostDbId, eventType }) {
   // Vérification de sécurité absolue : correspondance stricte des IDs
   if (
     message.guildId !== messageRow.guild_id
@@ -115,6 +140,7 @@ async function tryDeleteScrimMessage({ guild, channel, message, messageRow, scri
       },
       'low',
     );
+    markMessageDiscordDeleted(stmts, messageRow);
     logger.info('scrimMessagePolicy: message supprimé', {
       scrim_post_db_id: scrimPostDbId,
       guild_id: messageRow.guild_id,
@@ -129,9 +155,10 @@ async function tryDeleteScrimMessage({ guild, channel, message, messageRow, scri
         ? /** @type {{ code?: unknown }} */ (err).code
         : undefined;
 
-    // Message déjà supprimé : non bloquant, considéré comme succès
+    // Message déjà supprimé : non bloquant, marquage DB pour éviter les 10008 en cascade
     if (code === DISCORD_UNKNOWN_MESSAGE) {
-      logger.info('scrimMessagePolicy: message déjà supprimé — ignoré', {
+      markMessageDiscordDeleted(stmts, messageRow);
+      logger.info('scrimMessagePolicy: message déjà supprimé (10008) — marqué en DB', {
         scrim_post_db_id: scrimPostDbId,
         guild_id: messageRow.guild_id,
         message_id: messageRow.message_id,
@@ -202,6 +229,7 @@ export async function syncInactiveScrimMessageByPolicy(p) {
 
   if (policy === LIFECYCLE_POLICY_DELETE) {
     const deleted = await tryDeleteScrimMessage({
+      stmts,
       guild,
       channel,
       message,

@@ -121,6 +121,28 @@ export async function runDiscordEditRetryPass(client, stmts) {
     const row = rows[i];
     const id = Number(row.id);
 
+    // Si le message a déjà été supprimé par la policy, résoudre proprement sans log rouge.
+    try {
+      const alreadyDeleted = stmts.isScrimPostMessageDiscordDeleted.get(
+        row.guild_id,
+        row.channel_id,
+        row.message_id,
+      );
+      if (alreadyDeleted) {
+        const now = new Date().toISOString();
+        stmts.markDiscordEditRetryResolved.run({ id, resolved_at: now, updated_at: now });
+        success += 1;
+        logger.info('discordEditRetryJob: message déjà supprimé par policy — retry résolu', {
+          retry_id: id,
+          guild_id: row.guild_id,
+          message_id: row.message_id,
+        });
+        continue;
+      }
+    } catch {
+      /* fail-open : continuer le traitement normal si la vérification DB échoue */
+    }
+
     let guild;
     try {
       guild = await runTransientDiscord(
@@ -181,6 +203,33 @@ export async function runDiscordEditRetryPass(client, stmts) {
         },
       );
     } catch (err) {
+      // 10008 = message déjà supprimé (ex. : policy de suppression automatique).
+      // Résoudre le retry proprement sans log rouge, marquer le message en DB.
+      const errCode =
+        typeof err === 'object' && err !== null && 'code' in err
+          ? /** @type {{ code?: unknown }} */ (err).code
+          : undefined;
+      if (errCode === 10008) {
+        const now = new Date().toISOString();
+        try {
+          stmts.markScrimPostMessageDiscordDeleted.run({
+            discord_deleted_at: now,
+            guild_id: row.guild_id,
+            channel_id: row.channel_id,
+            message_id: row.message_id,
+          });
+        } catch {
+          /* non bloquant */
+        }
+        stmts.markDiscordEditRetryResolved.run({ id, resolved_at: now, updated_at: now });
+        success += 1;
+        logger.info('discordEditRetryJob: message introuvable (10008) — supprimé par policy, retry résolu', {
+          retry_id: id,
+          guild_id: row.guild_id,
+          message_id: row.message_id,
+        });
+        continue;
+      }
       const out = handlePrefetchFailure(stmts, row, id, err, 'message');
       if (out === 'abandoned') abandoned += 1;
       continue;

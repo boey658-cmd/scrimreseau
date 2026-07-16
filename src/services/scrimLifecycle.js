@@ -80,6 +80,27 @@ export async function markScrimPostMessagesSuperseded(
   for (let i = 0; i < messages.length; i += 1) {
     const m = messages[i];
     if (i > 0) await sleep(SCRIM_EDIT_DELAY_MS);
+
+    // Si le message a déjà été supprimé par la policy de suppression automatique,
+    // inutile de le prefetcher — considérer comme traité, log info uniquement.
+    try {
+      const alreadyDeleted = stmts.isScrimPostMessageDiscordDeleted.get(
+        m.guild_id,
+        m.channel_id,
+        m.message_id,
+      );
+      if (alreadyDeleted) {
+        logger.info('markScrimPostMessagesSuperseded: message déjà supprimé par policy — ignoré', {
+          scrim_post_db_id: scrimPostDbId,
+          guild_id: m.guild_id,
+          message_id: m.message_id,
+        });
+        continue;
+      }
+    } catch {
+      /* fail-open : continuer le traitement normal si la vérification DB échoue */
+    }
+
     try {
       const guild = await runTransientDiscord(
         () => client.guilds.fetch(m.guild_id),
@@ -193,6 +214,27 @@ export async function updateScrimPostMessagesEmbeds(client, stmts, dbRow) {
   for (let i = 0; i < messages.length; i += 1) {
     const m = messages[i];
     if (i > 0) await sleep(SCRIM_EDIT_DELAY_MS);
+
+    // Si le message a déjà été supprimé par la policy de suppression automatique,
+    // inutile de le prefetcher — considérer comme traité, log info uniquement.
+    try {
+      const alreadyDeleted = stmts.isScrimPostMessageDiscordDeleted.get(
+        m.guild_id,
+        m.channel_id,
+        m.message_id,
+      );
+      if (alreadyDeleted) {
+        logger.info('updateScrimPostMessagesEmbeds: message déjà supprimé par policy — ignoré', {
+          scrim_post_db_id: dbRow.id,
+          guild_id: m.guild_id,
+          message_id: m.message_id,
+        });
+        continue;
+      }
+    } catch {
+      /* fail-open : continuer le traitement normal si la vérification DB échoue */
+    }
+
     try {
       const guild = await runTransientDiscord(
         () => client.guilds.fetch(m.guild_id),

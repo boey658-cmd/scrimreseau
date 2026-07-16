@@ -1,10 +1,14 @@
 import { ActionRowBuilder, EmbedBuilder } from 'discord.js';
+import { RESTJSONErrorCodes } from 'discord-api-types/v10';
 import { logger } from '../utils/logger.js';
 import {
   classifyDiscordEditError,
   computeNextRetryDelayMs,
 } from './discordRetryPolicy.js';
 import { enqueueDiscordTask } from './discordTaskQueue.js';
+
+/** Code Discord API : message inconnu (déjà supprimé). */
+const DISCORD_UNKNOWN_MESSAGE = RESTJSONErrorCodes.UnknownMessage;
 
 /**
  * Sérialise une édition scrim pour la file SQLite (retry mono-instance).
@@ -109,6 +113,30 @@ export async function safeScrimEmbedMessageEdit(p) {
     return 'ok';
   } catch (err) {
     const c = classifyDiscordEditError(err);
+
+    // 10008 = message déjà supprimé (suppression automatique par policy).
+    // Traité comme un succès idempotent : marquage DB + log info, pas de retry.
+    if (c.kind === 'terminal' && c.code === String(DISCORD_UNKNOWN_MESSAGE)) {
+      try {
+        stmts.markScrimPostMessageDiscordDeleted.run({
+          discord_deleted_at: new Date().toISOString(),
+          guild_id: guildId,
+          channel_id: channelId,
+          message_id: messageId,
+        });
+      } catch {
+        /* non bloquant */
+      }
+      logger.info('safeScrimEmbedMessageEdit: message déjà supprimé (10008) — édition ignorée', {
+        scrim_post_db_id: scrimPostDbId,
+        guild_id: guildId,
+        channel_id: channelId,
+        message_id: messageId,
+        target_status: targetStatus,
+      });
+      return 'ok';
+    }
+
     if (c.kind === 'terminal') {
       logger.warn('safeScrimEmbedMessageEdit: échec terminal (pas de retry)', {
         scrim_post_db_id: scrimPostDbId,

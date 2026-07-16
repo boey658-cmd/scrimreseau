@@ -406,6 +406,22 @@ function migrateScrimPostsScheduledAtEnd(db) {
 }
 
 /**
+ * Marquage Discord-supprimé sur scrim_post_messages.
+ * Permet aux workflows suivants de savoir qu'un message a déjà été supprimé
+ * par la policy de suppression automatique, et d'éviter les 10008 inutiles.
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateScrimPostMessagesDiscordDeleted(db) {
+  if (!tableHasColumn(db, 'scrim_post_messages', 'discord_deleted_at')) {
+    db.exec(`ALTER TABLE scrim_post_messages ADD COLUMN discord_deleted_at TEXT`);
+    logger.info('Migration SQLite', {
+      change: 'scrim_post_messages.discord_deleted_at',
+      action: 'ADD_COLUMN',
+    });
+  }
+}
+
+/**
  * Structure partenaire : guild_id + snapshot du nom + snapshot du lien d'invitation.
  * @param {import('better-sqlite3').Database} db
  */
@@ -606,6 +622,7 @@ export function getDb() {
   migrateUniqueActiveScrimPublicIdIndex(dbInstance);
   migrateScrimPostsScheduledAtEnd(dbInstance);
   migrateScrimPostsRepost(dbInstance);
+  migrateScrimPostMessagesDiscordDeleted(dbInstance);
   migrateScrimPostsStructure(dbInstance);
   migrateStructureDiscordLinks(dbInstance);
   migratePlayerSearchInit(dbInstance);
@@ -864,6 +881,26 @@ export function prepareStatements(db) {
     `),
     deleteScrimPostMessagesForPost: db.prepare(`
       DELETE FROM scrim_post_messages WHERE scrim_post_db_id = ?
+    `),
+    /**
+     * Marque un message scrim comme supprimé côté Discord.
+     * Utilisé par la policy de suppression pour éviter les 10008 en cascade.
+     */
+    markScrimPostMessageDiscordDeleted: db.prepare(`
+      UPDATE scrim_post_messages
+      SET discord_deleted_at = @discord_deleted_at
+      WHERE guild_id = @guild_id AND channel_id = @channel_id AND message_id = @message_id
+        AND discord_deleted_at IS NULL
+    `),
+    /**
+     * Vérifie si un message scrim est déjà marqué supprimé côté Discord.
+     * Retourne une ligne (truthy) ou undefined.
+     */
+    isScrimPostMessageDiscordDeleted: db.prepare(`
+      SELECT 1 FROM scrim_post_messages
+      WHERE guild_id = ? AND channel_id = ? AND message_id = ?
+        AND discord_deleted_at IS NOT NULL
+      LIMIT 1
     `),
     deleteScrimPostById: db.prepare(`
       DELETE FROM scrim_posts WHERE id = ?
