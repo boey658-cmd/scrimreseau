@@ -6,7 +6,7 @@ import { listeScrims } from './listeScrims.js';
 import { mesDemandes } from './mesDemandes.js';
 import { rechercheScrim } from './rechercheScrim.js';
 import { spammer } from './spammer.js';
-import { scrimConfig } from './scrimConfig.js';
+import { scrimConfigurer } from './scrimConfigurer.js';
 import { scrimDev } from './scrimDev.js';
 import { structureLien } from './structureLien.js';
 import { scrimModeration } from './scrimModeration.js';
@@ -23,7 +23,7 @@ import { scrimTrouve } from './scrimTrouve.js';
 
 /** Commandes déployées partout (global ou guildes), sans commandes owner/dev. */
 export const commandListWithoutDev = [
-  scrimConfig,
+  scrimConfigurer,
   scrimModeration,
   listeScrims,
   help,

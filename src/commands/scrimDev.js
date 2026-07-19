@@ -2,6 +2,7 @@ import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { interactReply } from '../utils/interactionDiscord.js';
 import { executeBlacklistCore } from './blacklist.js';
 import { executeScrimDevGuildAccessCore } from './scrimDevGuildAccess.js';
+import { executeScrimDevGuildListCore } from './scrimDevGuildList.js';
 import { executeScrimDevHealthCore } from './scrimDevHealth.js';
 import { executeScrimDevReceptionListCore } from './scrimDevReceptionList.js';
 import { executeUnblacklistCore } from './unblacklist.js';
@@ -22,6 +23,13 @@ const data = new SlashCommandBuilder()
       .setName('reception-list')
       .setDescription(
         'Liste les serveurs ayant configuré un salon de réception scrim',
+      ),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName('serveurs')
+      .setDescription(
+        'Affiche tous les serveurs sur lesquels le bot est présent (dev uniquement)',
       ),
   )
   .addSubcommand((sub) =>
@@ -130,6 +138,9 @@ export const scrimDev = {
     }
     if (sub === 'reception-list') {
       return executeScrimDevReceptionListCore(interaction, ctx);
+    }
+    if (sub === 'serveurs') {
+      return executeScrimDevGuildListCore(interaction);
     }
     if (sub === 'blacklist') {
       const action = interaction.options.getString('action', true);

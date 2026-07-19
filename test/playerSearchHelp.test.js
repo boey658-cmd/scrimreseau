@@ -22,11 +22,14 @@ test('help scrim — renommé help-scrim, contenu inchangé', () => {
   assert.doesNotMatch(source, /recherche-joueur/);
 });
 
-test('helpadmin scrim — renommé helpadmin-scrim', () => {
+test('helpadmin scrim — renommé helpadmin-scrim, référence scrim-configurer', () => {
   const source = readSrc('src/commands/helpAdmin.js');
   assert.match(source, /\.setName\('helpadmin-scrim'\)/);
   assert.doesNotMatch(source, /\.setName\('helpadmin'\)/);
-  assert.match(source, /\/scrim-config/);
+  // La nouvelle aide référence /scrim-configurer (pas les sous-commandes)
+  assert.match(source, /\/scrim-configurer/);
+  assert.doesNotMatch(source, /channel → set/);
+  assert.doesNotMatch(source, /command-channel/);
   assert.doesNotMatch(source, /joueur-config/);
 });
 
@@ -85,6 +88,9 @@ test('commandListWithoutDev — noms uniques, sans commandes joueur désactivée
   assert.ok(!names.includes('joueur-config'));
   assert.ok(!names.includes('mes-demandes-joueur'));
   assert.ok(!names.includes('joueur-trouve'));
+  // /scrim-config remplacé par /scrim-configurer
+  assert.ok(!names.includes('scrim-config'), `scrim-config ne doit plus être dans commandListWithoutDev`);
+  assert.ok(names.includes('scrim-configurer'), `scrim-configurer doit être dans commandListWithoutDev`);
   // Commandes ScrimRéseau actives toujours présentes
   assert.ok(names.includes('recherche-scrim'));
   assert.ok(names.includes('scrim-trouve'));

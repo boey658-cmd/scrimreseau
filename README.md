@@ -1,4 +1,4 @@
-# ScrimRéseau — Bot Discord
+﻿# ScrimRéseau — Bot Discord
 
 Bot Discord **réseau de scrims** : une annonce peut être diffusée sur tous les serveurs ayant configuré un salon pour le jeu concerné. Stack : **Node.js**, **discord.js v14**, **better-sqlite3** (requêtes préparées uniquement).
 
@@ -28,7 +28,7 @@ Copier `.env.example` vers `.env` et renseigner :
 npm run deploy-commands
 ```
 
-Sans `GUILD_IDS` ni `GUILD_ID`, les commandes **publiques** (`/scrim-config`, `/scrim-moderation`, `/recherche-scrim`, etc.) sont enregistrées **globalement** (propagation pouvant prendre jusqu’environ une heure).  
+Sans `GUILD_IDS` ni `GUILD_ID`, les commandes **publiques** (`/scrim-configurer`, `/scrim-moderation`, `/recherche-scrim`, etc.) sont enregistrées **globalement** (propagation pouvant prendre jusqu’environ une heure).  
 Si `DEV_GUILD_ID` est défini, `/scrim-dev` est en plus enregistrée **uniquement** sur cette guilde (sans être ajoutée au global).
 
 **Nettoyage manuel (désactivé par défaut)** — en cas de doublons (commandes globales + guilde visibles partout) :
@@ -78,9 +78,9 @@ L’embed **recherche scrim** (diffusion) met le jeu en avant avec `getGameEmoji
 
 | Commande | Qui | Description |
 |----------|-----|-------------|
-| `/scrim-config` | **Administrateur** | Groupes : `channel` (`set` / `remove`), `command-channel` (`set` / `reset`), `permissions` (`set` / `remove`) ; sous-commande `view`. |
+| `/scrim-configurer` | **Administrateur** | Panneau interactif : salons (annonces + commandes), permissions, messages inactifs, réinitialisation avec confirmation. |
 | `/scrim-moderation` | **Administrateur** | Sous-commande `user` : `action` block ou unblock + utilisateur. |
-| `/scrim-dev` | **Dev** (`BOT_DEV_ID`) | Sous-commande `blacklist` ; enregistrée **uniquement** sur la guilde `DEV_GUILD_ID` (déploiement via script). |
+| `/scrim-dev` | **Dev** (`BOT_DEV_ID`) | Sous-commandes : `health`, `reception-list`, `serveurs`, `blacklist`, `guild-access` ; enregistrée **uniquement** sur la guilde `DEV_GUILD_ID` (déploiement via script). |
 | `/recherche-scrim` | Selon la config du serveur | Diffuse une recherche (autocomplete rang + format selon le jeu). |
 | `/mes-demandes` | Tout utilisateur | Liste tes recherches actives (ID public, date/heure, rang, format). |
 | `/scrim-trouve` | Auteur de l’annonce | Marque une recherche LoL comme terminée (identifiant public). |

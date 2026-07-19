@@ -1,6 +1,8 @@
 node_modules/
 .env
 *.db
+*.db-wal
+*.db-shm
 *.db-journal
 *.log
 .DS_Store
