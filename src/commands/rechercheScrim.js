@@ -537,6 +537,7 @@ export const rechercheScrim = {
           rank_key: rankRes.value,
           format_key: formatRes.value,
           contact_user_id: contactRes.userId,
+          contact_display_name: contact.username ?? null,
           scheduled_date: dateRes.value,
           scheduled_time: timeRes.value,
           scheduled_at: scheduledAtIso,
@@ -595,11 +596,8 @@ export const rechercheScrim = {
       return;
     }
 
-    /** Même chemin que fermeture / expiration : payload depuis `tags` + colonnes scrim. */
-    const embedPayload = {
-      ...scrimDbRowToEmbedPayload(rowAfterInsert),
-      contactDisplayName: contact.username ?? null,
-    };
+    /** Même chemin que fermeture / expiration : payload depuis `tags` + colonnes scrim (dont contact_display_name). */
+    const embedPayload = scrimDbRowToEmbedPayload(rowAfterInsert);
 
     if (isPersistentBroadcastEnabled()) {
       // PARCOURS PERSISTANT

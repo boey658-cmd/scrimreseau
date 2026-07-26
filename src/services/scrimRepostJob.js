@@ -86,20 +86,9 @@ async function repostSingleActiveScrim(client, db, stmts, scrimPostDbId) {
     return { ok: false, successCount: 0, reason: 'no_channels' };
   }
 
-  let contactDisplayName = null;
-  try {
-    const contactUser = await client.users
-      .fetch(/** @type {string} */ (row.contact_user_id))
-      .catch(() => null);
-    contactDisplayName = contactUser?.username ?? null;
-  } catch {
-    /* best-effort */
-  }
-
-  const embedPayload = {
-    ...scrimDbRowToEmbedPayload(row),
-    contactDisplayName,
-  };
+  // contact_display_name est persisté en DB au moment de la création du scrim.
+  // Il est lu directement via scrimDbRowToEmbedPayload → stable, indépendant du serveur destinataire.
+  const embedPayload = scrimDbRowToEmbedPayload(row);
 
   let successCount = 0;
   try {

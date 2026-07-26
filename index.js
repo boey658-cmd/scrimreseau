@@ -8,6 +8,9 @@ import { stopPlayerSearchExpirationJob } from './src/jobs/playerSearchExpiration
 import { stopScrimExpirationJob } from './src/services/scrimExpirationJob.js';
 import { stopScrimRepostJob } from './src/services/scrimRepostJob.js';
 import { stopDashboardRefreshJob } from './src/services/networkDashboard.js';
+import { stopScrimBroadcastDeliveryJob } from './src/services/scrimBroadcastDeliveryJob.js';
+import { isPersistentBroadcastEnabled } from './src/utils/persistentBroadcastFlag.js';
+import { createGracefulShutdown } from './src/services/shutdownOrchestrator.js';
 import { logger } from './src/utils/logger.js';
 import { recordUncaughtException, recordUnhandledRejection } from './src/utils/processHealth.js';
 
@@ -21,7 +24,7 @@ function scheduleExitAfterUncaughtException() {
   }, 250);
 }
 
-/** Politique : journaliser chaque rejet non géré (visibilité prod). Pas de sortie immédiate — évite d’arrêter le bot sur une promesse oubliée isolée ; préférer corriger la source une fois identifiée via les logs. */
+/** Politique : journaliser chaque rejet non géré (visibilité prod). Pas de sortie immédiate — évite d'arrêter le bot sur une promesse oubliée isolée ; préférer corriger la source une fois identifiée via les logs. */
 process.on('unhandledRejection', (reason) => {
   try {
     recordUnhandledRejection(reason);
@@ -48,198 +51,67 @@ process.on('uncaughtException', (err) => {
   scheduleExitAfterUncaughtException();
 });
 
-/** Évite deux shutdowns concurrents (double SIGINT / SIGTERM + autre). */
-let isShuttingDown = false;
 /** Référence au client Discord après démarrage réussi. */
 let clientRef = /** @type {import('discord.js').Client | null} */ (null);
 
-async function gracefulShutdown(signal) {
-  if (isShuttingDown) return;
-  isShuttingDown = true;
-
-  try {
-    logger.health('Arrêt propre — début', { signal, phase: 'shutdown_start' });
-  } catch {
-    /* ignore */
-  }
-
-  try {
-    logger.info('Arrêt propre — arrêt du job dashboard réseau', {
+/**
+ * Orchestrateur unique de graceful shutdown.
+ * Arrêt dans l'ordre : jobs → (worker persistant) → file Discord → client Discord → SQLite.
+ * Le garde-fou interne `shutdownPromise` garantit qu'une seule séquence s'exécute
+ * même si SIGINT et SIGTERM arrivent simultanément ou deux SIGINT successifs.
+ */
+const gracefulShutdown = createGracefulShutdown({
+  steps: [
+    {
+      // En premier : positionner jobStarted = false + clearTimeout synchroniquement
+      // avant tout autre await, pour empêcher immédiatement toute nouvelle réclamation de delivery.
+      name: 'arrêt du worker diffusion persistante',
+      phase: 'persistent_broadcast_job_stop',
+      stop: async () => {
+        if (isPersistentBroadcastEnabled()) {
+          await stopScrimBroadcastDeliveryJob();
+        }
+      },
+    },
+    {
+      name: 'arrêt du job dashboard réseau',
       phase: 'dashboard_refresh_job_stop',
-    });
-    stopDashboardRefreshJob();
-  } catch (err) {
-    try {
-      logger.error('Arrêt propre — échec stopDashboardRefreshJob', {
-        phase: 'dashboard_refresh_job_stop_error',
-        message: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
-      });
-    } catch {
-      /* ignore */
-    }
-  }
-
-  try {
-    logger.info('Arrêt propre — arrêt du job rapport dev quotidien', {
+      stop: stopDashboardRefreshJob,
+    },
+    {
+      name: 'arrêt du job rapport dev quotidien',
       phase: 'daily_dev_report_job_stop',
-    });
-    stopDailyDevReportJob();
-  } catch (err) {
-    try {
-      logger.error('Arrêt propre — échec stopDailyDevReportJob', {
-        phase: 'daily_dev_report_job_stop_error',
-        message: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
-      });
-    } catch {
-      /* ignore */
-    }
-  }
-
-  try {
-    logger.info('Arrêt propre — arrêt du job retry éditions messages scrim', {
+      stop: stopDailyDevReportJob,
+    },
+    {
+      name: 'arrêt du job retry éditions messages scrim',
       phase: 'edit_retry_job_stop',
-    });
-    await stopDiscordEditRetryJob();
-  } catch (err) {
-    try {
-      logger.error('Arrêt propre — échec stopDiscordEditRetryJob', {
-        phase: 'edit_retry_job_stop_error',
-        message: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
-      });
-    } catch {
-      /* ignore */
-    }
-  }
-
-  try {
-    logger.info('Arrêt propre — arrêt du job repost scrims', {
+      stop: stopDiscordEditRetryJob,
+    },
+    {
+      name: 'arrêt du job repost scrims',
       phase: 'repost_job_stop',
-    });
-    await stopScrimRepostJob();
-  } catch (err) {
-    try {
-      logger.error('Arrêt propre — échec stopScrimRepostJob', {
-        phase: 'repost_job_stop_error',
-        message: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
-      });
-    } catch {
-      /* ignore */
-    }
-  }
-
-  try {
-    logger.info('Arrêt propre — arrêt du job d’expiration recherches joueur', {
+      stop: stopScrimRepostJob,
+    },
+    {
+      name: "arrêt du job d'expiration recherches joueur",
       phase: 'player_search_expiration_job_stop',
-    });
-    await stopPlayerSearchExpirationJob();
-  } catch (err) {
-    try {
-      logger.error('Arrêt propre — échec stopPlayerSearchExpirationJob', {
-        phase: 'player_search_expiration_job_stop_error',
-        message: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
-      });
-    } catch {
-      /* ignore */
-    }
-  }
-
-  try {
-    logger.info('Arrêt propre — arrêt du job d’expiration scrims', {
+      stop: stopPlayerSearchExpirationJob,
+    },
+    {
+      name: "arrêt du job d'expiration scrims",
       phase: 'expiration_job_stop',
-    });
-    await stopScrimExpirationJob();
-  } catch (err) {
-    try {
-      logger.error('Arrêt propre — échec stopScrimExpirationJob', {
-        phase: 'expiration_job_stop_error',
-        message: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
-      });
-    } catch {
-      /* ignore */
-    }
-  }
-
-  try {
-    logger.info('Arrêt propre — arrêt de la file tâches Discord (scrim)', {
+      stop: stopScrimExpirationJob,
+    },
+    {
+      name: 'arrêt de la file tâches Discord (scrim)',
       phase: 'discord_task_queue_stop',
-    });
-    await stopDiscordTaskQueue();
-  } catch (err) {
-    try {
-      logger.error('Arrêt propre — échec stopDiscordTaskQueue', {
-        phase: 'discord_task_queue_stop_error',
-        message: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
-      });
-    } catch {
-      /* ignore */
-    }
-  }
-
-  try {
-    if (clientRef) {
-      try {
-        logger.info('Arrêt propre — fermeture du client Discord', { phase: 'client_destroy' });
-        await clientRef.destroy();
-        try {
-          logger.info('Arrêt propre — client Discord fermé', { phase: 'client_closed' });
-        } catch {
-          /* ignore */
-        }
-      } catch (err) {
-        try {
-          logger.error('Arrêt propre — échec client.destroy()', {
-            phase: 'client_destroy_error',
-            message: err instanceof Error ? err.message : String(err),
-            stack: err instanceof Error ? err.stack : undefined,
-          });
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-  } catch (err) {
-    try {
-      logger.error('Arrêt propre — erreur enveloppe client', {
-        message: err instanceof Error ? err.message : String(err),
-      });
-    } catch {
-      /* ignore */
-    }
-  }
-
-  try {
-    logger.info('Arrêt propre — fermeture SQLite', { phase: 'db_close_start' });
-    closeDb();
-    try {
-      logger.info('Arrêt propre — SQLite traitée', { phase: 'db_close_done' });
-    } catch {
-      /* ignore */
-    }
-  } catch (err) {
-    try {
-      logger.error('Arrêt propre — erreur enveloppe closeDb', {
-        message: err instanceof Error ? err.message : String(err),
-      });
-    } catch {
-      /* ignore */
-    }
-  }
-
-  try {
-    logger.health('Arrêt propre — fin', { signal, phase: 'shutdown_end' });
-  } catch {
-    /* ignore */
-  }
-
-  process.exit(0);
-}
+      stop: stopDiscordTaskQueue,
+    },
+  ],
+  getClient: () => clientRef,
+  closeDb,
+});
 
 function registerSignalHandlers() {
   process.on('SIGINT', () => {

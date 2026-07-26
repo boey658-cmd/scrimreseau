@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS scrim_posts (
   rank_key TEXT NOT NULL,
   format_key TEXT NOT NULL,
   contact_user_id TEXT NOT NULL,
+  contact_display_name TEXT,
   scheduled_date TEXT NOT NULL,
   scheduled_time TEXT NOT NULL,
   tags TEXT NOT NULL,
@@ -539,6 +540,20 @@ function migrateStructureDiscordLinks(db) {
 }
 
 /**
+ * Snapshot du nom d'affichage Discord du contact (stable, indépendant du serveur destinataire).
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateScrimPostsContactDisplayName(db) {
+  if (!tableHasColumn(db, 'scrim_posts', 'contact_display_name')) {
+    db.exec('ALTER TABLE scrim_posts ADD COLUMN contact_display_name TEXT');
+    logger.info('Migration SQLite', {
+      change: 'scrim_posts.contact_display_name',
+      action: 'ADD_COLUMN',
+    });
+  }
+}
+
+/**
  * Repost automatique : ancre temporelle + compteur (idempotent).
  * @param {import('better-sqlite3').Database} db
  */
@@ -709,6 +724,7 @@ export function getDb() {
   migrateFixDuplicateActivePublicIds(dbInstance);
   migrateUniqueActiveScrimPublicIdIndex(dbInstance);
   migrateScrimPostsScheduledAtEnd(dbInstance);
+  migrateScrimPostsContactDisplayName(dbInstance);
   migrateScrimPostsRepost(dbInstance);
   migrateScrimPostMessagesDiscordDeleted(dbInstance);
   migrateScrimPostsStructure(dbInstance);
@@ -868,14 +884,14 @@ export function prepareStatements(db) {
     insertScrimPostRow: db.prepare(`
       INSERT INTO scrim_posts (
         scrim_public_id, author_user_id, origin_guild_id, source_guild_id,
-        game_key, rank_key, format_key, contact_user_id,
+        game_key, rank_key, format_key, contact_user_id, contact_display_name,
         scheduled_date, scheduled_time, scheduled_at, scheduled_at_end, tags, multi_opgg_url,
         elo_precision,
         structure_guild_id, structure_name_snapshot, structure_invite_url_snapshot,
         created_at, status, closed_at, closed_reason
       ) VALUES (
         @scrim_public_id, @author_user_id, @origin_guild_id, @source_guild_id,
-        @game_key, @rank_key, @format_key, @contact_user_id,
+        @game_key, @rank_key, @format_key, @contact_user_id, @contact_display_name,
         @scheduled_date, @scheduled_time, @scheduled_at, @scheduled_at_end, @tags, @multi_opgg_url,
         @elo_precision,
         @structure_guild_id, @structure_name_snapshot, @structure_invite_url_snapshot,

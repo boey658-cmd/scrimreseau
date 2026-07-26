@@ -56,6 +56,7 @@ function insertFakeScrimPost(db, stmts) {
     rank_key: 'Gold',
     format_key: 'Bo3',
     contact_user_id: 'u1',
+    contact_display_name: null,
     scheduled_date: '01/07/2026',
     scheduled_time: '20h00',
     scheduled_at: new Date(now + 86400000).toISOString(),

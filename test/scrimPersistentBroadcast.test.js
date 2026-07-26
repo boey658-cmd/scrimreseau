@@ -109,7 +109,8 @@ function insertTestScrimPost(stmts, options = {}) {
     game_key: options.gameKey ?? 'lol',
     rank_key: 'Platinum',
     format_key: 'BO1',
-    contact_user_id: options.authorUserId ?? 'user-001',
+    contact_user_id: options.contactUserId ?? options.authorUserId ?? 'user-001',
+    contact_display_name: options.contactDisplayName ?? null,
     scheduled_date: '27/07/2026',
     scheduled_time: '20:00',
     scheduled_at: new Date(Date.now() + 7200000).toISOString(),
@@ -1792,6 +1793,284 @@ describe('scrimPersistentBroadcast', () => {
     it('MUTATION: ancien message "diffusé vers" → test doit échouer', () => {
       const val = t('fr', 'findScrim.successPersistent', { targetCount: 14, id: 42, url: 'u' });
       assert.notStrictEqual(val, `Scrim #42 diffusé vers 14 serveur(s).`, 'Ancien message ne doit plus être présent');
+    });
+  });
+
+  // ── 19. Contact display name — cohérence entre livraisons ────────────────
+
+  describe('contact_display_name — snapshot stable dans toutes les livraisons', () => {
+    /**
+     * Extrait la description de l'embed depuis le payload capturé par channel.send().
+     * @param {{ embeds: import('discord.js').EmbedBuilder[] }} payload
+     */
+    function getEmbedDescription(payload) {
+      return payload?.embeds?.[0]?.data?.description ?? '';
+    }
+
+    it('worker : embed contient @mention • username si contact_display_name défini', async () => {
+      await withTempDb(async (db, stmts) => {
+        const scrimId = insertTestScrimPost(stmts, {
+          contactUserId: 'u-luka',
+          contactDisplayName: 'luka333345',
+        });
+        const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
+        insertTestDelivery(stmts, batchId, scrimId, { guildId: 'guild-001', channelId: 'chan-001' });
+
+        const captures = [];
+        const channel = buildMockChannel('chan-001', captures, { guildId: 'guild-001' });
+        const client = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': channel }) });
+
+        await runScrimBroadcastDeliveryPass(client, db, stmts);
+
+        assert.ok(captures.length >= 1, 'Au moins un envoi attendu');
+        const desc = getEmbedDescription(captures[0]);
+        assert.ok(
+          desc.includes('<@u-luka> • luka333345'),
+          `Embed doit contenir "<@u-luka> • luka333345", obtenu : ${desc}`,
+        );
+      });
+    });
+
+    it('worker : embed sans username si contact_display_name NULL (migration, anciens scrims)', async () => {
+      await withTempDb(async (db, stmts) => {
+        const scrimId = insertTestScrimPost(stmts, {
+          contactUserId: 'u-anon',
+          contactDisplayName: null,
+        });
+        const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
+        insertTestDelivery(stmts, batchId, scrimId, { guildId: 'guild-001', channelId: 'chan-001' });
+
+        const captures = [];
+        const channel = buildMockChannel('chan-001', captures, { guildId: 'guild-001' });
+        const client = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': channel }) });
+
+        await runScrimBroadcastDeliveryPass(client, db, stmts);
+
+        const desc = getEmbedDescription(captures[0]);
+        assert.ok(desc.includes('<@u-anon>'), 'Mention présente');
+        // La ligne de contact ne doit pas contenir de séparateur bullet (• username)
+        // Note: d'autres lignes (date•heure) contiennent "• ", on cible la ligne contact
+        assert.ok(!desc.includes('<@u-anon> • '), 'Ligne contact sans séparateur bullet si username absent');
+      });
+    });
+
+    it('plusieurs destinations — même ligne de contact sur toutes', async () => {
+      await withTempDb(async (db, stmts) => {
+        const scrimId = insertTestScrimPost(stmts, {
+          contactUserId: 'u-kurtish',
+          contactDisplayName: 'kurtishc',
+        });
+        const batchId = insertTestBatch(stmts, scrimId, { status: 'active', targetCount: 3 });
+        insertTestDelivery(stmts, batchId, scrimId, { guildId: 'g1', channelId: 'c1' });
+        insertTestDelivery(stmts, batchId, scrimId, { guildId: 'g2', channelId: 'c2' });
+        insertTestDelivery(stmts, batchId, scrimId, { guildId: 'g3', channelId: 'c3' });
+
+        const caps1 = [], caps2 = [], caps3 = [];
+        const c1 = buildMockChannel('c1', caps1, { guildId: 'g1' });
+        const c2 = buildMockChannel('c2', caps2, { guildId: 'g2' });
+        const c3 = buildMockChannel('c3', caps3, { guildId: 'g3' });
+        const client = buildMockClient({
+          'g1': buildMockGuild('g1', { c1 }),
+          'g2': buildMockGuild('g2', { c2 }),
+          'g3': buildMockGuild('g3', { c3 }),
+        });
+
+        // Exécuter 3 passes (une delivery par passe)
+        await runScrimBroadcastDeliveryPass(client, db, stmts);
+        await runScrimBroadcastDeliveryPass(client, db, stmts);
+        await runScrimBroadcastDeliveryPass(client, db, stmts);
+
+        const expectedLine = '<@u-kurtish> • kurtishc';
+        for (const [idx, caps] of [[1, caps1], [2, caps2], [3, caps3]]) {
+          assert.ok(caps.length === 1, `Destination ${idx} : exactement 1 envoi`);
+          const desc = getEmbedDescription(caps[0]);
+          assert.ok(
+            desc.includes(expectedLine),
+            `Destination ${idx} : embed doit contenir "${expectedLine}", obtenu : ${desc}`,
+          );
+        }
+      });
+    });
+
+    it('redémarrage simulé — payload reconstruit depuis SQLite uniquement', async () => {
+      await withTempDb(async (db, stmts) => {
+        // Insérer le scrim avec le snapshot du nom
+        const scrimId = insertTestScrimPost(stmts, {
+          contactUserId: 'u-after-restart',
+          contactDisplayName: 'persisteduser',
+        });
+        const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
+        insertTestDelivery(stmts, batchId, scrimId, { guildId: 'guild-001', channelId: 'chan-001' });
+
+        // Simuler un redémarrage : on crée une nouvelle connexion DB mais on réutilise les données
+        // (le worker lit depuis scrim_posts via getScrimPostById, sans accès à l'utilisateur Discord)
+        const captures = [];
+        const channel = buildMockChannel('chan-001', captures, { guildId: 'guild-001' });
+        const client = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': channel }) });
+
+        // Pas de fetch Discord — le username vient uniquement de la DB
+        await runScrimBroadcastDeliveryPass(client, db, stmts);
+
+        const desc = getEmbedDescription(captures[0]);
+        assert.ok(
+          desc.includes('<@u-after-restart> • persisteduser'),
+          `Après redémarrage simulé, embed doit contenir le snapshot : ${desc}`,
+        );
+      });
+    });
+
+    it('utilisateur absent du serveur destinataire — username snapshot toujours présent', async () => {
+      await withTempDb(async (db, stmts) => {
+        const scrimId = insertTestScrimPost(stmts, {
+          contactUserId: 'u-not-member',
+          contactDisplayName: 'absentuser',
+        });
+        const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
+        insertTestDelivery(stmts, batchId, scrimId, { guildId: 'g-nouser', channelId: 'c-nouser' });
+
+        // Guilde destinataire : le BOT est présent (pour poster), mais le contact n'y est pas
+        // Le username snapshot vient de la DB et ne dépend pas du cache membres
+        const captures = [];
+        const channel = buildMockChannel('c-nouser', captures, { guildId: 'g-nouser' });
+        // buildMockGuild fournit un bot member valide (pour les permissions)
+        // Le contact user n'est pas dans members.cache — ce qui ne doit pas affecter le nom
+        const client = buildMockClient({ 'g-nouser': buildMockGuild('g-nouser', { 'c-nouser': channel }) });
+
+        await runScrimBroadcastDeliveryPass(client, db, stmts);
+
+        assert.ok(captures.length >= 1, 'Livraison doit réussir même si le contact n\'est pas membre');
+        const desc = getEmbedDescription(captures[0]);
+        assert.ok(
+          desc.includes('<@u-not-member> • absentuser'),
+          `Même si l'utilisateur n'est pas membre, le nom snapshot doit apparaître : ${desc}`,
+        );
+      });
+    });
+
+    it('FR locale — ligne contact correcte', async () => {
+      await withTempDb(async (db, stmts) => {
+        stmts.upsertGuildLanguage.run('guild-fr', 'fr');
+        const scrimId = insertTestScrimPost(stmts, {
+          guildId: 'guild-fr',
+          contactUserId: 'u-fr',
+          contactDisplayName: 'fruser',
+        });
+        const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
+        insertTestDelivery(stmts, batchId, scrimId, { guildId: 'guild-fr', channelId: 'chan-fr' });
+
+        const captures = [];
+        const channel = buildMockChannel('chan-fr', captures, { guildId: 'guild-fr' });
+        const client = buildMockClient({ 'guild-fr': buildMockGuild('guild-fr', { 'chan-fr': channel }) });
+
+        await runScrimBroadcastDeliveryPass(client, db, stmts);
+
+        const desc = getEmbedDescription(captures[0]);
+        assert.ok(desc.includes('<@u-fr> • fruser'), `FR : ligne contact attendue, obtenu : ${desc}`);
+      });
+    });
+
+    it('EN locale — ligne contact correcte', async () => {
+      await withTempDb(async (db, stmts) => {
+        stmts.upsertGuildLanguage.run('guild-en', 'en');
+        const scrimId = insertTestScrimPost(stmts, {
+          guildId: 'guild-en',
+          contactUserId: 'u-en',
+          contactDisplayName: 'enuser',
+        });
+        const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
+        insertTestDelivery(stmts, batchId, scrimId, { guildId: 'guild-en', channelId: 'chan-en' });
+
+        const captures = [];
+        const channel = buildMockChannel('chan-en', captures, { guildId: 'guild-en' });
+        const client = buildMockClient({ 'guild-en': buildMockGuild('guild-en', { 'chan-en': channel }) });
+
+        await runScrimBroadcastDeliveryPass(client, db, stmts);
+
+        const desc = getEmbedDescription(captures[0]);
+        assert.ok(desc.includes('<@u-en> • enuser'), `EN : ligne contact attendue, obtenu : ${desc}`);
+      });
+    });
+
+    it('pas de doublon du nom — username non répété deux fois', async () => {
+      await withTempDb(async (db, stmts) => {
+        const scrimId = insertTestScrimPost(stmts, {
+          contactUserId: 'u-dup',
+          contactDisplayName: 'dupname',
+        });
+        const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
+        insertTestDelivery(stmts, batchId, scrimId, { guildId: 'guild-001', channelId: 'chan-001' });
+
+        const captures = [];
+        const channel = buildMockChannel('chan-001', captures, { guildId: 'guild-001' });
+        const client = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': channel }) });
+
+        await runScrimBroadcastDeliveryPass(client, db, stmts);
+
+        const desc = getEmbedDescription(captures[0]);
+        // Le nom ne doit apparaître qu'une seule fois dans la description
+        const occurrences = (desc.match(/dupname/g) ?? []).length;
+        assert.strictEqual(occurrences, 1, `"dupname" doit apparaître exactement une fois, obtenu : ${occurrences}`);
+      });
+    });
+
+    it('MUTATION : sans contact_display_name dans payload, la ligne serait incomplète', async () => {
+      // Test unitaire de buildScrimEmbed directement
+      const { buildScrimEmbed, scrimDbRowToEmbedPayload } = await import('../src/services/scrimEmbedBuilder.js');
+
+      // Payload AVEC contactDisplayName
+      const payloadWith = {
+        gameKey: 'lol',
+        rank: 'Gold',
+        dateStr: '27/07/2026',
+        timeStr: '20:00',
+        format: 'BO1',
+        contactUserId: 'u-test',
+        contactDisplayName: 'testuser',
+      };
+      const embedWith = buildScrimEmbed(payloadWith, 'fr');
+      const descWith = embedWith.data.description ?? '';
+      assert.ok(
+        descWith.includes('<@u-test> • testuser'),
+        `Avec contactDisplayName : ligne correcte, obtenu : ${descWith}`,
+      );
+
+      // Payload SANS contactDisplayName (simulation de la version mutée)
+      const payloadWithout = {
+        gameKey: 'lol',
+        rank: 'Gold',
+        dateStr: '27/07/2026',
+        timeStr: '20:00',
+        format: 'BO1',
+        contactUserId: 'u-test',
+        contactDisplayName: null,
+      };
+      const embedWithout = buildScrimEmbed(payloadWithout, 'fr');
+      const descWithout = embedWithout.data.description ?? '';
+      assert.ok(
+        !descWithout.includes('• testuser'),
+        `Sans contactDisplayName : username ne doit pas apparaître, obtenu : ${descWithout}`,
+      );
+
+      // Vérifier que scrimDbRowToEmbedPayload inclut bien contactDisplayName depuis la DB
+      // Si la migration était absente, contact_display_name serait undefined → contactDisplayName null
+      const fakeRow = {
+        contact_user_id: 'u-db',
+        contact_display_name: 'dbuser',
+        game_key: 'lol', rank_key: 'Gold', format_key: 'BO1',
+        scheduled_date: '27/07/2026', scheduled_time: '20:00',
+        scheduled_at: null, scheduled_at_end: null,
+        multi_opgg_url: null, tags: '{}', elo_precision: null,
+        structure_name_snapshot: null, structure_invite_url_snapshot: null,
+      };
+      const payloadFromDb = scrimDbRowToEmbedPayload(fakeRow);
+      assert.strictEqual(payloadFromDb.contactDisplayName, 'dbuser',
+        'scrimDbRowToEmbedPayload doit inclure contact_display_name depuis la DB');
+
+      // Sans colonne DB (simule l'ancienne version)
+      const fakeRowOld = { ...fakeRow, contact_display_name: undefined };
+      const payloadOld = scrimDbRowToEmbedPayload(fakeRowOld);
+      assert.strictEqual(payloadOld.contactDisplayName, null,
+        'Sans contact_display_name en DB : contactDisplayName doit être null');
     });
   });
 });

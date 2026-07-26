@@ -72,6 +72,7 @@ function insertMinimalScrim(stmts, overrides = {}) {
     rank_key: overrides.rank_key ?? 'Or',
     format_key: 'Scrim BO1',
     contact_user_id: '222',
+    contact_display_name: null,
     scheduled_date: '2026-07-25',
     scheduled_time: '20:00',
     scheduled_at: '2026-07-25T18:00:00.000Z',

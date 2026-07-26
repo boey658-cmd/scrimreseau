@@ -696,6 +696,10 @@ export function scrimDbRowToEmbedPayload(row) {
     timeStr: /** @type {string} */ (row.scheduled_time),
     format: /** @type {string} */ (row.format_key),
     contactUserId: /** @type {string} */ (row.contact_user_id),
+    contactDisplayName:
+      typeof row.contact_display_name === 'string' && row.contact_display_name.trim()
+        ? row.contact_display_name.trim()
+        : null,
     multiOpggUrl: row.multi_opgg_url ?? null,
     scheduledAtIso: scheduledAt,
     scheduledAtEndIso: scheduledAtEnd,

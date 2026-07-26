@@ -6,7 +6,7 @@ import {
   MessageFlags,
 } from 'discord.js';
 import { commandList } from './commands/index.js';
-import { closeDb, getDb, preparePlayerSearchStatements, prepareStatements } from './database/db.js';
+import { getDb, preparePlayerSearchStatements, prepareStatements } from './database/db.js';
 import { startDailyDevReportJob } from './services/dailyDevReportJob.js';
 import { startDiscordEditRetryJob } from './services/discordEditRetryJob.js';
 import { startDiscordTaskQueue } from './services/discordTaskQueue.js';
@@ -169,54 +169,8 @@ export async function startBot() {
     scheduleNetworkDashboardUpdate(client, stmts);
   });
 
-  // Graceful shutdown : SIGINT et SIGTERM
-  // Guard d'idempotence : si les deux signaux arrivent simultanément, une seule séquence s'exécute.
-  /** @type {Promise<void> | null} */
-  let shutdownPromise = null;
-
-  const performShutdown = async (signal) => {
-    logger.info(`bot: signal ${signal} reçu — graceful shutdown`);
-
-    // 1. Arrêter le worker persistant en premier (attend la passe courante)
-    if (isPersistentBroadcastEnabled()) {
-      try {
-        const { stopScrimBroadcastDeliveryJob } = await import('./services/scrimBroadcastDeliveryJob.js');
-        await stopScrimBroadcastDeliveryJob();
-        logger.info('bot: scrimBroadcastDeliveryJob arrêté');
-      } catch (err) {
-        logger.error('bot: erreur arrêt scrimBroadcastDeliveryJob', {
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
-    // 2. Fermer le client Discord
-    try {
-      client.destroy();
-      logger.info('bot: client Discord détruit');
-    } catch {
-      /* ignore */
-    }
-
-    // 3. Fermer SQLite après le client et le worker
-    closeDb();
-
-    process.exit(0);
-  };
-
-  const gracefulShutdown = (signal) => {
-    if (!shutdownPromise) {
-      shutdownPromise = performShutdown(signal).catch((err) => {
-        logger.error('bot: erreur fatale graceful shutdown', {
-          message: err instanceof Error ? err.message : String(err),
-        });
-        process.exit(1);
-      });
-    }
-  };
-
-  process.once('SIGINT', () => gracefulShutdown('SIGINT'));
-  process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  // Le graceful shutdown est géré exclusivement par index.js via createGracefulShutdown().
+  // N'enregistrer aucun handler SIGINT/SIGTERM ici pour éviter un double déclenchement.
 
   await client.login(token);
   return { client };
