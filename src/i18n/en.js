@@ -1,0 +1,289 @@
+/**
+ * Traductions anglaises.
+ * Les clés absentes tombent automatiquement sur fr.js (fallback).
+ * Les valeurs métier internes (LP, BO1/BO3/BO5, noms de jeux, saisies utilisateur) restent inchangées.
+ */
+
+/** @type {Record<string, string>} */
+export const en = {
+  // ── Générique ────────────────────────────────────────────────────────
+  'generic.guildOnly': '❌ This command must be used in a server.',
+  'generic.adminOnly': '❌ This command is reserved for server administrators.',
+  'generic.error': '❌ An error occurred. Please try again later.',
+  'generic.blacklistServiceUnavailable': '❌ The service is temporarily unavailable. Please try again later.',
+  'generic.blacklistedUser': '❌ You are currently blacklisted from ScrimRéseau.\nIf you think this is an error, please contact support.',
+
+  // ── /language ────────────────────────────────────────────────────────
+  'language.successFr': '✅ La langue de ScrimRéseau est maintenant définie sur le **français** pour ce serveur.',
+  'language.successEn': '✅ ScrimRéseau is now set to **English** for this server.',
+  'language.invalidChoice': '❌ Invalid language value. Choose `fr` or `en`.',
+
+  // ── /find-scrim ──────────────────────────────────────────────────────
+  'findScrim.lock': '⏳ A scrim search is already being processed.',
+  'findScrim.guildOnly': '❌ This command can only be used in a server.',
+  'findScrim.activeLimit': '❌ You already have {max} active scrim searches. Close one or wait for it to expire before creating a new one.',
+  'findScrim.cooldown': '❌ You need to wait {seconds} more second(s) before posting a new search.',
+  'findScrim.windowLimit': '❌ You have reached the scrim creation limit ({limit} over {min} minutes). Try again a bit later.',
+  'findScrim.noTargets': '❌ No server in the network has configured a broadcast channel for League of Legends scrims.',
+  'findScrim.sending': '⏳ Sending announcement…',
+  'findScrim.scheduledAtError': '❌ Invalid date or time for the French calendar. Please check your input.',
+  'findScrim.scheduledAtEndError': '❌ Invalid max time for the French calendar. Please check your input.',
+  'findScrim.dbError': '❌ Unable to save the search. Please try again later.',
+  'findScrim.prepareError': '❌ Unable to prepare the announcement. Please try again later.',
+  'findScrim.broadcastError': '❌ An error occurred during sending (target: **{count}** configured server(s)). Please try again later.',
+  'findScrim.zeroDelivery': '⚠️ No announcement could be delivered to **{count}** configured server(s) (permissions, channels, or blocks). Please try again later.',
+  'findScrim.nombreDeGamesFormat': '❌ The number of games can only be used with the scrim series format.',
+  'findScrim.structureInvalid': '❌ The selected structure is not recognized as a ScrimRéseau partner. Use autocomplete to choose a valid structure.',
+  'findScrim.accessError': '❌ Unable to verify access. Please try again later.',
+  'findScrim.success': '✅ Your scrim search is live on the network!\n\n📡 Broadcast to {count} servers\n\n🛑 When you\'ve found a scrim:\n/scrim-close id:{id}\n\n💬 To stop receiving unnecessary messages and keep channels clean.\n\n💡 Tip:\n\nTo avoid contact issues, consider joining the ScrimRéseau server:\n{url}\n👉 This creates a shared Discord between players.\n👉 You can continue using the bot normally from your own server.',
+  'findScrim.successPersistent': '✅ Your scrim search is live.\n📡 First delivery confirmed. Broadcasting in progress to {targetCount} server(s).\n🛑 When you\'ve found a scrim: /scrim-close id:{id}\n\n💡 Tip:\n{url}',
+  'findScrim.bootstrapZeroDelivery': '⚠️ No available destinations right now ({targetCount} configured). Please try again later.',
+
+  // ── /list-scrims ─────────────────────────────────────────────────────
+  'listScrims.guildOnly': '❌ This command must be used in a server.',
+  'listScrims.dateRequiredForTime': '❌ Please provide a **date** to filter by time.',
+  'listScrims.hourOrder': '❌ Start time must be before or equal to end time.',
+  'listScrims.none': 'ℹ️ No active scrim search matches these criteria.',
+  'listScrims.header': 'Active scrims found: {total}',
+  'listScrims.truncated': '\n\n20 results shown out of {total}. Refine your search for more precise results.',
+  'listScrims.seeMessage': 'See message',
+  'listScrims.fearlessYes': ' — Fearless: Yes',
+  'listScrims.fearlessNo': ' — Fearless: No',
+
+  // ── /my-scrims ───────────────────────────────────────────────────────
+  'myScrims.empty': 'ℹ️ You currently have no active scrim search.',
+  'myScrims.embedTitle': '📋 Your active scrim requests',
+  'myScrims.footerHint': 'Use /scrim-close id:XXX (1–{max}) to close a search.',
+  'myScrims.createdAt': 'created {date}',
+  'myScrims.error': '❌ Unable to load your requests at the moment. Please try again later.',
+
+  // ── /scrim-close ─────────────────────────────────────────────────────
+  'scrimClose.error': '❌ An error occurred. Please try again later or contact an administrator.',
+
+  // ── lifecycle ────────────────────────────────────────────────────────
+  'lifecycle.tooMany': '❌ Too many active searches right now. Try again in a few minutes.',
+  'lifecycle.noActive': '❌ No active search found for this ID.',
+  'lifecycle.notAuthor': '❌ You can only close your own searches.',
+  'lifecycle.alreadyDone': '❌ This search is already closed.',
+  'lifecycle.okClose': '✅ Your scrim search has been marked as closed.',
+
+  // ── /scrim-moderation ────────────────────────────────────────────────
+  'scrimModeration.blockBot': '❌ You cannot block the bot.',
+  'scrimModeration.alreadyBlocked': 'ℹ️ **{tag}** is already blocked from scrims on this server.',
+  'scrimModeration.blockSuccess': '✅ **{tag}**\'s announcements will no longer be broadcast on this server.',
+  'scrimModeration.notBlocked': 'ℹ️ **{tag}** was not blocked from scrims.',
+  'scrimModeration.unblockSuccess': '✅ **{tag}**\'s announcements can now be broadcast on this server again.',
+
+  // ── /report-spam ─────────────────────────────────────────────────────
+  'reportSpam.guildOnly': '❌ This command must be used in a server.',
+  'reportSpam.adminOnly': '❌ This command is reserved for server administrators.',
+  'reportSpam.selfReport': '❌ You cannot report yourself.',
+  'reportSpam.botReport': '❌ You cannot report a bot.',
+  'reportSpam.alreadyReported': '❌ You have already reported this player recently. Try again in a few days.',
+  'reportSpam.alreadyBlacklisted': '❌ This player is already blacklisted.',
+  'reportSpam.noChannel': '❌ Report channel not configured (SPAM_REPORT_CHANNEL_ID).',
+  'reportSpam.channelInaccessible': '❌ The configured moderation channel is inaccessible for this bot.',
+  'reportSpam.modFail': '❌ The report could not be sent to the moderation channel. Please try again later.',
+  'reportSpam.success': '✅ Report sent.',
+  'reportSpam.error': '❌ Error while reporting.',
+
+  // ── /structure-link ──────────────────────────────────────────────────
+  'structureLink.guildOnly': '❌ This command can only be used in a server.',
+  'structureLink.setSuccess': '✅ Structure Discord link saved.',
+  'structureLink.removeSuccess': '✅ Structure Discord link removed.',
+  'structureLink.removeNotFound': 'ℹ️ No Discord link was configured for this structure.',
+  'structureLink.dbErrorSet': '❌ An error occurred while saving. Please try again later.',
+  'structureLink.dbErrorRemove': '❌ An error occurred while removing. Please try again later.',
+
+  // ── /scrim-config panel ───────────────────────────────────────────────
+  'scrimConfig.adminOnly': '❌ You must be an administrator to use this command.',
+  'scrimConfig.guildOnly': '❌ This command must be used in a server.',
+  'scrimConfig.accessError': '❌ Unable to verify access at this moment. Please try again later.',
+  'scrimConfig.readConfigError': '❌ Unable to read the configuration. Please try again later.',
+  'scrimConfig.panelClosed': '✅ Panel closed.',
+  'scrimConfig.panelExpired': '⏰ The panel has expired.',
+  'scrimConfig.noPermissions': '❌ You no longer have the necessary permissions.',
+  'scrimConfig.genericError': '❌ An error occurred.',
+  // Main embed
+  'scrimConfig.mainTitle': '⚙️ ScrimRéseau Configuration',
+  'scrimConfig.mainDescription': 'Use the buttons to modify this server\'s configuration.',
+  'scrimConfig.fieldReception': '📢 Announcement Channel',
+  'scrimConfig.fieldCommand': '📝 Command Channel',
+  'scrimConfig.fieldPerms': '🔑 Permissions for /find-scrim',
+  'scrimConfig.fieldMessages': '💬 Inactive Messages',
+  'scrimConfig.notConfigured': '*Not configured*',
+  'scrimConfig.allChannels': '*All channels*',
+  'scrimConfig.permEveryone': 'Everyone',
+  'scrimConfig.permRolesNone': 'Specific roles *(no role configured)*',
+  'scrimConfig.permRoles': 'Roles: {list}',
+  'scrimConfig.policyDelete': 'Delete automatically',
+  'scrimConfig.policyKeep': 'Keep and mark as inactive',
+  // Buttons (main)
+  'scrimConfig.btnSalons': '📢 Channels',
+  'scrimConfig.btnPerms': '🔑 Permissions',
+  'scrimConfig.btnMsgs': '💬 Messages',
+  'scrimConfig.btnReset': '🔄 Reset',
+  'scrimConfig.btnClose': '✖ Close',
+  'scrimConfig.btnBack': '← Back',
+  // Salons embed
+  'scrimConfig.salonsTitle': '📢 Configuration — Channels',
+  'scrimConfig.salonsFieldReception': 'Announcement Channel',
+  'scrimConfig.salonsFieldCommand': 'Command Channel',
+  'scrimConfig.salonsDescLine1': '**Announcement channel** — where scrim searches are posted.',
+  'scrimConfig.salonsDescLine2': '**Command channel** — where `/find-scrim` can be used.',
+  // Salons buttons
+  'scrimConfig.btnRemoveReception': 'Remove announcement channel',
+  'scrimConfig.btnAllChannels': 'Allow commands everywhere',
+  // Salons placeholders
+  'scrimConfig.placeholderReception': 'Choose the scrim announcement channel',
+  'scrimConfig.placeholderCommand': 'Restrict /find-scrim to a channel',
+  // Salons status messages
+  'scrimConfig.chanAnnSet': '✅ Announcement channel configured: {channel}',
+  'scrimConfig.chanAnnNotFound': '❌ Channel not found.',
+  'scrimConfig.chanAnnRemoved': '✅ Announcement channel removed.',
+  'scrimConfig.chanAnnNone': 'ℹ️ No announcement channel was configured.',
+  'scrimConfig.chanCmdSet': '✅ Command channel configured: {channel}',
+  'scrimConfig.chanCmdWrongType': '❌ Please choose a text channel or announcement channel.',
+  'scrimConfig.chanCmdRemoved': '✅ Commands are now allowed everywhere.',
+  // Perms embed
+  'scrimConfig.permsTitle': '🔑 Configuration — Permissions',
+  'scrimConfig.permsDesc': 'Select up to {max} roles allowed to use `/find-scrim`.\nThe selection **replaces** the current list.\nTo allow everyone, use the dedicated button.',
+  'scrimConfig.permsFieldCurrent': 'Current configuration',
+  // Perms buttons
+  'scrimConfig.btnAllEveryone': 'Allow everyone',
+  // Perms placeholder
+  'scrimConfig.placeholderRoles': 'Select allowed roles (1 to {max})',
+  // Perms status
+  'scrimConfig.rolesInvalidCount': '❌ Please select between 1 and {max} roles.',
+  'scrimConfig.rolesSet': '✅ Permissions updated: {roles}',
+  'scrimConfig.everyoneSet': '✅ Everyone can use /find-scrim.',
+  // Messages embed
+  'scrimConfig.msgsTitle': '💬 Configuration — Inactive Messages',
+  'scrimConfig.msgsDesc': 'Behavior for **closed, expired, or replaced** scrim messages on this server.',
+  'scrimConfig.msgsFieldCurrent': 'Current configuration',
+  'scrimConfig.msgsPlaceholder': 'Choose behavior for inactive messages',
+  'scrimConfig.msgsPolicyKeepLabel': 'Keep and mark as inactive',
+  'scrimConfig.msgsPolicyKeepDesc': 'Default behavior',
+  'scrimConfig.msgsPolicyDeleteLabel': 'Delete automatically',
+  'scrimConfig.msgsPolicyDeleteDesc': 'Deletes announcements for closed/replaced scrims',
+  'scrimConfig.msgsPolicyInvalid': '❌ Invalid value.',
+  'scrimConfig.msgsPolicySet': '✅ Policy updated: **{policy}**',
+  // Reset embed
+  'scrimConfig.resetTitle': '🔄 Reset',
+  'scrimConfig.resetDesc': 'Choose what you want to reset.\n**Warning**: a full reset requires confirmation.',
+  'scrimConfig.resetBtnAnn': 'Announcement channel',
+  'scrimConfig.resetBtnCmd': 'Command channel',
+  'scrimConfig.resetBtnPerm': 'Permissions',
+  'scrimConfig.resetBtnMsg': 'Messages',
+  'scrimConfig.resetBtnAll': '⚠️ Reset everything',
+  'scrimConfig.resetAnnDone': '✅ Announcement channel reset.',
+  'scrimConfig.resetCmdDone': '✅ Command channel reset.',
+  'scrimConfig.resetPermDone': '✅ Permissions reset (everyone).',
+  'scrimConfig.resetMsgDone': '✅ Message policy reset.',
+  'scrimConfig.resetAllDone': '✅ Configuration fully reset.',
+  // Reset confirm
+  'scrimConfig.resetConfirmTitle': '⚠️ Confirm full reset?',
+  'scrimConfig.resetConfirmDesc': 'This action will **delete all configuration** for this server:\n- Announcement channel\n- Command channel\n- Permissions\n- Message policy\n\n**This action is irreversible. Do you confirm?**',
+  'scrimConfig.resetConfirmOk': '✅ Confirm',
+  'scrimConfig.resetConfirmCancel': '❌ Cancel',
+
+  // ── /help-scrim ──────────────────────────────────────────────────────
+  'help.title': '🎮 ScrimRéseau — Help',
+  'help.findTitle': '📢 Find a scrim',
+  'help.findValue': '`/find-scrim` → posts a scrim search on the network\n`/list-scrims` → shows currently available scrims based on your filters',
+  'help.manageTitle': '📌 Manage your scrims',
+  'help.manageValue': '`/my-scrims` → shows your active scrim requests\n`/scrim-close` → closes one of your requests when you\'ve found a scrim',
+  'help.tipTitle': '💡 Tip',
+  'help.tipValue': 'Scrims expire automatically once the date/time has passed, and messages are then cleaned up to keep channels readable.',
+
+  // ── /helpadmin-scrim ──────────────────────────────────────────────────
+  'helpAdmin.title': '🛠️ ScrimRéseau — Admin Help',
+  'helpAdmin.description': 'Configuration and moderation of the scrim network for your server.',
+  'helpAdmin.scrimConfigTitle': '⚙️ /scrim-config',
+  'helpAdmin.scrimConfigValue': 'Opens the interactive ScrimRéseau configuration panel.\n\n**📢 Channels** — announcement channel (scrim broadcast) and command channel (`/find-scrim`).\n\n**🔑 Permissions** — roles allowed to use `/find-scrim`, or everyone.\n\n**💬 Messages** — behavior for closed or replaced scrim messages (keep / delete).\n\n**🔄 Reset** — resets a setting or the entire configuration (confirmation required).\n\nThe panel is ephemeral, interactive, and expires after 10 minutes.',
+  'helpAdmin.moderationTitle': '🛡️ /scrim-moderation',
+  'helpAdmin.moderationValue': 'Local scrim moderation:\n\n**• user → block**\nPrevents that user\'s scrim announcements from being broadcast on this server.\n\n**• user → unblock**\nAllows that user\'s scrim announcements to be broadcast again on this server.',
+  'helpAdmin.reportSpamTitle': '🚨 /report-spam',
+  'helpAdmin.reportSpamValue': 'Admin command to report a player for scrim spam.\n\nThe bot applies checks:\n- cannot report yourself\n- cannot report a bot\n- anti-abuse protections',
+  'helpAdmin.practicesTitle': '⚠️ Best practices',
+  'helpAdmin.practicesValue': '- Make sure the bot can send **and** edit its messages\n- Avoid deleting the bot\'s messages unless necessary\n- Keep a single clean, readable scrim channel\n- Use `/scrim-config` to check and adjust the configuration',
+  'helpAdmin.tipTitle': '💡 Tip',
+  'helpAdmin.tipValue': 'A good setup = a clear channel + well-defined permissions',
+
+  // ── Embed scrim ──────────────────────────────────────────────────────
+  'embed.joinServerButton': '🔗 Join the ScrimRéseau server',
+  'embed.contactHint1': '⚠️ If the contact mention above is not clickable',
+  'embed.contactHint2': '👉 Join the ScrimRéseau server using the button below',
+  'embed.contactHint3': '👉 This usually makes the mention clickable',
+  'embed.fearlessOui': 'Fearless: Yes',
+  'embed.fearlessNon': 'Fearless: No',
+  'embed.fearlessNimporte': 'Fearless: Any',
+  'embed.structureLabel': '🌐 Structure: {name}',
+  'embed.structureLabelLinked': '🌐 Structure: [{safeName}]({url})',
+  'embed.unknownTime': 'Unknown time',
+
+  // ── Gate réception ───────────────────────────────────────────────────
+  'gate.refusalBody': '🔒 Access to ScrimRéseau is manually approved to keep the network clean and active.\n\nTo request access:\n• open a ticket in the ScrimRéseau Discord server\n• send an invite link to your server\n• specify which channel you plan to use for scrim announcements\n\nOnce approved, your server will automatically receive scrim announcements from the network. 🙂',
+
+  // ── Gate serveur public ──────────────────────────────────────────────
+  'publicGate.refusal': 'Hello, to use this command, you must be a member of the ScrimRéseau Discord: {url}\n\nOnce inside, you can make your searches from your own server. This allows other players to find and contact you more easily to organize scrims.\n\nOther bot commands remain available.',
+
+  // ── Restrictions ─────────────────────────────────────────────────────
+  'restrictions.wrongChannel': '❌ You cannot use this command in this channel.',
+  'restrictions.noPermission': '❌ You do not have permission to use this command.',
+  'restrictions.configError': '❌ Unable to verify server configuration. Please try again later.',
+
+  // ── Liste query ──────────────────────────────────────────────────────
+  'listeQuery.fearlessYes': ' — Fearless: Yes',
+  'listeQuery.fearlessNo': ' — Fearless: No',
+  'listeQuery.seeMessage': 'View message',
+  'listeQuery.at': ' at ',
+
+  // ── Validation ───────────────────────────────────────────────────────
+  'validation.date.not_string': '❌ The date must be a string.',
+  'validation.date.required': '❌ Date is required.',
+  'validation.date.invalid_format': '❌ Invalid date format. Use DD/MM, DD-MM, or DD/MM/YYYY.',
+  'validation.date.invalid_numbers': '❌ The date contains invalid numbers.',
+  'validation.date.invalid_year': '❌ Invalid year (expected between 2000 and 2100).',
+  'validation.date.invalid_month': '❌ Invalid month (1\u201312).',
+  'validation.date.invalid_day': '❌ Invalid day.',
+  'validation.date.invalid_calendar': '❌ Invalid date (incorrect day or month).',
+  'validation.date.past': '❌ The chosen date cannot be in the past.',
+  'validation.date.window': '❌ The chosen date must be within the next 30 days.',
+  'validation.time.not_string': '❌ The time must be a string.',
+  'validation.time.required': '❌ Time is required.',
+  'validation.time.invalid_hour': '❌ Invalid hour (0\u201323).',
+  'validation.time.invalid_hours': '❌ Invalid hours (0\u201323).',
+  'validation.time.invalid_minutes': '❌ Invalid minutes (0\u201359).',
+  'validation.time.invalid_format': '❌ Invalid time format. E.g.: 20:30, 20h30, 20h.',
+  'validation.time.flex_parse_error': '❌ Invalid start time or max time.',
+  'validation.time.flex_before_start': '❌ The max time must be strictly after the start time.',
+  'validation.time.flex_max_span': '❌ The gap between start time and max time cannot exceed 12 hours.',
+  'validation.rank.unknown_game': '❌ Unknown game.',
+  'validation.rank.required': '❌ Rank is required.',
+  'validation.rank.invalid': '❌ The selected rank does not match the chosen game. Please select a valid rank for this game.',
+  'validation.format.unknown_game': '❌ Unknown game.',
+  'validation.format.required': '❌ Format is required.',
+  'validation.format.invalid': '❌ The selected format does not match the chosen game. Please select a valid format for this game.',
+  'validation.contact.missing': '❌ Invalid Discord contact (missing user).',
+  'validation.contact.bot': '❌ The contact cannot be a bot.',
+  'validation.discordUrl.invalid': '❌ Please provide a valid Discord invite link (e.g. https://discord.gg/xxxx).',
+  'validation.multiOpgg.wrong_game': '❌ The multi OP.GG field is only available for League of Legends.',
+  'validation.multiOpgg.invalid': '❌ Invalid multi OP.GG link. Please provide a valid HTTPS URL from op.gg only.',
+
+  // ── myScrims date format ─────────────────────────────────────────────
+  'myScrims.createdAtFormat': "dd/MM/yyyy 'at' HH:mm",
+
+  // ── Rangs LoL ────────────────────────────────────────────────────────
+  'rank.fer': 'Iron',
+  'rank.bronze': 'Bronze',
+  'rank.argent': 'Silver',
+  'rank.or': 'Gold',
+  'rank.platine': 'Platinum',
+  'rank.emeraude': 'Emerald',
+  'rank.diamant': 'Diamond',
+  'rank.master': 'Master',
+  'rank.grandmaster': 'Grandmaster',
+  'rank.challenger': 'Challenger',
+  'rank.mix': 'Mixed Rank',
+};

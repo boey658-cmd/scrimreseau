@@ -3,6 +3,30 @@ import { DateTime } from 'luxon';
 export const SCRIM_TIMEZONE = 'Europe/Paris';
 
 /**
+ * Retourne l'abréviation du fuseau de Paris à l'instant donné.
+ * Utilise Luxon pour détecter fiablement l'heure d'été (CEST) ou d'hiver (CET).
+ *
+ * @param {string | Date | null | undefined} isoOrDate
+ * @returns {'CET' | 'CEST'}
+ */
+export function getParisTimezoneAbbr(isoOrDate) {
+  try {
+    const d =
+      isoOrDate instanceof Date
+        ? isoOrDate
+        : typeof isoOrDate === 'string' && isoOrDate.trim()
+          ? new Date(isoOrDate)
+          : new Date();
+    if (Number.isNaN(d.getTime())) return 'CET';
+    return DateTime.fromJSDate(d, { zone: SCRIM_TIMEZONE }).isInDST
+      ? 'CEST'
+      : 'CET';
+  } catch {
+    return 'CET';
+  }
+}
+
+/**
  * Même logique de découpage horaire que la validation slash (heure seule ou HH:MM).
  * @param {string} timeStr
  */

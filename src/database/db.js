@@ -159,6 +159,63 @@ CREATE TABLE IF NOT EXISTS network_dashboard_config (
   updated_at TEXT NOT NULL,
   UNIQUE(guild_id, channel_id)
 );
+
+CREATE TABLE IF NOT EXISTS scrim_broadcast_batches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scrim_post_db_id INTEGER NOT NULL,
+  operation_type TEXT NOT NULL DEFAULT 'initial',
+  generation INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'staging'
+    CHECK(status IN ('staging','active','completed','failed','cancelled')),
+  target_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  started_at TEXT,
+  completed_at TEXT,
+  last_dispatched_at TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sbb_active_unique
+  ON scrim_broadcast_batches (scrim_post_db_id, operation_type, generation)
+  WHERE status IN ('staging','active');
+
+CREATE TABLE IF NOT EXISTS scrim_broadcast_deliveries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch_id INTEGER NOT NULL,
+  scrim_post_db_id INTEGER NOT NULL,
+  guild_id TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  game_key TEXT NOT NULL,
+  operation_type TEXT NOT NULL DEFAULT 'initial',
+  generation INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK(status IN ('pending','processing','retry','sent','failed_terminal','cancelled','unknown_outcome')),
+  priority INTEGER NOT NULL DEFAULT 0,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT NOT NULL,
+  claimed_at TEXT,
+  message_id TEXT,
+  last_error_code TEXT,
+  last_error_message TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT,
+  UNIQUE(scrim_post_db_id, guild_id, channel_id, operation_type, generation)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sbd_batch_status
+  ON scrim_broadcast_deliveries (batch_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_sbd_status_next_attempt
+  ON scrim_broadcast_deliveries (status, next_attempt_at)
+  WHERE status IN ('pending','retry');
+
+CREATE INDEX IF NOT EXISTS idx_sbd_scrim
+  ON scrim_broadcast_deliveries (scrim_post_db_id);
+
+CREATE INDEX IF NOT EXISTS idx_sbd_claimed_processing
+  ON scrim_broadcast_deliveries (claimed_at)
+  WHERE status = 'processing';
 `;
 
 const MULTI_OPGG_COLUMN = 'multi_opgg_url';
@@ -450,6 +507,19 @@ function migrateScrimPostsStructure(db) {
 }
 
 /**
+ * Précision d'élo (Low / High / tranches LP) — nullable, idempotent.
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateScrimPostsEloPrecision(db) {
+  if (tableHasColumn(db, 'scrim_posts', 'elo_precision')) return;
+  db.exec(`ALTER TABLE scrim_posts ADD COLUMN elo_precision TEXT`);
+  logger.info('Migration SQLite', {
+    change: 'scrim_posts.elo_precision',
+    action: 'ADD_COLUMN',
+  });
+}
+
+/**
  * Liens d'invitation Discord configurés par les structures partenaires (idempotent).
  * @param {import('better-sqlite3').Database} db
  */
@@ -604,6 +674,24 @@ function migratePlayerSearchInit(db) {
   });
 }
 
+/**
+ * Langue configurée par guilde — additive et idempotente.
+ * Aucune ligne créée automatiquement pour les guildes existantes (fallback = français).
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateGuildLanguages(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS guild_languages (
+      guild_id TEXT PRIMARY KEY NOT NULL,
+      language TEXT NOT NULL CHECK(language IN ('fr', 'en'))
+    )
+  `);
+  logger.info('Migration SQLite', {
+    change: 'guild_languages',
+    action: 'CREATE_TABLE_IF_NOT_EXISTS',
+  });
+}
+
 export function getDb() {
   if (dbInstance) return dbInstance;
   const dbPath = resolveDbPath();
@@ -624,8 +712,10 @@ export function getDb() {
   migrateScrimPostsRepost(dbInstance);
   migrateScrimPostMessagesDiscordDeleted(dbInstance);
   migrateScrimPostsStructure(dbInstance);
+  migrateScrimPostsEloPrecision(dbInstance);
   migrateStructureDiscordLinks(dbInstance);
   migratePlayerSearchInit(dbInstance);
+  migrateGuildLanguages(dbInstance);
   logger.info(
     'SQLite initialisée : mode WAL, busy_timeout=5000 ms. Une seule instance writer attendue sur ce fichier.',
     { path: dbPath, busy_timeout_ms: 5000, journal_mode: 'WAL' },
@@ -719,7 +809,8 @@ export function prepareStatements(db) {
         rank_key,
         format_key,
         created_at,
-        game_key
+        game_key,
+        elo_precision
       FROM scrim_posts
       WHERE author_user_id = ? AND status = 'active'
       ORDER BY created_at DESC
@@ -779,12 +870,14 @@ export function prepareStatements(db) {
         scrim_public_id, author_user_id, origin_guild_id, source_guild_id,
         game_key, rank_key, format_key, contact_user_id,
         scheduled_date, scheduled_time, scheduled_at, scheduled_at_end, tags, multi_opgg_url,
+        elo_precision,
         structure_guild_id, structure_name_snapshot, structure_invite_url_snapshot,
         created_at, status, closed_at, closed_reason
       ) VALUES (
         @scrim_public_id, @author_user_id, @origin_guild_id, @source_guild_id,
         @game_key, @rank_key, @format_key, @contact_user_id,
         @scheduled_date, @scheduled_time, @scheduled_at, @scheduled_at_end, @tags, @multi_opgg_url,
+        @elo_precision,
         @structure_guild_id, @structure_name_snapshot, @structure_invite_url_snapshot,
         @created_at, @status, NULL, NULL
       )
@@ -1104,6 +1197,179 @@ export function prepareStatements(db) {
     /** Dashboard réseau : suppression d'un dashboard configuré. */
     deleteNetworkDashboard: db.prepare(`
       DELETE FROM network_dashboard_config WHERE guild_id = ? AND channel_id = ?
+    `),
+
+    /** Langue configurée pour une guilde (null/undefined si absente → fallback 'fr'). */
+    getGuildLanguage: db.prepare(`
+      SELECT language FROM guild_languages WHERE guild_id = ? LIMIT 1
+    `),
+    /** Enregistre ou met à jour la langue d'une guilde. */
+    upsertGuildLanguage: db.prepare(`
+      INSERT INTO guild_languages (guild_id, language)
+      VALUES (?, ?)
+      ON CONFLICT(guild_id) DO UPDATE SET language = excluded.language
+    `),
+
+    // === Diffusion persistante (scrim_broadcast_batches + scrim_broadcast_deliveries) ===
+    insertScrimBroadcastBatch: db.prepare(`
+      INSERT INTO scrim_broadcast_batches
+        (scrim_post_db_id, operation_type, generation, status, target_count, created_at, updated_at)
+      VALUES
+        (@scrim_post_db_id, @operation_type, @generation, 'staging', @target_count, @created_at, @updated_at)
+    `),
+    updateScrimBroadcastBatchStatus: db.prepare(`
+      UPDATE scrim_broadcast_batches
+      SET status = @status, updated_at = @updated_at
+      WHERE id = @id
+    `),
+    setScrimBroadcastBatchActive: db.prepare(`
+      UPDATE scrim_broadcast_batches
+      SET status = 'active', started_at = @started_at, updated_at = @updated_at
+      WHERE id = @id AND status = 'staging'
+    `),
+    setScrimBroadcastBatchCompleted: db.prepare(`
+      UPDATE scrim_broadcast_batches
+      SET status = @status, completed_at = @completed_at, updated_at = @updated_at
+      WHERE id = @id
+    `),
+    updateScrimBroadcastBatchLastDispatched: db.prepare(`
+      UPDATE scrim_broadcast_batches
+      SET last_dispatched_at = @last_dispatched_at, updated_at = @updated_at
+      WHERE id = @id
+    `),
+    getScrimBroadcastBatchById: db.prepare(`
+      SELECT * FROM scrim_broadcast_batches WHERE id = ?
+    `),
+    getActiveStagingBatchForScrim: db.prepare(`
+      SELECT * FROM scrim_broadcast_batches
+      WHERE scrim_post_db_id = ?
+        AND operation_type = 'initial'
+        AND generation = 0
+        AND status IN ('staging','active')
+      LIMIT 1
+    `),
+    listActiveBatchesDueForDispatch: db.prepare(`
+      SELECT * FROM scrim_broadcast_batches
+      WHERE status = 'active'
+      ORDER BY COALESCE(last_dispatched_at, '1970-01-01') ASC, id ASC
+    `),
+    listStagingBatchesForRecovery: db.prepare(`
+      SELECT * FROM scrim_broadcast_batches WHERE status = 'staging'
+      ORDER BY created_at ASC
+    `),
+    insertScrimBroadcastDelivery: db.prepare(`
+      INSERT INTO scrim_broadcast_deliveries
+        (batch_id, scrim_post_db_id, guild_id, channel_id, game_key,
+         operation_type, generation, status, priority, attempt_count,
+         next_attempt_at, created_at, updated_at)
+      VALUES
+        (@batch_id, @scrim_post_db_id, @guild_id, @channel_id, @game_key,
+         @operation_type, @generation, 'pending', @priority, 0,
+         @next_attempt_at, @created_at, @updated_at)
+    `),
+    claimNextDeliveryForBatch: db.prepare(`
+      UPDATE scrim_broadcast_deliveries
+      SET status = 'processing', claimed_at = @claimed_at, updated_at = @updated_at
+      WHERE id = (
+        SELECT id FROM scrim_broadcast_deliveries
+        WHERE batch_id = @batch_id
+          AND status IN ('pending','retry')
+          AND next_attempt_at <= @now_iso
+        ORDER BY priority DESC, id ASC
+        LIMIT 1
+      ) AND status IN ('pending','retry')
+    `),
+    getProcessingDeliveryForBatch: db.prepare(`
+      SELECT * FROM scrim_broadcast_deliveries
+      WHERE batch_id = ? AND status = 'processing'
+      ORDER BY claimed_at DESC
+      LIMIT 1
+    `),
+    getNextDueDeliveryForBatch: db.prepare(`
+      SELECT * FROM scrim_broadcast_deliveries
+      WHERE batch_id = @batch_id
+        AND status IN ('pending','retry')
+        AND next_attempt_at <= @now_iso
+      ORDER BY priority DESC, id ASC
+      LIMIT 1
+    `),
+    markDeliverySent: db.prepare(`
+      UPDATE scrim_broadcast_deliveries
+      SET status = 'sent', message_id = @message_id, attempt_count = attempt_count + 1,
+          last_error_code = NULL, last_error_message = NULL,
+          completed_at = @completed_at, updated_at = @updated_at
+      WHERE id = @id
+    `),
+    markDeliveryRetry: db.prepare(`
+      UPDATE scrim_broadcast_deliveries
+      SET status = 'retry', attempt_count = attempt_count + 1,
+          next_attempt_at = @next_attempt_at,
+          last_error_code = @last_error_code,
+          last_error_message = @last_error_message,
+          claimed_at = NULL, updated_at = @updated_at
+      WHERE id = @id
+    `),
+    markDeliveryTerminal: db.prepare(`
+      UPDATE scrim_broadcast_deliveries
+      SET status = 'failed_terminal', attempt_count = attempt_count + 1,
+          last_error_code = @last_error_code,
+          last_error_message = @last_error_message,
+          completed_at = @completed_at, claimed_at = NULL, updated_at = @updated_at
+      WHERE id = @id
+    `),
+    markDeliveryCancelled: db.prepare(`
+      UPDATE scrim_broadcast_deliveries
+      SET status = 'cancelled', completed_at = @completed_at, updated_at = @updated_at
+      WHERE id = @id AND status IN ('pending','retry','processing')
+    `),
+    markDeliveryUnknownOutcome: db.prepare(`
+      UPDATE scrim_broadcast_deliveries
+      SET status = 'unknown_outcome', attempt_count = attempt_count + 1,
+          last_error_code = @last_error_code,
+          last_error_message = @last_error_message,
+          completed_at = @completed_at, claimed_at = NULL, updated_at = @updated_at
+      WHERE id = @id
+    `),
+    cancelPendingDeliveriesForScrim: db.prepare(`
+      UPDATE scrim_broadcast_deliveries
+      SET status = 'cancelled', completed_at = @completed_at, updated_at = @updated_at
+      WHERE scrim_post_db_id = @scrim_post_db_id
+        AND status IN ('pending','retry')
+    `),
+    listDeliveriesForBatch: db.prepare(`
+      SELECT * FROM scrim_broadcast_deliveries WHERE batch_id = ? ORDER BY priority DESC, id ASC
+    `),
+    countDeliveriesByStatusForBatch: db.prepare(`
+      SELECT status, COUNT(*) as n FROM scrim_broadcast_deliveries
+      WHERE batch_id = ? GROUP BY status
+    `),
+    hasPendingDeliveriesForBatch: db.prepare(`
+      SELECT 1 FROM scrim_broadcast_deliveries
+      WHERE batch_id = ? AND status IN ('pending','processing','retry')
+      LIMIT 1
+    `),
+    listStaleProcessingDeliveries: db.prepare(`
+      SELECT * FROM scrim_broadcast_deliveries
+      WHERE status = 'processing'
+        AND claimed_at < @stale_threshold_iso
+    `),
+    countSentDeliveriesForBatch: db.prepare(`
+      SELECT COUNT(*) as n FROM scrim_broadcast_deliveries
+      WHERE batch_id = ? AND status = 'sent'
+    `),
+    countBroadcastBatchesByStatus: db.prepare(`
+      SELECT status, COUNT(*) as n FROM scrim_broadcast_batches GROUP BY status
+    `),
+    countBroadcastDeliveriesByStatus: db.prepare(`
+      SELECT status, COUNT(*) as n FROM scrim_broadcast_deliveries GROUP BY status
+    `),
+    oldestPendingDelivery: db.prepare(`
+      SELECT created_at FROM scrim_broadcast_deliveries
+      WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1
+    `),
+    oldestRetryDelivery: db.prepare(`
+      SELECT next_attempt_at FROM scrim_broadcast_deliveries
+      WHERE status = 'retry' ORDER BY next_attempt_at ASC LIMIT 1
     `),
   };
 }

@@ -11,19 +11,20 @@ import {
 } from '../services/listeScrimsQuery.js';
 import { logger } from '../utils/logger.js';
 import { interactReply } from '../utils/interactionDiscord.js';
+import { getGuildLocale, t } from '../i18n/index.js';
 import {
   parseAndNormalizeTime,
   parseListeScrimDateFilter,
 } from '../utils/validation.js';
 
-const MSG_NO_GUILD =
-  '❌ Cette commande doit être utilisée sur un serveur.';
-const MSG_DATE_REQUIRED_FOR_TIME =
-  '❌ Indique une **date** pour filtrer sur les heures.';
-const MSG_HEURE_ORDER =
-  '❌ L’heure de début doit être avant ou égale à l’heure de fin.';
-const MSG_NONE =
-  'ℹ️ Aucune recherche de scrim active ne correspond à ces critères.';
+/**
+ * Traduit un résultat d'erreur de validation (utilise errorCode si disponible, sinon fallback).
+ * @param {{ errorCode?: string, error: string }} res
+ * @param {string} locale
+ */
+function validationMsg(res, locale) {
+  return res.errorCode ? t(locale, res.errorCode) : `❌ ${res.error}`;
+}
 
 /**
  * @param {import('discord.js').ChatInputCommandInteraction} interaction
@@ -31,9 +32,12 @@ const MSG_NONE =
  */
 export async function executeListeScrimsCore(interaction, ctx) {
   if (!interaction.inGuild()) {
-    await interactReply(interaction, { content: MSG_NO_GUILD, flags: MessageFlags.Ephemeral });
+    await interactReply(interaction, { content: t('fr', 'listScrims.guildOnly'), flags: MessageFlags.Ephemeral });
     return;
   }
+
+  const guildId = interaction.guildId;
+  const locale = getGuildLocale(guildId, ctx.stmts);
 
   const eloRaw = interaction.options.getString('elo');
   const dateRaw = interaction.options.getString('date');
@@ -42,7 +46,7 @@ export async function executeListeScrimsCore(interaction, ctx) {
 
   if ((heureDebutRaw?.trim() || heureFinRaw?.trim()) && !dateRaw?.trim()) {
     await interactReply(interaction, {
-      content: MSG_DATE_REQUIRED_FOR_TIME,
+      content: t(locale, 'listScrims.dateRequiredForTime'),
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -59,7 +63,7 @@ export async function executeListeScrimsCore(interaction, ctx) {
     const dateRes = parseListeScrimDateFilter(dateRaw);
     if (!dateRes.ok) {
       await interactReply(interaction, {
-        content: `❌ ${dateRes.error}`,
+        content: validationMsg(dateRes, locale),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -72,7 +76,7 @@ export async function executeListeScrimsCore(interaction, ctx) {
   if (heureDebutRaw?.trim()) {
     const r = parseAndNormalizeTime(heureDebutRaw);
     if (!r.ok) {
-      await interactReply(interaction, { content: `❌ ${r.error}`, flags: MessageFlags.Ephemeral });
+      await interactReply(interaction, { content: validationMsg(r, locale), flags: MessageFlags.Ephemeral });
       return;
     }
     tMin = r.value;
@@ -80,7 +84,7 @@ export async function executeListeScrimsCore(interaction, ctx) {
   if (heureFinRaw?.trim()) {
     const r = parseAndNormalizeTime(heureFinRaw);
     if (!r.ok) {
-      await interactReply(interaction, { content: `❌ ${r.error}`, flags: MessageFlags.Ephemeral });
+      await interactReply(interaction, { content: validationMsg(r, locale), flags: MessageFlags.Ephemeral });
       return;
     }
     tMax = r.value;
@@ -88,7 +92,7 @@ export async function executeListeScrimsCore(interaction, ctx) {
 
   if (tMin != null && tMax != null && tMin > tMax) {
     await interactReply(interaction, {
-      content: MSG_HEURE_ORDER,
+      content: t(locale, 'listScrims.hourOrder'),
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -104,11 +108,10 @@ export async function executeListeScrimsCore(interaction, ctx) {
   }
 
   if (total === 0) {
-    await interactReply(interaction, { content: MSG_NONE, flags: MessageFlags.Ephemeral });
+    await interactReply(interaction, { content: t(locale, 'listScrims.none'), flags: MessageFlags.Ephemeral });
     return;
   }
 
-  const guildId = interaction.guildId;
   const displayRows = rows.slice(0, LISTE_DISPLAY_MAX);
 
   const lines = displayRows.map((row) => {
@@ -129,12 +132,12 @@ export async function executeListeScrimsCore(interaction, ctx) {
         );
       }
     }
-    return formatListeScrimLine(row, tagsStr, messageUrl);
+    return formatListeScrimLine(row, tagsStr, messageUrl, locale);
   });
 
-  let content = `Scrims actives trouvées : ${total}\n\n${lines.join('\n')}`;
+  let content = `${t(locale, 'listScrims.header', { total })}\n\n${lines.join('\n')}`;
   if (total > LISTE_DISPLAY_MAX) {
-    content += `\n\n20 résultats affichés sur ${total}. Affine ta recherche si tu veux trouver plus précis.`;
+    content += t(locale, 'listScrims.truncated', { total });
   }
 
   if (content.length > 2000) {
@@ -162,31 +165,31 @@ export async function executeListeScrimsCore(interaction, ctx) {
 
 export const listeScrims = {
   data: new SlashCommandBuilder()
-    .setName('liste-scrims')
-    .setDescription('Liste les recherches de scrim actives (filtres optionnels)')
+    .setName('list-scrims')
+    .setDescription('List active scrim searches.')
     .addStringOption((opt) =>
       opt
         .setName('elo')
-        .setDescription('Rang LoL (choix fermés, catalogue /recherche-scrim)')
+        .setDescription('Filter by rank.')
         .setRequired(false)
         .addChoices(...getPrimaryGameRankChoicesForSlash()),
     )
     .addStringOption((opt) =>
       opt
         .setName('date')
-        .setDescription('Date JJ/MM ou JJ/MM/AAAA (optionnel)')
+        .setDescription('Filter by date (DD/MM or DD/MM/YYYY).')
         .setRequired(false),
     )
     .addStringOption((opt) =>
       opt
         .setName('heure_debut')
-        .setDescription('Heure minimum (20:30, 20h30…) — requiert date')
+        .setDescription('Minimum start time (requires date).')
         .setRequired(false),
     )
     .addStringOption((opt) =>
       opt
         .setName('heure_fin')
-        .setDescription('Heure maximum — requiert date')
+        .setDescription('Maximum start time (requires date).')
         .setRequired(false),
     ),
 

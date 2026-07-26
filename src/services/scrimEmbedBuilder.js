@@ -4,8 +4,11 @@ import {
   ButtonStyle,
   EmbedBuilder,
 } from 'discord.js';
+import { formatRankWithPrecision } from '../config/eloPrecision.js';
+import { localizeRank } from '../config/games.js';
+import { t } from '../i18n/index.js';
 import { getScrimEmoji } from '../utils/emojis.js';
-import { SCRIM_TIMEZONE } from '../utils/scrimScheduledAt.js';
+import { getParisTimezoneAbbr, SCRIM_TIMEZONE } from '../utils/scrimScheduledAt.js';
 
 /** Embed scrim disponible (publication / réseau). */
 export const SCRIM_EMBED_COLOR_ACTIVE = 0x57f287;
@@ -165,16 +168,21 @@ export function formatParisFlexibleTimeRange(startIsoUtc, endIsoUtc) {
 }
 
 /**
- * Date + fragment horaire pour /mes-demandes et /liste-scrims (fixe ou plage).
+ * Date + fragment horaire pour /my-scrims et /list-scrims (fixe ou plage).
+ *
+ * - FR : `21:00` (sans suffixe de fuseau)
+ * - EN : `21:00 (CEST)` (avec suffixe calculé dynamiquement)
+ *
  * @param {{
  *   scheduled_at: string | null | undefined,
  *   scheduled_at_end?: string | null | undefined,
  *   scheduled_date: string,
  *   scheduled_time: string,
  * }} row
+ * @param {string} [locale] 'fr' (défaut) ou 'en'
  * @returns {{ dateStr: string, timeStr: string }}
  */
-export function formatParisScrimListSchedule(row) {
+export function formatParisScrimListSchedule(row, locale = 'fr') {
   const startIso =
     typeof row.scheduled_at === 'string' && row.scheduled_at.trim()
       ? row.scheduled_at.trim()
@@ -186,7 +194,7 @@ export function formatParisScrimListSchedule(row) {
       : null;
 
   if (startIso && endIso) {
-    const d = formatParisDisplayFromUtcIso(startIso);
+    const d = formatParisDisplayFromUtcIso(startIso, locale);
     const range = formatParisFlexibleTimeRange(startIso, endIso);
     if (d && range) {
       return { dateStr: d.dateStr, timeStr: range };
@@ -194,9 +202,14 @@ export function formatParisScrimListSchedule(row) {
   }
 
   if (startIso) {
-    const d = formatParisDisplayFromUtcIso(startIso);
+    const d = formatParisDisplayFromUtcIso(startIso, locale);
     if (d) {
-      const rawT = d.timeStr.replace(' (heure française)', '');
+      if (locale === 'en') {
+        // EN : formatParisDisplayFromUtcIso retourne déjà "21:00 (CEST)"
+        return { dateStr: d.dateStr, timeStr: d.timeStr };
+      }
+      // FR : strip le suffixe (CET)/(CEST) et convertir le format h→:
+      const rawT = d.timeStr.replace(/ \(CES?T\)$/, '');
       const timePart = /^(\d{1,2})h(\d{2})$/.test(rawT)
         ? rawT.replace(/^(\d{1,2})h(\d{2})$/, (_, h, m) =>
             `${String(h).padStart(2, '0')}:${m}`,
@@ -214,7 +227,12 @@ export function formatParisScrimListSchedule(row) {
  * @param {string | null | undefined} isoString
  * @returns {{ dateStr: string, timeStr: string } | null} null si instant illisible
  */
-export function formatParisDisplayFromUtcIso(isoString) {
+/**
+ * @param {string | null | undefined} isoString
+ * @param {string} [locale] 'fr' (défaut) ou 'en'
+ * @returns {{ dateStr: string, timeStr: string } | null}
+ */
+export function formatParisDisplayFromUtcIso(isoString, locale = 'fr') {
   try {
     if (typeof isoString !== 'string' || !isoString.trim()) return null;
     const d = new Date(isoString);
@@ -233,9 +251,15 @@ export function formatParisDisplayFromUtcIso(isoString) {
     const hour = pick(timeParts, 'hour').padStart(2, '0');
     const minute = pick(timeParts, 'minute').padStart(2, '0');
 
+    const tz = getParisTimezoneAbbr(d);
+    const timeStr =
+      locale === 'en'
+        ? `${hour}:${minute} (${tz})`
+        : `${hour}h${minute} (${tz})`;
+
     return {
       dateStr: `${day}/${month}/${year}`,
-      timeStr: `${hour}h${minute} (heure française)`,
+      timeStr,
     };
   } catch {
     return null;
@@ -261,10 +285,10 @@ const FEARLESS_LINE_PREFIX = CUSTOM_EMOJIS.fearless;
  * @param {string | null | undefined} fearless
  * @returns {string | null}
  */
-function getFearlessText(fearless) {
-  if (fearless === FEARLESS_VALUE_OUI) return 'Fearless : Oui';
-  if (fearless === FEARLESS_VALUE_NON) return 'Fearless : Non';
-  if (fearless === FEARLESS_VALUE_NIMPORTE) return "Fearless : N'importe";
+function getFearlessText(fearless, locale = 'fr') {
+  if (fearless === FEARLESS_VALUE_OUI) return t(locale, 'embed.fearlessOui');
+  if (fearless === FEARLESS_VALUE_NON) return t(locale, 'embed.fearlessNon');
+  if (fearless === FEARLESS_VALUE_NIMPORTE) return t(locale, 'embed.fearlessNimporte');
   return null;
 }
 
@@ -282,6 +306,7 @@ function getFearlessText(fearless) {
  *   scheduledAtEndIso?: string | null,
  *   nombreDeGames?: number | null,
  *   fearless?: string | null,
+ *   eloPrecision?: string | null,
  *   structureNameSnapshot?: string | null,
  *   structureInviteUrl?: string | null,
  * }} ScrimEmbedPayload
@@ -375,11 +400,13 @@ function buildScrimContactDescriptionLines(contactUserId, contactUsername) {
 }
 
 /** Explication courte sous le contact (bouton lien sous le message). */
-const SCRIM_CONTACT_BUTTON_HINT_LINES = [
-  "⚠️ Si la mention du contact ci-dessus n'est pas cliquable",
-  '👉 Rejoignez le serveur ScrimRéseau avec le bouton ci-dessous',
-  '👉 Cela permet généralement de rendre la mention cliquable',
-];
+function getScrimContactButtonHintLines(locale = 'fr') {
+  return [
+    t(locale, 'embed.contactHint1'),
+    t(locale, 'embed.contactHint2'),
+    t(locale, 'embed.contactHint3'),
+  ];
+}
 
 /**
  * URL HTTP(S) valide pour le bouton « serveur ScrimRéseau », ou null si absente / invalide.
@@ -412,7 +439,7 @@ export function getScrimCommunityServerUrlFromEnv() {
  * @param {string | null | undefined} [multiOpggUrl] URL Multi OP.GG (si présente, bouton ajouté)
  * @returns {import('discord.js').ActionRowBuilder<import('discord.js').ButtonBuilder>[]}
  */
-export function buildScrimCommunityServerActionRows(multiOpggUrl) {
+export function buildScrimCommunityServerActionRows(multiOpggUrl, locale = 'fr') {
   const communityUrl = getScrimCommunityServerUrlFromEnv();
 
   /** @type {import('discord.js').ButtonBuilder[]} */
@@ -421,7 +448,7 @@ export function buildScrimCommunityServerActionRows(multiOpggUrl) {
   if (communityUrl) {
     buttons.push(
       new ButtonBuilder()
-        .setLabel('🔗 Rejoindre le serveur ScrimRéseau')
+        .setLabel(t(locale, 'embed.joinServerButton'))
         .setStyle(ButtonStyle.Link)
         .setURL(communityUrl),
     );
@@ -462,7 +489,7 @@ export function formatScrimFormatLineForEmbed(formatKey, nombreDeGames) {
  * @param {ScrimEmbedPayload} payload
  * @returns {{ dateStr: string, timeStr: string }}
  */
-function resolveScrimDisplaySchedule(payload) {
+function resolveScrimDisplaySchedule(payload, locale = 'fr') {
   let dateStr = payload.dateStr;
   let timeStr = payload.timeStr;
 
@@ -471,25 +498,25 @@ function resolveScrimDisplaySchedule(payload) {
       const startIso = payload.scheduledAtIso;
       const endIso = payload.scheduledAtEndIso?.trim() || null;
       if (endIso) {
-        const paris = formatParisDisplayFromUtcIso(startIso);
+        const paris = formatParisDisplayFromUtcIso(startIso, locale);
         const range = formatParisFlexibleTimeRange(startIso, endIso);
         if (paris && range) {
           dateStr = paris.dateStr;
           timeStr = range;
         } else {
-          timeStr = 'Heure inconnue';
+          timeStr = t(locale, 'embed.unknownTime');
         }
       } else {
-        const paris = formatParisDisplayFromUtcIso(startIso);
+        const paris = formatParisDisplayFromUtcIso(startIso, locale);
         if (paris) {
           dateStr = paris.dateStr;
           timeStr = paris.timeStr;
         } else {
-          timeStr = 'Heure inconnue';
+          timeStr = t(locale, 'embed.unknownTime');
         }
       }
     } catch {
-      timeStr = 'Heure inconnue';
+      timeStr = t(locale, 'embed.unknownTime');
     }
   }
 
@@ -502,8 +529,8 @@ function resolveScrimDisplaySchedule(payload) {
  * @param {{ includeContactHints?: boolean }} [options]
  * @returns {string}
  */
-function buildScrimEmbedDescription(payload, options = {}) {
-  const { dateStr, timeStr } = resolveScrimDisplaySchedule(payload);
+function buildScrimEmbedDescription(payload, options = {}, locale = 'fr') {
+  const { dateStr, timeStr } = resolveScrimDisplaySchedule(payload, locale);
 
   const formatLine = formatScrimFormatLineForEmbed(
     payload.format,
@@ -514,14 +541,16 @@ function buildScrimEmbedDescription(payload, options = {}) {
   const line1 = `${getScrimEmoji('date')} ${dateStr} • ${timeStr}`;
 
   // ── Ligne 2 : format (• Fearless texte si présent) ──────────────────
-  const fearlessText = getFearlessText(payload.fearless ?? null);
+  const fearlessText = getFearlessText(payload.fearless ?? null, locale);
   const line2 = fearlessText
     ? `${getScrimEmoji('format')} ${formatLine} • ${fearlessText}`
     : `${getScrimEmoji('format')} ${formatLine}`;
 
-  // ── Ligne 3 : rang (emoji + texte, ligne dédiée) ────────────────────
+  // ── Ligne 3 : rang (emoji + texte + précision optionnelle) ─────────
   const rankEmoji = getRankEmoji(payload.rank);
-  const line3 = `${rankEmoji} ${payload.rank}`;
+  const localizedRank = localizeRank(payload.rank, locale);
+  const rankText = formatRankWithPrecision(localizedRank, payload.eloPrecision ?? null, locale);
+  const line3 = `${rankEmoji} ${rankText}`;
 
   // ── Ligne 4 : contact ───────────────────────────────────────────────
   const contactLine = buildScrimContactDescriptionLines(
@@ -536,19 +565,16 @@ function buildScrimEmbedDescription(payload, options = {}) {
   if (payload.structureNameSnapshot) {
     const name = payload.structureNameSnapshot;
     const url = payload.structureInviteUrl ?? null;
-    let structurePart;
     if (url) {
-      // Échappement des caractères markdown dans le nom pour éviter l'injection de liens
       const safeName = name.replace(/[\[\]()]/g, '\\$&');
-      structurePart = `[${safeName}](${url})`;
+      lines.push(t(locale, 'embed.structureLabelLinked', { safeName, url }));
     } else {
-      structurePart = name;
+      lines.push(t(locale, 'embed.structureLabel', { name }));
     }
-    lines.push(`\uD83C\uDF10 Structure : ${structurePart}`);
   }
 
   if (options.includeContactHints) {
-    lines.push(...SCRIM_CONTACT_BUTTON_HINT_LINES);
+    lines.push(...getScrimContactButtonHintLines(locale));
   }
 
   return lines.join('\n');
@@ -561,10 +587,10 @@ function buildScrimEmbedDescription(payload, options = {}) {
  * @param {{ includeContactHints?: boolean }} [options]
  * @returns {EmbedBuilder}
  */
-function buildScrimEmbedWithStatus(payload, color, _statusLine, options = {}) {
+function buildScrimEmbedWithStatus(payload, color, _statusLine, options = {}, locale = 'fr') {
   return new EmbedBuilder()
     .setColor(color)
-    .setDescription(buildScrimEmbedDescription(payload, options));
+    .setDescription(buildScrimEmbedDescription(payload, options, locale));
 }
 
 /**
@@ -572,7 +598,7 @@ function buildScrimEmbedWithStatus(payload, color, _statusLine, options = {}) {
  * @param {Record<string, unknown>} dbRow ligne `scrim_posts`
  * @returns {{ content: null, embeds: EmbedBuilder[], components: [] }}
  */
-export function buildScrimSupersededMessageEditOptions(dbRow) {
+export function buildScrimSupersededMessageEditOptions(dbRow, locale = 'fr') {
   const payload = scrimDbRowToEmbedPayload(dbRow);
   return {
     content: null,
@@ -581,6 +607,8 @@ export function buildScrimSupersededMessageEditOptions(dbRow) {
         payload,
         SCRIM_EMBED_COLOR_SUPERSEDED,
         SCRIM_STATUS_LINE_SUPERSEDED,
+        {},
+        locale,
       ),
     ],
     components: [],
@@ -593,7 +621,7 @@ export function buildScrimSupersededMessageEditOptions(dbRow) {
  * @param {Record<string, unknown>} dbRow ligne `scrim_posts` après fermeture
  * @returns {{ content: null, embeds: EmbedBuilder[], components: [] }}
  */
-export function buildScrimClosedMessageEditOptions(status, dbRow) {
+export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr') {
   const payload = scrimDbRowToEmbedPayload(dbRow);
 
   if (status === 'closed_manual') {
@@ -604,6 +632,8 @@ export function buildScrimClosedMessageEditOptions(status, dbRow) {
           payload,
           SCRIM_EMBED_COLOR_CLOSED_MANUAL,
           SCRIM_STATUS_LINE_CLOSED_MANUAL,
+          {},
+          locale,
         ),
       ],
       /** Retire le bouton lien éventuellement présent sur l’annonce ouverte. */
@@ -618,6 +648,8 @@ export function buildScrimClosedMessageEditOptions(status, dbRow) {
           payload,
           SCRIM_EMBED_COLOR_CLOSED_EXPIRED,
           SCRIM_STATUS_LINE_CLOSED_EXPIRED,
+          {},
+          locale,
         ),
       ],
       components: [],
@@ -630,12 +662,13 @@ export function buildScrimClosedMessageEditOptions(status, dbRow) {
  * @param {ScrimEmbedPayload} payload
  * @returns {EmbedBuilder}
  */
-export function buildScrimEmbed(payload) {
+export function buildScrimEmbed(payload, locale = 'fr') {
   return buildScrimEmbedWithStatus(
     payload,
     SCRIM_EMBED_COLOR_ACTIVE,
     SCRIM_STATUS_LINE_ACTIVE,
     { includeContactHints: true },
+    locale,
   );
 }
 
@@ -668,6 +701,10 @@ export function scrimDbRowToEmbedPayload(row) {
     scheduledAtEndIso: scheduledAtEnd,
     nombreDeGames: parseNombreDeGamesFromTags(tagsRaw),
     fearless: parseFearlessFromTags(tagsRaw),
+    eloPrecision:
+      typeof row.elo_precision === 'string' && row.elo_precision.trim()
+        ? row.elo_precision.trim()
+        : null,
     structureNameSnapshot:
       typeof row.structure_name_snapshot === 'string' && row.structure_name_snapshot.trim()
         ? row.structure_name_snapshot.trim()

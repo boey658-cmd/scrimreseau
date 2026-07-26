@@ -1,15 +1,17 @@
 import { MessageFlags } from 'discord.js';
+import { t } from '../i18n/index.js';
 import { interactReply } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
 
 /**
  * @param {import('discord.js').ChatInputCommandInteraction} interaction
  * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']> }} ctx
+ * @param {string} [locale='fr']
  */
-export async function executeUnblockScrimUserCore(interaction, ctx) {
+export async function executeUnblockScrimUserCore(interaction, ctx, locale = 'fr') {
   if (!interaction.inGuild()) {
     await interactReply(interaction, {
-      content: '❌ Cette commande doit être utilisée sur un serveur.',
+      content: t(locale, 'generic.guildOnly'),
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -21,7 +23,7 @@ export async function executeUnblockScrimUserCore(interaction, ctx) {
 
   if (info.changes === 0) {
     await interactReply(interaction, {
-      content: `ℹ️ **${user.tag}** n’était pas bloqué pour les scrims.`,
+      content: t(locale, 'scrimModeration.notBlocked', { tag: user.tag }),
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -34,7 +36,7 @@ export async function executeUnblockScrimUserCore(interaction, ctx) {
   });
 
   await interactReply(interaction, {
-    content: `✅ Les annonces de **${user.tag}** pourront à nouveau être diffusées sur ce serveur.`,
+    content: t(locale, 'scrimModeration.unblockSuccess', { tag: user.tag }),
     flags: MessageFlags.Ephemeral,
   });
 }

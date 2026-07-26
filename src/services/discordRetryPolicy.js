@@ -118,6 +118,14 @@ export function classifyDiscordEditError(err) {
     };
   }
 
+  if (numStatus === 403) {
+    return {
+      kind: 'terminal',
+      code: 'HTTP_403',
+      message: shortMsg,
+    };
+  }
+
   if (numStatus !== null && numStatus >= 500 && numStatus < 600) {
     return {
       kind: 'retryable',

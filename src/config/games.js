@@ -265,9 +265,46 @@ export const GAME_SLASH_CHOICES_UI_PRIMARY = Object.freeze([
  * Discord limite à 25 choix ; le catalogue LoL actuel tient dans cette limite.
  * @returns {{ name: string, value: string }[]}
  */
+const RANK_EN_LABELS = Object.freeze({
+  'Fer': 'Iron',
+  'Bronze': 'Bronze',
+  'Argent': 'Silver',
+  'Or': 'Gold',
+  'Platine': 'Platinum',
+  '\u00c9meraude': 'Emerald',
+  'Diamant': 'Diamond',
+  'Master': 'Master',
+  'Grandmaster': 'Grandmaster',
+  'Challenger': 'Challenger',
+  'Bronze / Argent': 'Bronze \u2013 Silver',
+  'Argent / Or': 'Silver \u2013 Gold',
+  'Or / Platine': 'Gold \u2013 Platinum',
+  'Platine / \u00c9meraude': 'Platinum \u2013 Emerald',
+  '\u00c9meraude / Diamant': 'Emerald \u2013 Diamond',
+  'Diamant / Master': 'Diamond \u2013 Master',
+  'Master / Grandmaster': 'Master \u2013 Grandmaster',
+  'Grandmaster / Challenger': 'Grandmaster \u2013 Challenger',
+  'Mix niveau': 'Mixed Rank',
+});
+
 export function getPrimaryGameRankChoicesForSlash() {
   const g = GAMES[UI_PRIMARY_GAME_KEY];
-  return g.ranks.map((r) => ({ name: r, value: r }));
+  return g.ranks.map((r) => ({ name: RANK_EN_LABELS[r] ?? r, value: r }));
+}
+
+/**
+ * Traduit un rang (valeur interne DB) pour l'affichage selon la locale.
+ * - FR : retourne la valeur telle quelle (ex. `'Platine'`).
+ * - EN : retourne le label anglais si disponible (ex. `'Platinum'`).
+ * Les rangs composites sont également traduits (ex. `'Bronze / Argent'` → `'Bronze – Silver'`).
+ *
+ * @param {string} rankKey  Valeur DB interne (ex. `'Platine'`)
+ * @param {string} [locale]  'fr' (défaut) ou 'en'
+ * @returns {string}
+ */
+export function localizeRank(rankKey, locale = 'fr') {
+  if (locale !== 'en') return rankKey;
+  return RANK_EN_LABELS[rankKey] ?? rankKey;
 }
 
 export function getGame(gameKey) {

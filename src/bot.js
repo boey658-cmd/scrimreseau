@@ -6,7 +6,7 @@ import {
   MessageFlags,
 } from 'discord.js';
 import { commandList } from './commands/index.js';
-import { getDb, preparePlayerSearchStatements, prepareStatements } from './database/db.js';
+import { closeDb, getDb, preparePlayerSearchStatements, prepareStatements } from './database/db.js';
 import { startDailyDevReportJob } from './services/dailyDevReportJob.js';
 import { startDiscordEditRetryJob } from './services/discordEditRetryJob.js';
 import { startDiscordTaskQueue } from './services/discordTaskQueue.js';
@@ -18,12 +18,14 @@ import {
   startDashboardRefreshJob,
   updateNetworkDashboard,
 } from './services/networkDashboard.js';
+import { getGuildLocale, t } from './i18n/index.js';
 import {
   interactAutocompleteRespond,
   interactFollowUp,
   interactReply,
 } from './utils/interactionDiscord.js';
 import { configureDiscordLogger, logger } from './utils/logger.js';
+import { isPersistentBroadcastEnabled } from './utils/persistentBroadcastFlag.js';
 
 export async function startBot() {
   const token = process.env.DISCORD_TOKEN;
@@ -70,6 +72,18 @@ export async function startBot() {
     // Dashboard réseau : update initiale au démarrage + job 1h
     void updateNetworkDashboard(readyClient, stmts).catch(() => {});
     startDashboardRefreshJob(readyClient, stmts);
+    if (isPersistentBroadcastEnabled()) {
+      import('./services/scrimBroadcastDeliveryJob.js').then(
+        ({ startScrimBroadcastDeliveryJob, recoverStaleScrimBroadcastDeliveries }) => {
+          recoverStaleScrimBroadcastDeliveries(db, stmts);
+          startScrimBroadcastDeliveryJob(readyClient, db, stmts);
+        },
+      ).catch((err) => {
+        logger.error('bot: échec démarrage scrimBroadcastDeliveryJob', {
+          message: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
@@ -123,8 +137,9 @@ export async function startBot() {
         stack: err instanceof Error ? err.stack : undefined,
       });
 
+      const errLocale = getGuildLocale(interaction.guildId, stmts);
       const payload = {
-        content: '❌ Une erreur est survenue. Réessaie plus tard.',
+        content: t(errLocale, 'generic.error'),
         flags: MessageFlags.Ephemeral,
       };
 
@@ -153,6 +168,55 @@ export async function startBot() {
     logger.info('Bot a quitté un serveur — dashboard refresh', { guild_id: guild.id });
     scheduleNetworkDashboardUpdate(client, stmts);
   });
+
+  // Graceful shutdown : SIGINT et SIGTERM
+  // Guard d'idempotence : si les deux signaux arrivent simultanément, une seule séquence s'exécute.
+  /** @type {Promise<void> | null} */
+  let shutdownPromise = null;
+
+  const performShutdown = async (signal) => {
+    logger.info(`bot: signal ${signal} reçu — graceful shutdown`);
+
+    // 1. Arrêter le worker persistant en premier (attend la passe courante)
+    if (isPersistentBroadcastEnabled()) {
+      try {
+        const { stopScrimBroadcastDeliveryJob } = await import('./services/scrimBroadcastDeliveryJob.js');
+        await stopScrimBroadcastDeliveryJob();
+        logger.info('bot: scrimBroadcastDeliveryJob arrêté');
+      } catch (err) {
+        logger.error('bot: erreur arrêt scrimBroadcastDeliveryJob', {
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // 2. Fermer le client Discord
+    try {
+      client.destroy();
+      logger.info('bot: client Discord détruit');
+    } catch {
+      /* ignore */
+    }
+
+    // 3. Fermer SQLite après le client et le worker
+    closeDb();
+
+    process.exit(0);
+  };
+
+  const gracefulShutdown = (signal) => {
+    if (!shutdownPromise) {
+      shutdownPromise = performShutdown(signal).catch((err) => {
+        logger.error('bot: erreur fatale graceful shutdown', {
+          message: err instanceof Error ? err.message : String(err),
+        });
+        process.exit(1);
+      });
+    }
+  };
+
+  process.once('SIGINT', () => gracefulShutdown('SIGINT'));
+  process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
   await client.login(token);
   return { client };

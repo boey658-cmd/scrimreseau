@@ -1,28 +1,29 @@
 import { MessageFlags, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
+import { getGuildLocale, t } from '../i18n/index.js';
 import { interactReply } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
 import { validateDiscordInviteUrl } from '../utils/validation.js';
 
 export const structureLien = {
   data: new SlashCommandBuilder()
-    .setName('structure-lien')
-    .setDescription('Gère le lien Discord public de votre structure partenaire ScrimRéseau')
+    .setName('structure-link')
+    .setDescription('Manage the Discord link associated with a structure.')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addSubcommand((sub) =>
       sub
         .setName('set')
-        .setDescription('Définit le lien d\'invitation Discord de votre structure')
+        .setDescription('Set the Discord invite link associated with your structure.')
         .addStringOption((opt) =>
           opt
             .setName('lien')
-            .setDescription('Lien d\'invitation Discord (ex. https://discord.gg/xxxx)')
+            .setDescription('Discord invite link (e.g. https://discord.gg/xxxx).')
             .setRequired(true),
         ),
     )
     .addSubcommand((sub) =>
       sub
         .setName('remove')
-        .setDescription('Retire le lien Discord de votre structure'),
+        .setDescription('Remove the Discord invite link associated with your structure.'),
     ),
 
   /**
@@ -32,23 +33,24 @@ export const structureLien = {
   async execute(interaction, ctx) {
     if (!interaction.inGuild()) {
       await interactReply(interaction, {
-        content: '❌ Cette commande ne peut être utilisée que dans un serveur.',
+        content: t('fr', 'structureLink.guildOnly'),
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
     const guildId = interaction.guildId;
+    const locale = getGuildLocale(guildId, ctx.stmts);
     const sub = interaction.options.getSubcommand(true);
 
-    // ── /structure-lien set ───────────────────────────────────────────────
+    // ── /structure-link set ───────────────────────────────────────────────
     if (sub === 'set') {
       const lienRaw = interaction.options.getString('lien', true);
       const res = validateDiscordInviteUrl(lienRaw);
 
       if (!res.ok) {
         await interactReply(interaction, {
-          content: `❌ ${res.error}`,
+          content: res.errorCode ? t(locale, res.errorCode) : `❌ ${res.error}`,
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -67,7 +69,7 @@ export const structureLien = {
           message: err instanceof Error ? err.message : String(err),
         });
         await interactReply(interaction, {
-          content: '❌ Une erreur est survenue lors de l\'enregistrement. Réessayez plus tard.',
+          content: t(locale, 'structureLink.dbErrorSet'),
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -80,13 +82,13 @@ export const structureLien = {
       });
 
       await interactReply(interaction, {
-        content: '✅ Lien Discord de la structure enregistré.',
+        content: t(locale, 'structureLink.setSuccess'),
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
-    // ── /structure-lien remove ────────────────────────────────────────────
+    // ── /structure-link remove ────────────────────────────────────────────
     if (sub === 'remove') {
       let changes = 0;
       try {
@@ -98,7 +100,7 @@ export const structureLien = {
           message: err instanceof Error ? err.message : String(err),
         });
         await interactReply(interaction, {
-          content: '❌ Une erreur est survenue lors de la suppression. Réessayez plus tard.',
+          content: t(locale, 'structureLink.dbErrorRemove'),
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -106,7 +108,7 @@ export const structureLien = {
 
       if (changes === 0) {
         await interactReply(interaction, {
-          content: 'ℹ️ Aucun lien Discord n\'était configuré pour cette structure.',
+          content: t(locale, 'structureLink.removeNotFound'),
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -118,7 +120,7 @@ export const structureLien = {
       });
 
       await interactReply(interaction, {
-        content: '✅ Lien Discord de la structure retiré.',
+        content: t(locale, 'structureLink.removeSuccess'),
         flags: MessageFlags.Ephemeral,
       });
     }

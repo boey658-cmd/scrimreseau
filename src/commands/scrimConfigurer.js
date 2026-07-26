@@ -1,5 +1,5 @@
 /**
- * /scrim-configurer — Panneau de configuration interactif ScrimRéseau.
+ * /scrim-config — Panneau de configuration interactif ScrimRéseau.
  *
  * Remplace les sous-commandes /scrim-config (channel, command-channel,
  * permissions, messages, view) par une interface avec embed, boutons et
@@ -37,8 +37,12 @@ import {
 } from '../services/scrimMessagePolicy.js';
 import { scheduleNetworkDashboardUpdate } from '../services/networkDashboard.js';
 import { assertGuildAdministrator } from '../utils/guildAdministratorGuard.js';
-import { mayConfigureScrimReceptionChannel } from '../utils/guildScrimReceptionGate.js';
+import {
+  buildScrimReceptionConfigRefusalContent,
+  mayConfigureScrimReceptionChannel,
+} from '../utils/guildScrimReceptionGate.js';
 import { logger } from '../utils/logger.js';
+import { getGuildLocale, createTranslator, t } from '../i18n/index.js';
 
 // ---------------------------------------------------------------------------
 // Constantes
@@ -102,132 +106,122 @@ function roleDisplay(roleId, guild) {
 // Constructeurs d'embeds
 // ---------------------------------------------------------------------------
 
-function buildMainEmbed(config, guild, statusMsg = null) {
-  const receptionText = channelDisplay(config.reception?.channel_id, guild) ?? `*Non configuré*`;
-  const usageText = channelDisplay(config.usage?.channel_id, guild) ?? `*Tous les salons*`;
+function buildMainEmbed(config, guild, statusMsg = null, T = (k) => k) {
+  const receptionText = channelDisplay(config.reception?.channel_id, guild) ?? T('scrimConfig.notConfigured');
+  const usageText = channelDisplay(config.usage?.channel_id, guild) ?? T('scrimConfig.allChannels');
 
   const permMode = config.permMode?.mode ?? 'everyone';
   let permsText;
   if (permMode === 'everyone') {
-    permsText = 'Tout le monde';
+    permsText = T('scrimConfig.permEveryone');
   } else if (config.allowedRoles.length === 0) {
-    permsText = `Rôles spécifiques *(aucun rôle configuré)*`;
+    permsText = T('scrimConfig.permRolesNone');
   } else {
     const roleList = config.allowedRoles.map((r) => roleDisplay(r.role_id, guild)).join(', ');
-    permsText = `Rôles : ${roleList}`;
+    permsText = T('scrimConfig.permRoles', { list: roleList });
   }
 
   const policy = config.policy?.policy ?? 'keep';
-  const policyText = policy === 'delete' ? 'Supprimer automatiquement' : 'Garder et marquer';
+  const policyText = policy === 'delete' ? T('scrimConfig.policyDelete') : T('scrimConfig.policyKeep');
 
   const descLines = [];
   if (statusMsg) { descLines.push(statusMsg, ''); }
-  descLines.push('Utilisez les boutons pour modifier la configuration de ce serveur.');
+  descLines.push(T('scrimConfig.mainDescription'));
 
   return new EmbedBuilder()
-    .setTitle('⚙️ Configuration ScrimRéseau')
+    .setTitle(T('scrimConfig.mainTitle'))
     .setDescription(descLines.join('\n'))
     .setColor(EMBED_COLOR)
     .addFields(
-      { name: '📢 Salon des annonces', value: receptionText, inline: true },
-      { name: '📝 Salon des commandes', value: usageText, inline: true },
+      { name: T('scrimConfig.fieldReception'), value: receptionText, inline: true },
+      { name: T('scrimConfig.fieldCommand'), value: usageText, inline: true },
       { name: '\u200b', value: '\u200b', inline: true },
-      { name: '🔑 Permissions /recherche-scrim', value: permsText, inline: false },
-      { name: '💬 Messages inactifs', value: policyText, inline: false },
+      { name: T('scrimConfig.fieldPerms'), value: permsText, inline: false },
+      { name: T('scrimConfig.fieldMessages'), value: policyText, inline: false },
     )
     .setTimestamp();
 }
 
-function buildSalonsEmbed(config, guild, statusMsg = null) {
-  const receptionText = channelDisplay(config.reception?.channel_id, guild) ?? `*Non configuré*`;
-  const usageText = channelDisplay(config.usage?.channel_id, guild) ?? `*Tous les salons*`;
+function buildSalonsEmbed(config, guild, statusMsg = null, T = (k) => k) {
+  const receptionText = channelDisplay(config.reception?.channel_id, guild) ?? T('scrimConfig.notConfigured');
+  const usageText = channelDisplay(config.usage?.channel_id, guild) ?? T('scrimConfig.allChannels');
 
   const descLines = [];
   if (statusMsg) { descLines.push(statusMsg, ''); }
   descLines.push(
-    `**Salon des annonces** — où sont publiées les recherches de scrim.`,
-    `**Salon des commandes** — où \`/recherche-scrim\` peut être utilisée.`,
+    T('scrimConfig.salonsDescLine1'),
+    T('scrimConfig.salonsDescLine2'),
   );
 
   return new EmbedBuilder()
-    .setTitle('📢 Configuration — Salons')
+    .setTitle(T('scrimConfig.salonsTitle'))
     .setDescription(descLines.join('\n'))
     .setColor(EMBED_COLOR)
     .addFields(
-      { name: 'Salon des annonces', value: receptionText, inline: true },
-      { name: 'Salon des commandes', value: usageText, inline: true },
+      { name: T('scrimConfig.salonsFieldReception'), value: receptionText, inline: true },
+      { name: T('scrimConfig.salonsFieldCommand'), value: usageText, inline: true },
     );
 }
 
-function buildPermsEmbed(config, guild, statusMsg = null) {
+function buildPermsEmbed(config, guild, statusMsg = null, T = (k) => k) {
   const permMode = config.permMode?.mode ?? 'everyone';
   let currentText;
   if (permMode === 'everyone') {
-    currentText = 'Tout le monde';
+    currentText = T('scrimConfig.permEveryone');
   } else if (config.allowedRoles.length === 0) {
-    currentText = `Rôles spécifiques *(aucun rôle configuré)*`;
+    currentText = T('scrimConfig.permRolesNone');
   } else {
     const roleList = config.allowedRoles.map((r) => roleDisplay(r.role_id, guild)).join(', ');
-    currentText = `Rôles : ${roleList}`;
+    currentText = T('scrimConfig.permRoles', { list: roleList });
   }
 
   const descLines = [];
   if (statusMsg) { descLines.push(statusMsg, ''); }
   descLines.push(
-    `Sélectionnez les rôles autorisés à utiliser \`/recherche-scrim\` (max ${MAX_ROLES}).`,
-    `La sélection **remplace** la liste actuelle.`,
-    `Pour autoriser tout le monde, utilisez le bouton dédié.`,
+    T('scrimConfig.permsDesc', { max: MAX_ROLES }),
+    // desc merged into permsDesc
+
   );
 
   return new EmbedBuilder()
-    .setTitle('🔑 Configuration — Permissions')
+    .setTitle(T('scrimConfig.permsTitle'))
     .setDescription(descLines.join('\n'))
     .setColor(EMBED_COLOR)
-    .addFields({ name: 'Configuration actuelle', value: currentText });
+    .addFields({ name: T('scrimConfig.permsFieldCurrent'), value: currentText });
 }
 
-function buildMsgsEmbed(config, statusMsg = null) {
+function buildMsgsEmbed(config, statusMsg = null, T = (k) => k) {
   const policy = config.policy?.policy ?? 'keep';
   const policyText = policy === 'delete'
-    ? 'Supprimer automatiquement'
-    : 'Garder et marquer les messages';
+    ? T('scrimConfig.msgsPolicyDeleteLabel')
+    : T('scrimConfig.msgsPolicyKeepLabel');
 
   const descLines = [];
   if (statusMsg) { descLines.push(statusMsg, ''); }
-  descLines.push(`Comportement des messages de scrims **terminés, expirés ou remplacés** sur ce serveur.`);
+  descLines.push(T('scrimConfig.msgsDesc'));
 
   return new EmbedBuilder()
-    .setTitle('💬 Configuration — Messages inactifs')
+    .setTitle(T('scrimConfig.msgsTitle'))
     .setDescription(descLines.join('\n'))
     .setColor(EMBED_COLOR)
-    .addFields({ name: 'Configuration actuelle', value: policyText });
+    .addFields({ name: T('scrimConfig.msgsFieldCurrent'), value: policyText });
 }
 
-function buildResetEmbed(statusMsg = null) {
+function buildResetEmbed(statusMsg = null, T = (k) => k) {
   const descLines = [];
   if (statusMsg) { descLines.push(statusMsg, ''); }
-  descLines.push(
-    'Choisissez ce que vous souhaitez réinitialiser.',
-    `**Attention** : la réinitialisation complète demande une confirmation.`,
-  );
+  descLines.push(T('scrimConfig.resetDesc'));
 
   return new EmbedBuilder()
-    .setTitle('🔄 Réinitialisation')
+    .setTitle(T('scrimConfig.resetTitle'))
     .setDescription(descLines.join('\n'))
     .setColor(0xed4245);
 }
 
-function buildResetConfirmEmbed() {
+function buildResetConfirmEmbed(T = (k) => k) {
   return new EmbedBuilder()
-    .setTitle(`⚠️ Confirmer la réinitialisation complète ?`)
-    .setDescription(
-      `Cette action va **supprimer toute la configuration** de ce serveur :\n` +
-      `- Salon des annonces\n` +
-      `- Salon des commandes\n` +
-      `- Permissions\n` +
-      `- Politique des messages\n\n` +
-      `**Cette action est irréversible. Confirmez-vous ?**`,
-    )
+    .setTitle(T('scrimConfig.resetConfirmTitle'))
+    .setDescription(T('scrimConfig.resetConfirmDesc'))
     .setColor(0xed4245);
 }
 
@@ -235,24 +229,24 @@ function buildResetConfirmEmbed() {
 // Constructeurs de composants
 // ---------------------------------------------------------------------------
 
-function buildMainComponents(uid) {
+function buildMainComponents(uid, T = (k) => k) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(mkId(uid, 'salons')).setLabel('📢 Salons').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(mkId(uid, 'perms')).setLabel('🔑 Permissions').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(mkId(uid, 'msgs')).setLabel('💬 Messages').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(mkId(uid, 'reset')).setLabel('🔄 Réinitialiser').setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId(mkId(uid, 'close')).setLabel('✖ Fermer').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(mkId(uid, 'salons')).setLabel(T('scrimConfig.btnSalons')).setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(mkId(uid, 'perms')).setLabel(T('scrimConfig.btnPerms')).setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(mkId(uid, 'msgs')).setLabel(T('scrimConfig.btnMsgs')).setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(mkId(uid, 'reset')).setLabel(T('scrimConfig.btnReset')).setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId(mkId(uid, 'close')).setLabel(T('scrimConfig.btnClose')).setStyle(ButtonStyle.Secondary),
     ),
   ];
 }
 
-function buildSalonsComponents(uid) {
+function buildSalonsComponents(uid, T = (k) => k) {
   return [
     new ActionRowBuilder().addComponents(
       new ChannelSelectMenuBuilder()
         .setCustomId(mkId(uid, 'chan_ann'))
-        .setPlaceholder('Choisir le salon des annonces scrim')
+        .setPlaceholder(T('scrimConfig.placeholderReception'))
         .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
         .setMinValues(1)
         .setMaxValues(1),
@@ -260,13 +254,13 @@ function buildSalonsComponents(uid) {
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(mkId(uid, 'rem_ann'))
-        .setLabel('Retirer le salon des annonces')
+        .setLabel(T('scrimConfig.btnRemoveReception'))
         .setStyle(ButtonStyle.Danger),
     ),
     new ActionRowBuilder().addComponents(
       new ChannelSelectMenuBuilder()
         .setCustomId(mkId(uid, 'chan_cmd'))
-        .setPlaceholder('Restreindre /recherche-scrim à un salon')
+        .setPlaceholder(T('scrimConfig.placeholderCommand'))
         .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
         .setMinValues(1)
         .setMaxValues(1),
@@ -274,83 +268,83 @@ function buildSalonsComponents(uid) {
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(mkId(uid, 'rem_cmd'))
-        .setLabel('Autoriser les commandes partout')
+        .setLabel(T('scrimConfig.btnAllChannels'))
         .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(mkId(uid, 'main')).setLabel('← Retour').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(mkId(uid, 'main')).setLabel(T('scrimConfig.btnBack')).setStyle(ButtonStyle.Secondary),
     ),
   ];
 }
 
-function buildPermsComponents(uid) {
+function buildPermsComponents(uid, T = (k) => k) {
   return [
     new ActionRowBuilder().addComponents(
       new RoleSelectMenuBuilder()
         .setCustomId(mkId(uid, 'roles'))
-        .setPlaceholder(`Sélectionnez les rôles autorisés (1 à ${MAX_ROLES})`)
+        .setPlaceholder(T('scrimConfig.placeholderRoles', { max: MAX_ROLES }))
         .setMinValues(1)
         .setMaxValues(MAX_ROLES),
     ),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(mkId(uid, 'perm_all'))
-        .setLabel('Autoriser tout le monde')
+        .setLabel(T('scrimConfig.btnAllEveryone'))
         .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(mkId(uid, 'main')).setLabel('← Retour').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(mkId(uid, 'main')).setLabel(T('scrimConfig.btnBack')).setStyle(ButtonStyle.Secondary),
     ),
   ];
 }
 
-function buildMsgsComponents(uid) {
+function buildMsgsComponents(uid, T = (k) => k) {
   return [
     new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(mkId(uid, 'msg_sel'))
-        .setPlaceholder('Choisir le comportement des messages inactifs')
+        .setPlaceholder(T('scrimConfig.msgsPlaceholder'))
         .addOptions(
           new StringSelectMenuOptionBuilder()
-            .setLabel('Garder et marquer les messages')
+            .setLabel(T('scrimConfig.msgsPolicyKeepLabel'))
             .setValue(LIFECYCLE_POLICY_KEEP)
-            .setDescription('Comportement par défaut'),
+            .setDescription(T('scrimConfig.msgsPolicyKeepDesc')),
           new StringSelectMenuOptionBuilder()
-            .setLabel('Supprimer automatiquement')
+            .setLabel(T('scrimConfig.msgsPolicyDeleteLabel'))
             .setValue(LIFECYCLE_POLICY_DELETE)
-            .setDescription('Supprime les annonces de scrims terminés/remplacés'),
+            .setDescription(T('scrimConfig.msgsPolicyDeleteDesc')),
         ),
     ),
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(mkId(uid, 'main')).setLabel('← Retour').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(mkId(uid, 'main')).setLabel(T('scrimConfig.btnBack')).setStyle(ButtonStyle.Secondary),
     ),
   ];
 }
 
-function buildResetComponents(uid) {
+function buildResetComponents(uid, T = (k) => k) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(mkId(uid, 'rst_ann')).setLabel('Salon annonces').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(mkId(uid, 'rst_cmd')).setLabel('Salon commandes').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(mkId(uid, 'rst_perm')).setLabel('Permissions').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(mkId(uid, 'rst_msg')).setLabel('Messages').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(mkId(uid, 'main')).setLabel('← Retour').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(mkId(uid, 'rst_ann')).setLabel(T('scrimConfig.resetBtnAnn')).setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(mkId(uid, 'rst_cmd')).setLabel(T('scrimConfig.resetBtnCmd')).setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(mkId(uid, 'rst_perm')).setLabel(T('scrimConfig.resetBtnPerm')).setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(mkId(uid, 'rst_msg')).setLabel(T('scrimConfig.resetBtnMsg')).setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(mkId(uid, 'main')).setLabel(T('scrimConfig.btnBack')).setStyle(ButtonStyle.Secondary),
     ),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(mkId(uid, 'rst_all'))
-        .setLabel('⚠️ Tout réinitialiser')
+        .setLabel(T('scrimConfig.resetBtnAll'))
         .setStyle(ButtonStyle.Danger),
     ),
   ];
 }
 
-function buildResetConfirmComponents(uid) {
+function buildResetConfirmComponents(uid, T = (k) => k) {
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(mkId(uid, 'rst_ok'))
-        .setLabel('✅ Confirmer')
+        .setLabel(T('scrimConfig.resetConfirmOk'))
         .setStyle(ButtonStyle.Danger),
       new ButtonBuilder()
         .setCustomId(mkId(uid, 'rst_ko'))
-        .setLabel('❌ Annuler')
+        .setLabel(T('scrimConfig.resetConfirmCancel'))
         .setStyle(ButtonStyle.Secondary),
     ),
   ];
@@ -388,29 +382,30 @@ function transactionSetEveryone(ctx, guildId) {
  * @param {string} guildId
  * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']>, db: import('better-sqlite3').Database }} ctx
  * @param {string} uid
+ * @param {import('discord.js').InteractionCollector<any>} collector
  */
-async function handleComponent(i, guild, guildId, ctx, uid) {
+async function handleComponent(i, guild, guildId, ctx, uid, collector, T = (k) => k) {
   const action = i.customId.split(':')[2];
 
   // ── Navigation ────────────────────────────────────────────────────────
   if (action === 'main') {
     const config = readConfig(guildId, ctx.stmts);
-    return i.update({ embeds: [buildMainEmbed(config, guild)], components: buildMainComponents(uid) });
+    return i.update({ embeds: [buildMainEmbed(config, guild, null, T)], components: buildMainComponents(uid, T) });
   }
   if (action === 'salons') {
     const config = readConfig(guildId, ctx.stmts);
-    return i.update({ embeds: [buildSalonsEmbed(config, guild)], components: buildSalonsComponents(uid) });
+    return i.update({ embeds: [buildSalonsEmbed(config, guild, null, T)], components: buildSalonsComponents(uid, T) });
   }
   if (action === 'perms') {
     const config = readConfig(guildId, ctx.stmts);
-    return i.update({ embeds: [buildPermsEmbed(config, guild)], components: buildPermsComponents(uid) });
+    return i.update({ embeds: [buildPermsEmbed(config, guild, null, T)], components: buildPermsComponents(uid, T) });
   }
   if (action === 'msgs') {
     const config = readConfig(guildId, ctx.stmts);
-    return i.update({ embeds: [buildMsgsEmbed(config)], components: buildMsgsComponents(uid) });
+    return i.update({ embeds: [buildMsgsEmbed(config, null, T)], components: buildMsgsComponents(uid, T) });
   }
   if (action === 'reset') {
-    return i.update({ embeds: [buildResetEmbed()], components: buildResetComponents(uid) });
+    return i.update({ embeds: [buildResetEmbed(null, T)], components: buildResetComponents(uid, T) });
   }
 
   // ── Salon des annonces — set (async : check bypass + permissions bot) ──
@@ -422,13 +417,13 @@ async function handleComponent(i, guild, guildId, ctx, uid) {
       // Vérification gate réception (même logique que l'ancien channel set)
       const bypassRow = ctx.stmts.getGuildScrimReceptionBypass.get(guildId);
       if (!mayConfigureScrimReceptionChannel(guild.memberCount, bypassRow)) {
-        const config = readConfig(guildId, ctx.stmts);
-        logger.info('scrimConfigurer.chan_ann — réception non validée', { guild_id: guildId });
+        logger.info('scrimConfigurer.chan_ann — accès révoqué pendant session', { guild_id: guildId });
+        // Stoppe le collector → déclenche le handler 'end' qui nettoie activePanels
+        collector.stop('access_revoked');
         return i.editReply({
-          embeds: [buildSalonsEmbed(config, guild,
-            `⛔ Ce salon ne peut pas être configuré — votre serveur doit être validé manuellement par l'équipe ScrimRéseau.`,
-          )],
-          components: buildSalonsComponents(uid),
+          content: buildScrimReceptionConfigRefusalContent(T),
+          embeds: [],
+          components: [],
         });
       }
 
@@ -440,8 +435,8 @@ async function handleComponent(i, guild, guildId, ctx, uid) {
       if (!channel) {
         const config = readConfig(guildId, ctx.stmts);
         return i.editReply({
-          embeds: [buildSalonsEmbed(config, guild, `❌ Salon introuvable.`)],
-          components: buildSalonsComponents(uid),
+          embeds: [buildSalonsEmbed(config, guild, T('scrimConfig.chanAnnNotFound'), T)],
+          components: buildSalonsComponents(uid, T),
         });
       }
 
@@ -454,8 +449,8 @@ async function handleComponent(i, guild, guildId, ctx, uid) {
       if (!check.ok) {
         const config = readConfig(guildId, ctx.stmts);
         return i.editReply({
-          embeds: [buildSalonsEmbed(config, guild, `❌ ${check.error}`)],
-          components: buildSalonsComponents(uid),
+          embeds: [buildSalonsEmbed(config, guild, `❌ ${check.error}`, T)],
+          components: buildSalonsComponents(uid, T),
         });
       }
 
@@ -471,8 +466,8 @@ async function handleComponent(i, guild, guildId, ctx, uid) {
 
       const config = readConfig(guildId, ctx.stmts);
       return i.editReply({
-        embeds: [buildSalonsEmbed(config, guild, `✅ Salon des annonces configuré : <#${channelId}>`)],
-        components: buildSalonsComponents(uid),
+        embeds: [buildSalonsEmbed(config, guild, T('scrimConfig.chanAnnSet', { channel: `<#${channelId}>` }), T)],
+        components: buildSalonsComponents(uid, T),
       });
     } catch (err) {
       logger.error('scrimConfigurer.chan_ann', {
@@ -481,8 +476,8 @@ async function handleComponent(i, guild, guildId, ctx, uid) {
       });
       const config = readConfig(guildId, ctx.stmts);
       return i.editReply({
-        embeds: [buildSalonsEmbed(config, guild, `❌ Une erreur est survenue. Réessayez.`)],
-        components: buildSalonsComponents(uid),
+        embeds: [buildSalonsEmbed(config, guild, T('scrimConfig.genericError'), T)],
+        components: buildSalonsComponents(uid, T),
       });
     }
   }
@@ -495,10 +490,10 @@ async function handleComponent(i, guild, guildId, ctx, uid) {
       logger.event('scrimConfigurer.channel.remove', { guild_id: guildId, user_id: i.user.id });
     }
     const statusMsg = info.changes > 0
-      ? `✅ Salon des annonces retiré.`
-      : `ℹ️ Aucun salon d'annonces n'était configuré.`;
+      ? T('scrimConfig.chanAnnRemoved')
+      : T('scrimConfig.chanAnnNone');
     const config = readConfig(guildId, ctx.stmts);
-    return i.update({ embeds: [buildSalonsEmbed(config, guild, statusMsg)], components: buildSalonsComponents(uid) });
+    return i.update({ embeds: [buildSalonsEmbed(config, guild, statusMsg, T)], components: buildSalonsComponents(uid, T) });
   }
 
   // ── Salon des commandes — set ────────────────────────────────────────
@@ -512,16 +507,16 @@ async function handleComponent(i, guild, guildId, ctx, uid) {
     ) {
       const config = readConfig(guildId, ctx.stmts);
       return i.update({
-        embeds: [buildSalonsEmbed(config, guild, `❌ Choisis un salon texte ou une annonce.`)],
-        components: buildSalonsComponents(uid),
+        embeds: [buildSalonsEmbed(config, guild, T('scrimConfig.chanCmdWrongType'), T)],
+        components: buildSalonsComponents(uid, T),
       });
     }
     ctx.stmts.upsertScrimUsageChannel.run({ guild_id: guildId, channel_id: channelId });
     logger.event('scrimConfigurer.command_channel.set', { guild_id: guildId, channel_id: channelId, user_id: i.user.id });
     const config = readConfig(guildId, ctx.stmts);
     return i.update({
-      embeds: [buildSalonsEmbed(config, guild, `✅ Salon des commandes configuré : <#${channelId}>`)],
-      components: buildSalonsComponents(uid),
+      embeds: [buildSalonsEmbed(config, guild, T('scrimConfig.chanCmdSet', { channel: `<#${channelId}>` }), T)],
+      components: buildSalonsComponents(uid, T),
     });
   }
 
@@ -531,8 +526,8 @@ async function handleComponent(i, guild, guildId, ctx, uid) {
     logger.event('scrimConfigurer.command_channel.reset', { guild_id: guildId, user_id: i.user.id });
     const config = readConfig(guildId, ctx.stmts);
     return i.update({
-      embeds: [buildSalonsEmbed(config, guild, `✅ Les commandes sont maintenant autorisées partout.`)],
-      components: buildSalonsComponents(uid),
+      embeds: [buildSalonsEmbed(config, guild, T('scrimConfig.chanCmdRemoved'), T)],
+      components: buildSalonsComponents(uid, T),
     });
   }
 
@@ -542,8 +537,8 @@ async function handleComponent(i, guild, guildId, ctx, uid) {
     if (roleIds.length === 0 || roleIds.length > MAX_ROLES) {
       const config = readConfig(guildId, ctx.stmts);
       return i.update({
-        embeds: [buildPermsEmbed(config, guild, `❌ Sélectionnez entre 1 et ${MAX_ROLES} rôles.`)],
-        components: buildPermsComponents(uid),
+        embeds: [buildPermsEmbed(config, guild, T('scrimConfig.rolesInvalidCount', { max: MAX_ROLES }), T)],
+        components: buildPermsComponents(uid, T),
       });
     }
     transactionSetRoles(ctx, guildId, roleIds);
@@ -551,8 +546,8 @@ async function handleComponent(i, guild, guildId, ctx, uid) {
     const config = readConfig(guildId, ctx.stmts);
     const roleList = roleIds.map((rId) => `<@&${rId}>`).join(', ');
     return i.update({
-      embeds: [buildPermsEmbed(config, guild, `✅ Permissions mises à jour : ${roleList}`)],
-      components: buildPermsComponents(uid),
+      embeds: [buildPermsEmbed(config, guild, T('scrimConfig.rolesSet', { roles: roleList }), T)],
+      components: buildPermsComponents(uid, T),
     });
   }
 
@@ -562,8 +557,8 @@ async function handleComponent(i, guild, guildId, ctx, uid) {
     logger.event('scrimConfigurer.permissions.everyone', { guild_id: guildId, user_id: i.user.id });
     const config = readConfig(guildId, ctx.stmts);
     return i.update({
-      embeds: [buildPermsEmbed(config, guild, `✅ Tout le monde peut utiliser /recherche-scrim.`)],
-      components: buildPermsComponents(uid),
+      embeds: [buildPermsEmbed(config, guild, T('scrimConfig.everyoneSet'), T)],
+      components: buildPermsComponents(uid, T),
     });
   }
 
@@ -573,8 +568,8 @@ async function handleComponent(i, guild, guildId, ctx, uid) {
     if (policy !== LIFECYCLE_POLICY_KEEP && policy !== LIFECYCLE_POLICY_DELETE) {
       const config = readConfig(guildId, ctx.stmts);
       return i.update({
-        embeds: [buildMsgsEmbed(config, `❌ Valeur invalide.`)],
-        components: buildMsgsComponents(uid),
+        embeds: [buildMsgsEmbed(config, T('scrimConfig.msgsPolicyInvalid'), T)],
+        components: buildMsgsComponents(uid, T),
       });
     }
     ctx.stmts.upsertScrimMessageLifecyclePolicy.run({
@@ -585,11 +580,11 @@ async function handleComponent(i, guild, guildId, ctx, uid) {
     logger.event('scrimConfigurer.messages.set', { guild_id: guildId, policy, user_id: i.user.id });
     const config = readConfig(guildId, ctx.stmts);
     const policyLabel = policy === LIFECYCLE_POLICY_DELETE
-      ? 'Supprimer automatiquement'
-      : 'Garder et marquer les messages';
+      ? T('scrimConfig.msgsPolicyDeleteLabel')
+      : T('scrimConfig.msgsPolicyKeepLabel');
     return i.update({
-      embeds: [buildMsgsEmbed(config, `✅ Politique mise à jour : **${policyLabel}**`)],
-      components: buildMsgsComponents(uid),
+      embeds: [buildMsgsEmbed(config, T('scrimConfig.msgsPolicySet', { policy: policyLabel }), T)],
+      components: buildMsgsComponents(uid, T),
     });
   }
 
@@ -598,27 +593,27 @@ async function handleComponent(i, guild, guildId, ctx, uid) {
     const info = ctx.stmts.deleteGuildChannel.run(guildId, GAME_KEY);
     if (info.changes > 0) scheduleNetworkDashboardUpdate(i.client, ctx.stmts);
     logger.event('scrimConfigurer.reset.salon_annonces', { guild_id: guildId, user_id: i.user.id });
-    return i.update({ embeds: [buildResetEmbed(`✅ Salon des annonces réinitialisé.`)], components: buildResetComponents(uid) });
+    return i.update({ embeds: [buildResetEmbed(T('scrimConfig.resetAnnDone'), T)], components: buildResetComponents(uid, T) });
   }
   if (action === 'rst_cmd') {
     ctx.stmts.deleteScrimUsageChannel.run(guildId);
     logger.event('scrimConfigurer.reset.salon_commandes', { guild_id: guildId, user_id: i.user.id });
-    return i.update({ embeds: [buildResetEmbed(`✅ Salon des commandes réinitialisé.`)], components: buildResetComponents(uid) });
+    return i.update({ embeds: [buildResetEmbed(T('scrimConfig.resetCmdDone'), T)], components: buildResetComponents(uid, T) });
   }
   if (action === 'rst_perm') {
     transactionSetEveryone(ctx, guildId);
     logger.event('scrimConfigurer.reset.permissions', { guild_id: guildId, user_id: i.user.id });
-    return i.update({ embeds: [buildResetEmbed(`✅ Permissions réinitialisées (tout le monde).`)], components: buildResetComponents(uid) });
+    return i.update({ embeds: [buildResetEmbed(T('scrimConfig.resetPermDone'), T)], components: buildResetComponents(uid, T) });
   }
   if (action === 'rst_msg') {
     ctx.stmts.deleteScrimMessageLifecyclePolicy.run(guildId);
     logger.event('scrimConfigurer.reset.messages', { guild_id: guildId, user_id: i.user.id });
-    return i.update({ embeds: [buildResetEmbed(`✅ Politique des messages réinitialisée.`)], components: buildResetComponents(uid) });
+    return i.update({ embeds: [buildResetEmbed(T('scrimConfig.resetMsgDone'), T)], components: buildResetComponents(uid, T) });
   }
 
   // ── Réinitialisation complète — confirmation ──────────────────────────
   if (action === 'rst_all') {
-    return i.update({ embeds: [buildResetConfirmEmbed()], components: buildResetConfirmComponents(uid) });
+    return i.update({ embeds: [buildResetConfirmEmbed(T)], components: buildResetConfirmComponents(uid, T) });
   }
   if (action === 'rst_ok') {
     ctx.db.transaction(() => {
@@ -632,12 +627,12 @@ async function handleComponent(i, guild, guildId, ctx, uid) {
     logger.event('scrimConfigurer.reset.all', { guild_id: guildId, user_id: i.user.id });
     const config = readConfig(guildId, ctx.stmts);
     return i.update({
-      embeds: [buildMainEmbed(config, guild, `✅ Configuration entièrement réinitialisée.`)],
-      components: buildMainComponents(uid),
+      embeds: [buildMainEmbed(config, guild, T('scrimConfig.resetAllDone'), T)],
+      components: buildMainComponents(uid, T),
     });
   }
   if (action === 'rst_ko') {
-    return i.update({ embeds: [buildResetEmbed()], components: buildResetComponents(uid) });
+    return i.update({ embeds: [buildResetEmbed(null, T)], components: buildResetComponents(uid, T) });
   }
 }
 
@@ -645,10 +640,15 @@ async function handleComponent(i, guild, guildId, ctx, uid) {
 // Export de la commande
 // ---------------------------------------------------------------------------
 
+// Export utilisé uniquement par la suite de tests pour tester le vrai
+// parcours du handler de composant (notamment le catch de chan_ann).
+// Non utilisé en production.
+export { handleComponent as _handleComponentForTest };
+
 export const scrimConfigurer = {
   data: new SlashCommandBuilder()
-    .setName('scrim-configurer')
-    .setDescription('Panneau de configuration interactif ScrimRéseau')
+    .setName('scrim-config')
+    .setDescription('Configure ScrimRéseau for this server.')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   /**
@@ -656,12 +656,13 @@ export const scrimConfigurer = {
    * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']>, db: import('better-sqlite3').Database }} ctx
    */
   async execute(interaction, ctx) {
+    // assertGuildAdministrator gère aussi le cas hors-guilde (fallback fr par défaut)
     const ok = await assertGuildAdministrator(interaction);
     if (!ok) return;
 
     if (!interaction.guild || !interaction.guildId) {
       await interaction.reply({
-        content: `❌ Cette commande doit être utilisée sur un serveur.`,
+        content: t('fr', 'generic.guildOnly'),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -670,6 +671,35 @@ export const scrimConfigurer = {
     const guildId = interaction.guildId;
     const guild = interaction.guild;
     const uid = interaction.user.id;
+
+    // Locale résolu dès que guildId est disponible — avant le gate et les erreurs catch.
+    const locale = getGuildLocale(guildId, ctx.stmts);
+    const T = createTranslator(locale);
+
+    // ── Gate réception scrim — vérification avant toute création de panneau ──
+    // Exécuté avant deferReply, readConfig, activePanels et le collector.
+    // Utilise le même helper que l'ancien setupScrimChannel.
+    try {
+      const bypassRow = ctx.stmts.getGuildScrimReceptionBypass.get(guildId);
+      if (!mayConfigureScrimReceptionChannel(guild.memberCount, bypassRow)) {
+        logger.info('scrimConfigurer.execute — réception non validée', { guild_id: guildId });
+        await interaction.reply({
+          content: buildScrimReceptionConfigRefusalContent(T),
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+    } catch (gateErr) {
+      logger.error('scrimConfigurer.execute — erreur lecture bypass', {
+        guild_id: guildId,
+        message: gateErr instanceof Error ? gateErr.message : String(gateErr),
+      });
+      await interaction.reply({
+        content: T('scrimConfig.accessError'),
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
 
     // Ferme un panneau déjà ouvert par cet utilisateur sur ce même serveur
     const sKey = sessionKey(guildId, uid);
@@ -688,14 +718,14 @@ export const scrimConfigurer = {
         guild_id: guildId,
         message: err instanceof Error ? err.message : String(err),
       });
-      await interaction.editReply({ content: `❌ Impossible de lire la configuration. Réessayez plus tard.` });
+      await interaction.editReply({ content: T('scrimConfig.readConfigError') });
       return;
     }
 
     // Envoi du panneau initial — aucune écriture DB ici
     const message = await interaction.editReply({
-      embeds: [buildMainEmbed(config, guild)],
-      components: buildMainComponents(uid),
+      embeds: [buildMainEmbed(config, guild, null, T)],
+      components: buildMainComponents(uid, T),
     });
 
     const collector = message.createMessageComponentCollector({
@@ -710,7 +740,7 @@ export const scrimConfigurer = {
       if (i.customId === mkId(uid, 'close')) {
         collector.stop('closed');
         try {
-          await i.update({ content: `✅ Panneau fermé.`, embeds: [], components: [] });
+          await i.update({ content: T('scrimConfig.panelClosed'), embeds: [], components: [] });
         } catch {
           /* ignore */
         }
@@ -720,7 +750,7 @@ export const scrimConfigurer = {
       // Re-vérification des permissions admin à chaque interaction
       if (!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
         try {
-          await i.reply({ content: `❌ Vous n'avez plus les permissions nécessaires.`, flags: MessageFlags.Ephemeral });
+          await i.reply({ content: T('scrimConfig.noPermissions'), flags: MessageFlags.Ephemeral });
         } catch {
           /* ignore */
         }
@@ -728,7 +758,7 @@ export const scrimConfigurer = {
       }
 
       try {
-        await handleComponent(i, guild, guildId, ctx, uid);
+        await handleComponent(i, guild, guildId, ctx, uid, collector, T);
       } catch (err) {
         logger.error('scrimConfigurer.collect', {
           guild_id: guildId,
@@ -740,13 +770,13 @@ export const scrimConfigurer = {
           const errConfig = readConfig(guildId, ctx.stmts);
           if (i.deferred) {
             await i.editReply({
-              embeds: [buildMainEmbed(errConfig, guild, `❌ Une erreur est survenue.`)],
-              components: buildMainComponents(uid),
+              embeds: [buildMainEmbed(errConfig, guild, T('scrimConfig.genericError'), T)],
+              components: buildMainComponents(uid, T),
             });
           } else if (!i.replied) {
             await i.update({
-              embeds: [buildMainEmbed(errConfig, guild, `❌ Une erreur est survenue.`)],
-              components: buildMainComponents(uid),
+              embeds: [buildMainEmbed(errConfig, guild, T('scrimConfig.genericError'), T)],
+              components: buildMainComponents(uid, T),
             });
           }
         } catch {
@@ -758,9 +788,9 @@ export const scrimConfigurer = {
     collector.on('end', async (_, reason) => {
       activePanels.delete(sKey);
       // Expiration naturelle : on signale à l'utilisateur
-      if (reason !== 'replaced' && reason !== 'closed') {
+      if (reason !== 'replaced' && reason !== 'closed' && reason !== 'access_revoked') {
         try {
-          await interaction.editReply({ content: `⏰ Le panneau a expiré.`, embeds: [], components: [] });
+          await interaction.editReply({ content: T('scrimConfig.panelExpired'), embeds: [], components: [] });
         } catch {
           /* ignore */
         }

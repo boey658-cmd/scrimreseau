@@ -1,4 +1,4 @@
-import {
+﻿import {
   MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
@@ -18,18 +18,17 @@ import {
   interactReply,
 } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
+import { getGuildLocale, t } from '../i18n/index.js';
 
 export const spammer = {
   data: new SlashCommandBuilder()
-    .setName('spammer')
-    .setDescription(
-      'Signale un joueur pour spam de recherches scrim LoL (administrateurs uniquement).',
-    )
+    .setName('report-spam')
+    .setDescription('Report a user for excessive scrim search spam.')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addUserOption((opt) =>
       opt
         .setName('user')
-        .setDescription('Joueur concerné')
+        .setDescription('Select the user to report.')
         .setRequired(true),
     ),
 
@@ -38,10 +37,11 @@ export const spammer = {
    * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']> }} ctx
    */
   async execute(interaction, ctx) {
+    const locale = getGuildLocale(interaction.guildId, ctx.stmts);
     try {
       if (!interaction.inGuild()) {
         await interactReply(interaction, {
-          content: '❌ Cette commande doit être utilisée sur un serveur.',
+          content: t(locale, 'reportSpam.guildOnly'),
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -53,7 +53,7 @@ export const spammer = {
         )
       ) {
         await interactReply(interaction, {
-          content: '❌ Réservé aux administrateurs du serveur.',
+          content: t(locale, 'reportSpam.adminOnly'),
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -64,14 +64,14 @@ export const spammer = {
 
       if (target.id === reporterId) {
         await interactReply(interaction, {
-          content: '❌ Tu ne peux pas te signaler toi-même.',
+          content: t(locale, 'reportSpam.selfReport'),
           flags: MessageFlags.Ephemeral,
         });
         return;
       }
       if (target.bot) {
         await interactReply(interaction, {
-          content: '❌ Tu ne peux pas signaler un bot.',
+          content: t(locale, 'reportSpam.botReport'),
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -79,8 +79,7 @@ export const spammer = {
 
       if (checkRecentSpamReport(ctx.stmts, reporterId, target.id)) {
         await interactReply(interaction, {
-          content:
-            '❌ Tu as déjà signalé ce joueur récemment. Réessaie dans quelques jours.',
+          content: t(locale, 'reportSpam.alreadyReported'),
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -88,7 +87,7 @@ export const spammer = {
 
       if (checkGlobalBlacklist(ctx.stmts, target.id).result === 'blocked') {
         await interactReply(interaction, {
-          content: '❌ Ce joueur est déjà blacklist.',
+          content: t(locale, 'reportSpam.alreadyBlacklisted'),
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -98,8 +97,7 @@ export const spammer = {
       if (!reportChannelId) {
         logger.error('spammer — SPAM_REPORT_CHANNEL_ID manquant');
         await interactReply(interaction, {
-          content:
-            '❌ Salon de signalement non configuré (SPAM_REPORT_CHANNEL_ID).',
+          content: t(locale, 'reportSpam.noChannel'),
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -117,8 +115,7 @@ export const spammer = {
           channel_id: reportChannelId,
         });
         await interactReply(interaction, {
-          content:
-            '❌ Le salon de modération configuré est inaccessible pour ce bot.',
+          content: t(locale, 'reportSpam.channelInaccessible'),
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -140,8 +137,7 @@ export const spammer = {
       });
       const payloads = buildSpamReportMessages(header, historyLines);
 
-      const MOD_FAIL_USER =
-        '❌ Le signalement n’a pas pu être transmis au salon de modération. Réessaie plus tard.';
+      const MOD_FAIL_USER = t(locale, 'reportSpam.modFail');
 
       let modPartsSent = 0;
       for (let i = 0; i < payloads.length; i += 1) {
@@ -217,7 +213,7 @@ export const spammer = {
       );
 
       await interactReply(interaction, {
-        content: '✅ Signalement envoyé.',
+        content: t(locale, 'reportSpam.success'),
         flags: MessageFlags.Ephemeral,
       });
     } catch (err) {
@@ -228,12 +224,12 @@ export const spammer = {
       try {
         if (interaction.deferred || interaction.replied) {
           await interactFollowUp(interaction, {
-            content: '❌ Erreur lors du signalement.',
+            content: t(locale, 'reportSpam.error'),
             flags: MessageFlags.Ephemeral,
           });
         } else {
           await interactReply(interaction, {
-            content: '❌ Erreur lors du signalement.',
+            content: t(locale, 'reportSpam.error'),
             flags: MessageFlags.Ephemeral,
           });
         }

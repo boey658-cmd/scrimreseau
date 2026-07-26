@@ -14,18 +14,17 @@ import {
   interactReply,
 } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
+import { getGuildLocale, t } from '../i18n/index.js';
 
 export const scrimTrouve = {
   data: new SlashCommandBuilder()
-    .setName('scrim-trouve')
-    .setDescription(
-      'Marque ta recherche de scrim League of Legends comme terminée',
-    )
+    .setName('scrim-close')
+    .setDescription('Close one of your active scrim searches.')
     .addIntegerOption((opt) =>
       opt
         .setName('id')
         .setDescription(
-          `Identifiant public de ta recherche (1–${SCRIM_PUBLIC_ID_MAX})`,
+          `Your scrim search public ID (1–${SCRIM_PUBLIC_ID_MAX}).`,
         )
         .setRequired(true)
         .setMinValue(1)
@@ -38,6 +37,7 @@ export const scrimTrouve = {
    */
   async execute(interaction, ctx) {
     const publicId = interaction.options.getInteger('id', true);
+    const locale = getGuildLocale(interaction.guildId, ctx.stmts);
 
     try {
       const blState = checkGlobalBlacklist(ctx.stmts, interaction.user.id, {
@@ -45,14 +45,14 @@ export const scrimTrouve = {
       });
       if (blState.result === 'service_unavailable') {
         await interactReply(interaction, {
-          content: GLOBAL_BLACKLIST_SERVICE_UNAVAILABLE_MESSAGE,
+          content: t(locale, 'generic.blacklistServiceUnavailable'),
           flags: MessageFlags.Ephemeral,
         });
         return;
       }
       if (blState.result === 'blocked') {
         await interactReply(interaction, {
-          content: GLOBAL_BLACKLIST_USER_MESSAGE,
+          content: t(locale, 'generic.blacklistedUser'),
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -66,6 +66,7 @@ export const scrimTrouve = {
         ctx.stmts,
         publicId,
         interaction.user.id,
+        locale,
       );
 
       await interactEditReply(interaction, {
@@ -87,7 +88,7 @@ export const scrimTrouve = {
       try {
         const payload = {
           content:
-            '❌ Une erreur est survenue. Réessaie plus tard ou contacte un administrateur.',
+            t(locale, 'scrimClose.error'),
           flags: MessageFlags.Ephemeral,
         };
         if (interaction.deferred || interaction.replied) {

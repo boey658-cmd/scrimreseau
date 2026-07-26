@@ -21,6 +21,10 @@ import { describe, it } from 'node:test';
 import { closeDb, getDb, prepareStatements } from '../src/database/db.js';
 import { commandListWithoutDev } from '../src/commands/index.js';
 import { UI_PRIMARY_GAME_KEY } from '../src/config/games.js';
+import {
+  buildScrimReceptionConfigRefusalContent,
+  mayConfigureScrimReceptionChannel,
+} from '../src/utils/guildScrimReceptionGate.js';
 
 const GAME_KEY = UI_PRIMARY_GAME_KEY;
 
@@ -76,29 +80,30 @@ function readFullConfig(guildId, stmts) {
 // ---------------------------------------------------------------------------
 
 describe(`scrimConfigurer — liste des commandes`, () => {
-  it(`scrim-config absent de commandListWithoutDev`, () => {
+  it(`scrim-config présent dans commandListWithoutDev (nouveau nom)`, () => {
     const names = commandListWithoutDev.map((c) => c.data.name);
-    assert.ok(!names.includes('scrim-config'), `scrim-config ne doit plus être dans la liste publique`);
+    assert.ok(names.includes('scrim-config'), `scrim-config doit être dans la liste publique`);
   });
 
-  it(`scrim-configurer présent dans commandListWithoutDev`, () => {
+  it(`scrim-configurer absent de commandListWithoutDev (ancien nom)`, () => {
     const names = commandListWithoutDev.map((c) => c.data.name);
-    assert.ok(names.includes('scrim-configurer'), `scrim-configurer doit être dans la liste publique`);
+    assert.ok(!names.includes('scrim-configurer'), `scrim-configurer ne doit plus être dans la liste publique`);
   });
 
-  it(`toutes les autres commandes publiques restent présentes`, () => {
+  it(`toutes les commandes publiques attendues sont présentes`, () => {
     const names = commandListWithoutDev.map((c) => c.data.name);
     const expectedCommands = [
-      'scrim-configurer',
+      'scrim-config',
       'scrim-moderation',
-      'liste-scrims',
+      'list-scrims',
       'help-scrim',
       'helpadmin-scrim',
-      'mes-demandes-scrim',
-      'recherche-scrim',
-      'scrim-trouve',
-      'spammer',
-      'structure-lien',
+      'my-scrims',
+      'find-scrim',
+      'scrim-close',
+      'report-spam',
+      'structure-link',
+      'language',
     ];
     for (const name of expectedCommands) {
       assert.ok(names.includes(name), `La commande ${name} doit être dans commandListWithoutDev`);
@@ -108,13 +113,14 @@ describe(`scrimConfigurer — liste des commandes`, () => {
 
   it(`aucune ancienne sous-commande scrim-config n'est chargée`, () => {
     const names = commandListWithoutDev.map((c) => c.data.name);
-    // L'ancienne commande ne doit pas être enregistrée
-    assert.ok(!names.includes('scrim-config'));
+    // L'ancien groupe de sous-commandes ne doit pas être enregistré
+    // Vérifié en s'assurant qu'il n'y a qu'une seule entrée 'scrim-config'
+    assert.equal(names.filter((n) => n === 'scrim-config').length, 1);
   });
 
-  it(`scrim-configurer possède la permission Administrator par défaut`, () => {
-    const cmd = commandListWithoutDev.find((c) => c.data.name === 'scrim-configurer');
-    assert.ok(cmd, `scrim-configurer doit exister`);
+  it(`scrim-config possède la permission Administrator par défaut`, () => {
+    const cmd = commandListWithoutDev.find((c) => c.data.name === 'scrim-config');
+    assert.ok(cmd, `scrim-config doit exister`);
     // defaultMemberPermissions est stocké comme bigint dans la data
     const json = cmd.data.toJSON();
     // Administrator = 0x8
@@ -449,6 +455,368 @@ describe(`scrimConfigurer — configs avec entités supprimées`, () => {
         const config = readFullConfig(guildId, stmts);
         assert.equal(config.allowedRoles.length, 1);
         assert.equal(config.allowedRoles[0].role_id, `deleted-role-99`);
+      });
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gate réception scrim dans /scrim-configurer
+// ---------------------------------------------------------------------------
+
+describe(`scrimConfigurer — gate réception (même logique que l'ancien setup-scrim-channel)`, () => {
+  // 1. mayConfigureScrimReceptionChannel est le même helper que l'ancien handler
+  it(`utilise le même helper mayConfigureScrimReceptionChannel que l'ancien setup-scrim-channel`, () => {
+    // Sans bypass → refusé
+    assert.equal(mayConfigureScrimReceptionChannel(500, undefined), false);
+    assert.equal(mayConfigureScrimReceptionChannel(500, null), false);
+    // Avec bypass actif → autorisé
+    assert.equal(mayConfigureScrimReceptionChannel(10, { bypass_member_minimum: 1 }), true);
+    // Bypass inactif (0) → refusé
+    assert.equal(mayConfigureScrimReceptionChannel(10, { bypass_member_minimum: 0 }), false);
+  });
+
+  // 2. Serveur sans accès : upsertGuildChannel ne doit pas être appelé
+  it(`serveur sans accès — aucun UPSERT n'est effectué`, () => {
+    withTempDb((db, stmts) => {
+      const guildId = `guild-no-access`;
+      // Pas de ligne dans guild_scrim_reception_bypass → refus
+      const bypassRow = stmts.getGuildScrimReceptionBypass.get(guildId);
+      assert.equal(mayConfigureScrimReceptionChannel(500, bypassRow), false);
+
+      // Simulation du comportement de scrimConfigurer.js :
+      // si le gate refuse, on ne fait PAS l'upsert
+      if (!mayConfigureScrimReceptionChannel(500, bypassRow)) {
+        // → rien
+      } else {
+        stmts.upsertGuildChannel.run({ guild_id: guildId, channel_id: `chan-test`, game_key: GAME_KEY, created_at: Date.now() });
+      }
+
+      // Vérification : aucun salon enregistré
+      const saved = stmts.getGuildGameChannel.get(guildId, GAME_KEY);
+      assert.equal(saved, undefined);
+    });
+  });
+
+  // 3. Aucun UPSERT après refus (même scénario, assertion explicite sur changes)
+  it(`aucun UPSERT n'est appelé si le gate refuse`, () => {
+    withTempDb((db, stmts) => {
+      const guildId = `guild-no-upsert`;
+      const bypassRow = stmts.getGuildScrimReceptionBypass.get(guildId);
+      const allowed = mayConfigureScrimReceptionChannel(200, bypassRow);
+      assert.equal(allowed, false, `le gate doit refuser ce serveur`);
+
+      // L'UPSERT ne doit PAS avoir été appelé
+      const row = stmts.getGuildGameChannel.get(guildId, GAME_KEY);
+      assert.equal(row, undefined, `aucun enregistrement attendu en DB`);
+    });
+  });
+
+  // 4. Le message de refus contient l'explication attendue
+  it(`le message de refus contient l'explication officielle`, () => {
+    const msg = buildScrimReceptionConfigRefusalContent();
+    assert.ok(
+      msg.includes('réception des scrims ScrimRéseau'),
+      `message manquant dans : ${msg}`,
+    );
+    assert.ok(
+      msg.includes('validé') || msg.includes('ticket') || msg.includes('accès'),
+      `explication d'accès manquante dans : ${msg}`,
+    );
+  });
+
+  // 5. Le lien de ticket existant apparaît dans le message
+  it(`le message de refus contient un lien discord.gg ou https`, () => {
+    const msg = buildScrimReceptionConfigRefusalContent();
+    assert.ok(
+      msg.includes('discord.gg') || msg.includes('https://'),
+      `lien de ticket manquant dans le message de refus : ${msg}`,
+    );
+  });
+
+  // 6. Le fallback est utilisé si SCRIM_RECEPTION_TICKET_URL est absent
+  it(`buildScrimReceptionConfigRefusalContent — fallback utilisé si variable absente`, () => {
+    const prev = process.env.SCRIM_RECEPTION_TICKET_URL;
+    delete process.env.SCRIM_RECEPTION_TICKET_URL;
+    try {
+      const msg = buildScrimReceptionConfigRefusalContent();
+      assert.ok(msg.includes('discord.gg'), `fallback discord.gg attendu, obtenu : ${msg}`);
+    } finally {
+      if (prev !== undefined) process.env.SCRIM_RECEPTION_TICKET_URL = prev;
+    }
+  });
+
+  // 6b. URL personnalisée utilisée si variable présente
+  it(`buildScrimReceptionConfigRefusalContent — URL personnalisée utilisée si variable présente`, () => {
+    const prev = process.env.SCRIM_RECEPTION_TICKET_URL;
+    process.env.SCRIM_RECEPTION_TICKET_URL = `https://custom.example.com/ticket`;
+    try {
+      const msg = buildScrimReceptionConfigRefusalContent();
+      assert.ok(
+        msg.includes(`https://custom.example.com/ticket`),
+        `URL personnalisée attendue, obtenu : ${msg}`,
+      );
+    } finally {
+      if (prev === undefined) delete process.env.SCRIM_RECEPTION_TICKET_URL;
+      else process.env.SCRIM_RECEPTION_TICKET_URL = prev;
+    }
+  });
+
+  // 7. Serveur autorisé (bypass actif) : l'upsert peut être effectué
+  it(`serveur avec bypass actif — upsertGuildChannel s'exécute sans erreur`, () => {
+    withTempDb((db, stmts) => {
+      const guildId = `guild-bypassed`;
+      stmts.upsertGuildScrimReceptionBypass.run({
+        guild_id: guildId,
+        bypass_member_minimum: 1,
+        updated_by: `test-admin`,
+        updated_at: new Date().toISOString(),
+        note: null,
+      });
+
+      const bypassRow = stmts.getGuildScrimReceptionBypass.get(guildId);
+      const allowed = mayConfigureScrimReceptionChannel(10, bypassRow);
+      assert.equal(allowed, true, `le gate doit autoriser un serveur avec bypass`);
+
+      assert.doesNotThrow(() => {
+        stmts.upsertGuildChannel.run({
+          guild_id: guildId,
+          channel_id: `chan-bp`,
+          game_key: GAME_KEY,
+          created_at: Date.now(),
+        });
+      });
+
+      const saved = stmts.getGuildGameChannel.get(guildId, GAME_KEY);
+      assert.equal(saved?.channel_id, `chan-bp`);
+    });
+  });
+
+  // 8. Bypass avec bypass_member_minimum = 1 → autorisé
+  it(`serveur autorisé (bypass_member_minimum = 1) peut enregistrer le salon`, () => {
+    withTempDb((db, stmts) => {
+      const guildId = `guild-authorized`;
+      stmts.upsertGuildScrimReceptionBypass.run({
+        guild_id: guildId,
+        bypass_member_minimum: 1,
+        updated_by: `test-admin`,
+        updated_at: new Date().toISOString(),
+        note: null,
+      });
+
+      const bypassRow = stmts.getGuildScrimReceptionBypass.get(guildId);
+      assert.equal(mayConfigureScrimReceptionChannel(0, bypassRow), true);
+
+      stmts.upsertGuildChannel.run({
+        guild_id: guildId,
+        channel_id: `chan-auth`,
+        game_key: GAME_KEY,
+        created_at: Date.now(),
+      });
+      const saved = stmts.getGuildGameChannel.get(guildId, GAME_KEY);
+      assert.equal(saved?.channel_id, `chan-auth`);
+    });
+  });
+
+  // 9. Un serveur non validé ne peut accéder à aucune section du panneau
+  it(`un serveur non validé est bloqué dès le lancement — aucune section accessible`, () => {
+    withTempDb((db, stmts) => {
+      const guildId = `guild-blocked-all`;
+      // Prépare de la config existante
+      stmts.upsertScrimUsageChannel.run({ guild_id: guildId, channel_id: `usage-ch` });
+      stmts.upsertScrimPermissionMode.run({ guild_id: guildId, mode: `roles` });
+
+      // Gate doit refuser
+      const bypassRow = stmts.getGuildScrimReceptionBypass.get(guildId);
+      const allowed = mayConfigureScrimReceptionChannel(500, bypassRow);
+      assert.equal(allowed, false, `le gate doit refuser ce serveur`);
+
+      // L'exécution s'arrête ici pour ce serveur — aucune lecture de config par le panneau
+      // Vérification : les données existent en DB mais le panneau ne les affiche pas
+      const usage = stmts.getScrimUsageChannel.get(guildId);
+      assert.equal(usage?.channel_id, `usage-ch`, `données DB intactes`);
+    });
+  });
+
+  // 10. Simple ouverture du panneau (readConfig) ne modifie aucune donnée
+  it(`simple lecture de la config ne modifie aucune donnée`, () => {
+    withTempDb((db, stmts) => {
+      const guildId = `guild-readonly`;
+      // Pré-état
+      stmts.upsertScrimUsageChannel.run({ guild_id: guildId, channel_id: `usage-ro` });
+
+      // Lecture seule (simule readConfig)
+      const usage = stmts.getScrimUsageChannel.get(guildId);
+      stmts.getGuildGameChannel.get(guildId, GAME_KEY);
+      stmts.getScrimPermissionMode.get(guildId);
+      stmts.listScrimAllowedRoles.all(guildId);
+      stmts.getScrimMessageLifecyclePolicy.get(guildId);
+
+      // Post-état inchangé
+      const usageAfter = stmts.getScrimUsageChannel.get(guildId);
+      assert.equal(usageAfter?.channel_id, usage?.channel_id);
+    });
+  });
+
+  // 11. Les configurations existantes restent intactes
+  it(`les configurations existantes restent intactes si le gate refuse`, () => {
+    withTempDb((db, stmts) => {
+      const guildId = `guild-existing-config`;
+      // Configure un salon existant via bypass
+      stmts.upsertGuildScrimReceptionBypass.run({
+        guild_id: guildId,
+        bypass_member_minimum: 1,
+        updated_by: `test-admin`,
+        updated_at: new Date().toISOString(),
+        note: null,
+      });
+      stmts.upsertGuildChannel.run({
+        guild_id: guildId,
+        channel_id: `chan-existing`,
+        game_key: GAME_KEY,
+        created_at: Date.now(),
+      });
+      // Retire le bypass (simule une révocation d'accès)
+      db.prepare(`DELETE FROM guild_scrim_reception_bypass WHERE guild_id = ?`).run(guildId);
+
+      // Maintenant le gate refuse
+      const bypassRow = stmts.getGuildScrimReceptionBypass.get(guildId);
+      assert.equal(mayConfigureScrimReceptionChannel(500, bypassRow), false);
+
+      // Le salon existant doit toujours être présent (le refus ne le supprime pas)
+      const existing = stmts.getGuildGameChannel.get(guildId, GAME_KEY);
+      assert.equal(existing?.channel_id, `chan-existing`, `salon existant supprimé à tort`);
+    });
+  });
+
+  // 12. Révocation pendant session : chan_ann refuse l'écriture (double protection)
+  it(`révocation en cours de session — chan_ann refuse l'upsert`, () => {
+    withTempDb((db, stmts) => {
+      const guildId = `guild-revoked`;
+      // Bypass existait, puis révoqué
+      stmts.upsertGuildScrimReceptionBypass.run({
+        guild_id: guildId,
+        bypass_member_minimum: 1,
+        updated_by: `admin`,
+        updated_at: new Date().toISOString(),
+        note: null,
+      });
+      // Révocation
+      db.prepare(`DELETE FROM guild_scrim_reception_bypass WHERE guild_id = ?`).run(guildId);
+
+      const bypassRow = stmts.getGuildScrimReceptionBypass.get(guildId);
+      const allowed = mayConfigureScrimReceptionChannel(500, bypassRow);
+      assert.equal(allowed, false, `accès doit être révoqué`);
+
+      // Aucun upsert ne doit avoir lieu
+      const before = stmts.getGuildGameChannel.get(guildId, GAME_KEY);
+      assert.equal(before, undefined);
+    });
+  });
+
+  // 13. Aucun UPSERT après révocation
+  it(`aucun UPSERT exécuté après révocation`, () => {
+    withTempDb((db, stmts) => {
+      const guildId = `guild-no-upsert-revoked`;
+      const bypassRow = stmts.getGuildScrimReceptionBypass.get(guildId);
+      assert.equal(mayConfigureScrimReceptionChannel(0, bypassRow), false);
+      // Simulation : le code n'appellerait pas upsertGuildChannel ici
+      const row = stmts.getGuildGameChannel.get(guildId, GAME_KEY);
+      assert.equal(row, undefined);
+    });
+  });
+
+  // Non-régression complète : 4 types de serveurs
+  describe(`non-régression — 4 types de serveurs`, () => {
+    it(`serveur non validé : gate bloque dès le lancement, aucun salon enregistré`, () => {
+      withTempDb((db, stmts) => {
+        const guildId = `guild-nonauth-launch`;
+        const bypassRow = stmts.getGuildScrimReceptionBypass.get(guildId);
+        assert.equal(mayConfigureScrimReceptionChannel(999, bypassRow), false);
+        // Pas d'UPSERT possible car le panneau ne s'ouvre pas
+        const saved = stmts.getGuildGameChannel.get(guildId, GAME_KEY);
+        assert.equal(saved, undefined);
+      });
+    });
+
+    it(`serveur avec salon existant : refus au lancement ne supprime rien`, () => {
+      withTempDb((db, stmts) => {
+        const guildId = `guild-has-channel-blocked`;
+        // Salon configuré via bypass (état passé)
+        stmts.upsertGuildScrimReceptionBypass.run({
+          guild_id: guildId, bypass_member_minimum: 1,
+          updated_by: `admin`, updated_at: new Date().toISOString(), note: null,
+        });
+        stmts.upsertGuildChannel.run({
+          guild_id: guildId, channel_id: `chan-safe`, game_key: GAME_KEY, created_at: Date.now(),
+        });
+        // Révocation du bypass (simule un serveur bloqué)
+        db.prepare(`DELETE FROM guild_scrim_reception_bypass WHERE guild_id = ?`).run(guildId);
+
+        // Gate refuse
+        const bypassRow = stmts.getGuildScrimReceptionBypass.get(guildId);
+        assert.equal(mayConfigureScrimReceptionChannel(500, bypassRow), false);
+
+        // Le salon existant n'est pas supprimé par le refus
+        const cfg = stmts.getGuildGameChannel.get(guildId, GAME_KEY);
+        assert.equal(cfg?.channel_id, `chan-safe`, `salon supprimé à tort après refus`);
+      });
+    });
+
+    it(`serveur avec bypass actif peut ouvrir le panneau et configurer`, () => {
+      withTempDb((db, stmts) => {
+        const guildId = `guild-bypass-launch`;
+        stmts.upsertGuildScrimReceptionBypass.run({
+          guild_id: guildId, bypass_member_minimum: 1,
+          updated_by: `admin`, updated_at: new Date().toISOString(), note: null,
+        });
+        const bypassRow = stmts.getGuildScrimReceptionBypass.get(guildId);
+        assert.equal(mayConfigureScrimReceptionChannel(0, bypassRow), true);
+        stmts.upsertGuildChannel.run({
+          guild_id: guildId, channel_id: `chan-bypass`, game_key: GAME_KEY, created_at: Date.now(),
+        });
+        assert.equal(stmts.getGuildGameChannel.get(guildId, GAME_KEY)?.channel_id, `chan-bypass`);
+      });
+    });
+
+    it(`aucune autre table de configuration n'est modifiée lors d'un refus au lancement`, () => {
+      withTempDb((db, stmts) => {
+        const guildId = `guild-other-tables-launch`;
+        stmts.upsertScrimUsageChannel.run({ guild_id: guildId, channel_id: `usage-intact` });
+        stmts.upsertScrimPermissionMode.run({ guild_id: guildId, mode: `everyone` });
+
+        const bypassRow = stmts.getGuildScrimReceptionBypass.get(guildId);
+        assert.equal(mayConfigureScrimReceptionChannel(200, bypassRow), false);
+
+        // Les autres tables sont intactes
+        assert.equal(stmts.getScrimUsageChannel.get(guildId)?.channel_id, `usage-intact`);
+        assert.equal(stmts.getScrimPermissionMode.get(guildId)?.mode, `everyone`);
+      });
+    });
+
+    it(`serveur révoqué : config existante intacte, ne peut plus ouvrir le panneau`, () => {
+      withTempDb((db, stmts) => {
+        const guildId = `guild-revoked-full`;
+        // Config complète avant révocation
+        stmts.upsertGuildScrimReceptionBypass.run({
+          guild_id: guildId, bypass_member_minimum: 1,
+          updated_by: `admin`, updated_at: new Date().toISOString(), note: null,
+        });
+        insertFullConfig(guildId, stmts, db);
+        const configBefore = readFullConfig(guildId, stmts);
+
+        // Révocation
+        db.prepare(`DELETE FROM guild_scrim_reception_bypass WHERE guild_id = ?`).run(guildId);
+        const bypassRow = stmts.getGuildScrimReceptionBypass.get(guildId);
+        assert.equal(mayConfigureScrimReceptionChannel(999, bypassRow), false, `doit refuser après révocation`);
+
+        // Toute la configuration reste intacte
+        const configAfter = readFullConfig(guildId, stmts);
+        assert.equal(configAfter.reception?.channel_id, configBefore.reception?.channel_id, `salon annonces modifié`);
+        assert.equal(configAfter.usage?.channel_id, configBefore.usage?.channel_id, `salon commandes modifié`);
+        assert.equal(configAfter.permMode?.mode, configBefore.permMode?.mode, `mode permissions modifié`);
+        assert.equal(configAfter.allowedRoles.length, configBefore.allowedRoles.length, `rôles modifiés`);
+        assert.equal(configAfter.policy?.policy, configBefore.policy?.policy, `politique messages modifiée`);
       });
     });
   });

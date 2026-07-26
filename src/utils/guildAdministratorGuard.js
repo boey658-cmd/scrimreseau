@@ -1,21 +1,17 @@
 import { MessageFlags, PermissionFlagsBits } from 'discord.js';
+import { t } from '../i18n/index.js';
 import { interactReply } from './interactionDiscord.js';
 
-const MSG_NEED_GUILD =
-  '❌ Cette commande doit être utilisée sur un serveur.';
-
-const MSG_NEED_ADMIN =
-  '❌ Tu dois être **administrateur** du serveur pour utiliser cette commande.';
-
 /**
- * Vérifie que l’interaction a lieu en guilde et que l’auteur est administrateur.
+ * Vérifie que l'interaction a lieu en guilde et que l'auteur est administrateur.
  * @param {import('discord.js').ChatInputCommandInteraction} interaction
- * @returns {Promise<boolean>} false si une réponse d’erreur a été envoyée
+ * @param {string} [locale='fr'] Langue pour les messages d'erreur
+ * @returns {Promise<boolean>} false si une réponse d'erreur a été envoyée
  */
-export async function assertGuildAdministrator(interaction) {
+export async function assertGuildAdministrator(interaction, locale = 'fr') {
   if (!interaction.inGuild()) {
     await interactReply(interaction, {
-      content: MSG_NEED_GUILD,
+      content: t(locale, 'generic.guildOnly'),
       flags: MessageFlags.Ephemeral,
     });
     return false;
@@ -24,7 +20,7 @@ export async function assertGuildAdministrator(interaction) {
     !interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)
   ) {
     await interactReply(interaction, {
-      content: MSG_NEED_ADMIN,
+      content: t(locale, 'generic.adminOnly'),
       flags: MessageFlags.Ephemeral,
     });
     return false;

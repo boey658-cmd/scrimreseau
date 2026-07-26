@@ -3,6 +3,7 @@
  * Vérif. ponctuelle via API (guild.members.fetch) — le bot doit être dans cette guilde.
  */
 
+import { t } from '../i18n/index.js';
 import { logger } from './logger.js';
 
 /** Discord API : Unknown Member (utilisateur pas dans la guilde). */
@@ -32,12 +33,8 @@ export function getScrimReseauPublicInviteUrlForMessage() {
  * @param {string} inviteUrl
  * @returns {string}
  */
-export function buildScrimReseauPublicMembershipRefusalContent(inviteUrl) {
-  return (
-    `Bonjour, pour utiliser cette commande, tu dois être présent sur le Discord ScrimRéseau : ${inviteUrl}\n\n` +
-    'Une fois dedans, tu pourras faire tes recherches depuis ton propre serveur. Cela permet aux autres joueurs de pouvoir te retrouver et te contacter plus facilement pour organiser les scrims.\n\n' +
-    'Les autres commandes du bot restent disponibles.'
-  );
+export function buildScrimReseauPublicMembershipRefusalContent(inviteUrl, locale = 'fr') {
+  return t(locale, 'publicGate.refusal', { url: inviteUrl });
 }
 
 /**
@@ -45,7 +42,7 @@ export function buildScrimReseauPublicMembershipRefusalContent(inviteUrl) {
  * @param {string} userId
  * @returns {Promise<{ ok: true } | { ok: false, content: string }>}
  */
-export async function checkScrimReseauPublicGuildMembership(client, userId) {
+export async function checkScrimReseauPublicGuildMembership(client, userId, locale = 'fr') {
   const guildId = getScrimReseauPublicGuildIdFromEnv();
   if (!guildId) {
     logger.warn(
@@ -85,7 +82,7 @@ export async function checkScrimReseauPublicGuildMembership(client, userId) {
     if (code === DISCORD_UNKNOWN_MEMBER) {
       return {
         ok: false,
-        content: buildScrimReseauPublicMembershipRefusalContent(inviteUrl),
+        content: buildScrimReseauPublicMembershipRefusalContent(inviteUrl, locale),
       };
     }
 

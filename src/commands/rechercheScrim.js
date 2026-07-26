@@ -1,9 +1,11 @@
-import { MessageFlags, SlashCommandBuilder } from 'discord.js';
+﻿import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { UI_PRIMARY_GAME_KEY } from '../config/games.js';
 import { broadcastScrimRequest } from '../services/broadcast.js';
+import { deliverScrimToDestination } from '../services/scrimDelivery.js';
+import { enqueueDiscordTask } from '../services/discordTaskQueue.js';
+import { isPersistentBroadcastEnabled } from '../utils/persistentBroadcastFlag.js';
 import {
   allocateScrimPublicId,
-  MS_TOO_MANY,
 } from '../services/scrimLifecycle.js';
 import {
   checkScrimChannel,
@@ -28,18 +30,21 @@ import {
   checkGlobalBlacklist,
   checkScrimCreationWindowLimit,
   checkScrimCreationBurstCooldown,
-  GLOBAL_BLACKLIST_SERVICE_UNAVAILABLE_MESSAGE,
-  GLOBAL_BLACKLIST_USER_MESSAGE,
   MAX_ACTIVE_SCRIMS_PER_USER,
   scrimModerationEnvWindowLimit,
   scrimModerationEnvWindowMs,
 } from '../services/scrimModeration.js';
+import { getGuildLocale, t } from '../i18n/index.js';
 import {
   beginScrimRequest,
   endScrimRequest,
   hasActiveScrimRequest,
 } from '../utils/scrimRequestLock.js';
 import { validateMultiOpggUrl } from '../utils/validateMultiOpgg.js';
+import {
+  ELO_PRECISION_OPTIONS,
+  normalizeEloPrecision,
+} from '../config/eloPrecision.js';
 import { computeScheduledAtIso } from '../utils/scrimScheduledAt.js';
 import {
   interactAutocompleteRespond,
@@ -56,6 +61,16 @@ import {
 
 /** Lien affiché dans l’astuce post-publication si `SCRIM_COMMUNITY_SERVER_URL` est absent ou invalide. */
 const DEFAULT_SCRIM_COMMUNITY_TIP_URL = 'https://discord.gg/ton-invite';
+
+/**
+ * Traduit un résultat d'erreur de validation.
+ * Utilise l'errorCode i18n si disponible ; sinon retourne `❌ ${res.error}`.
+ * @param {{ errorCode?: string, error: string }} res
+ * @param {string} locale
+ */
+function validationMsg(res, locale) {
+  return res.errorCode ? t(locale, res.errorCode) : `❌ ${res.error}`;
+}
 
 /**
  * Génère les suggestions autocomplete pour le champ `structure`.
@@ -109,11 +124,8 @@ function buildScrimTagsJson(fearlessStored, nombreDeGamesOpt, includeNombre) {
 
 const NOMBRE_DE_GAMES_CHOICES = [2, 3, 4, 5, 6, 7, 8, 9, 10];
 
-const MSG_ACTIVE_SCRIM_LIMIT =
-  `❌ Tu as déjà ${MAX_ACTIVE_SCRIMS_PER_USER} recherches de scrim actives. Ferme-en une ou attends qu’elle expire avant d’en créer une nouvelle.`;
-
-const DEBUG_AUTOCOMPLETE = 'DEBUG recherche-scrim autocomplete';
-const DEBUG_VALIDATION_RANK_FORMAT = 'DEBUG recherche-scrim validation finale rang/format';
+const DEBUG_AUTOCOMPLETE = 'DEBUG find-scrim autocomplete';
+const DEBUG_VALIDATION_RANK_FORMAT = 'DEBUG find-scrim validation finale rang/format';
 
 function isScrimDebugAutocompleteEnabled() {
   const v = process.env.SCRIM_DEBUG_AUTOCOMPLETE?.trim().toLowerCase();
@@ -122,76 +134,84 @@ function isScrimDebugAutocompleteEnabled() {
 
 export const rechercheScrim = {
   data: new SlashCommandBuilder()
-    .setName('recherche-scrim')
-    .setDescription(
-      'Diffuse une recherche de scrim League of Legends sur le réseau.',
-    )
+    .setName('find-scrim')
+    .setDescription('Broadcast a scrim search on the ScrimRéseau network.')
     .addStringOption((opt) =>
       opt
         .setName('rang')
-        .setDescription('Rang LoL (saisie ou suggestions)')
+        .setDescription('League of Legends rank (type or select).')
         .setRequired(true)
         .setAutocomplete(true),
     )
     .addStringOption((opt) =>
       opt
         .setName('date')
-        .setDescription('Date (ex. 23/03, 23-03, 23/03/2026)')
+        .setDescription('Scrim date (e.g. 23/03 or 23/03/2026).')
         .setRequired(true),
     )
     .addStringOption((opt) =>
       opt
         .setName('heure')
-        .setDescription('Heure (ex. 20:30, 20h30, 20h)')
+        .setDescription('Scrim start time (e.g. 20:30 or 20h).')
         .setRequired(true),
     )
     .addUserOption((opt) =>
       opt
         .setName('contact')
-        .setDescription('Contact Discord pour organiser le scrim')
+        .setDescription('Contact user for organizing the scrim.')
         .setRequired(true),
     )
     .addStringOption((opt) =>
       opt
         .setName('format')
-        .setDescription('Format de match (suggestions selon le jeu)')
+        .setDescription('Match format (e.g. BO1, BO3).')
         .setRequired(true)
         .setAutocomplete(true),
     )
     .addStringOption((opt) =>
       opt
         .setName('fearless')
-        .setDescription('Fearless (draft pick)')
+        .setDescription('Enable Fearless draft pick mode.')
         .setRequired(true)
         .addChoices(
-          { name: 'Oui', value: 'oui' },
-          { name: 'Non', value: 'non' },
-          { name: 'N\'importe', value: 'nimporte' },
+          { name: 'Yes', value: 'oui' },
+          { name: 'No', value: 'non' },
+          { name: 'Any', value: 'nimporte' },
         ),
     )
     .addStringOption((opt) =>
       opt
+        .setName('elo_precision')
+        .setDescription('Optional Elo precision (e.g. Low, High, 500–599 LP).')
+        .setRequired(false)
+        .addChoices(...ELO_PRECISION_OPTIONS.map((o) => ({
+          name: o.value === 'none' ? 'Not specified' : o.value === 'lp_900_plus' ? '900+ LP' : o.label,
+          value: o.value,
+        }))),
+    )
+    .addStringOption((opt) =>
+      opt
         .setName('heure_max_debut')
-        .setDescription('Heure max de début (si flexible)')
+        .setDescription('Latest possible start time if flexible.')
         .setRequired(false),
     )
     .addStringOption((opt) =>
       opt
         .setName('multi_opgg')
-        .setDescription('Lien HTTPS OP.GG uniquement')
+        .setDescription('HTTPS link to a Multi-OP.GG page.')
         .setRequired(false),
     )
     .addStringOption((opt) =>
       opt
         .setName('structure')
-        .setDescription('Sélectionnez votre structure partenaire ScrimRéseau')
+        .setDescription('Select your ScrimRéseau partner structure.')
         .setRequired(false)
         .setAutocomplete(true),
     )
     .addIntegerOption((opt) =>
       opt
         .setName('nombre_de_games')
-        .setDescription('Nombre de games (uniquement avec le format scrim série)')
+        .setDescription('Number of games (series format only).')
         .setRequired(false)
         .addChoices(
           ...NOMBRE_DE_GAMES_CHOICES.map((n) => ({ name: String(n), value: n })),
@@ -204,11 +224,11 @@ export const rechercheScrim = {
    */
   async execute(interaction, ctx) {
     const userId = interaction.user.id;
+    const locale = getGuildLocale(interaction.guildId, ctx.stmts);
 
     if (hasActiveScrimRequest(userId)) {
       await interactReply(interaction, {
-        content:
-          '⏳ Une recherche de scrim est déjà en cours de traitement.',
+        content: t(locale, 'findScrim.lock'),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -217,10 +237,10 @@ export const rechercheScrim = {
     beginScrimRequest(userId);
     try {
       return await (async () => {
+    const locale = getGuildLocale(interaction.guildId, ctx.stmts);
     if (!interaction.inGuild()) {
       await interactReply(interaction, {
-        content:
-          '❌ Cette commande ne peut être utilisée que dans un serveur.',
+        content: t(locale, 'findScrim.guildOnly'),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -229,6 +249,7 @@ export const rechercheScrim = {
     const publicGuildGate = await checkScrimReseauPublicGuildMembership(
       interaction.client,
       interaction.user.id,
+      locale,
     );
     if (!publicGuildGate.ok) {
       await interactReply(interaction, {
@@ -243,14 +264,14 @@ export const rechercheScrim = {
     });
     if (blState.result === 'service_unavailable') {
       await interactReply(interaction, {
-        content: GLOBAL_BLACKLIST_SERVICE_UNAVAILABLE_MESSAGE,
+        content: t(locale, 'generic.blacklistServiceUnavailable'),
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
     if (blState.result === 'blocked') {
       await interactReply(interaction, {
-        content: GLOBAL_BLACKLIST_USER_MESSAGE,
+        content: t(locale, 'generic.blacklistedUser'),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -261,6 +282,7 @@ export const rechercheScrim = {
       guildId,
       interaction.channel,
       ctx.stmts,
+      locale,
     );
     if (!channelCheck.ok) {
       await interactReply(interaction, {
@@ -275,6 +297,7 @@ export const rechercheScrim = {
       guildId,
       interaction.guild,
       ctx.stmts,
+      locale,
     );
     if (!permCheck.ok) {
       await interactReply(interaction, {
@@ -293,23 +316,25 @@ export const rechercheScrim = {
     const formatRaw = interaction.options.getString('format', true);
     const fearlessRaw = interaction.options.getString('fearless', true);
     const multiOpggRaw = interaction.options.getString('multi_opgg');
+    const eloPrecisionRaw = interaction.options.getString('elo_precision');
+    const eloPrecision = normalizeEloPrecision(eloPrecisionRaw);
 
     const dateRes = parseScrimSearchDate(dateRaw);
     if (!dateRes.ok) {
-      await interactReply(interaction, { content: `❌ ${dateRes.error}`, flags: MessageFlags.Ephemeral });
+      await interactReply(interaction, { content: validationMsg(dateRes, locale), flags: MessageFlags.Ephemeral });
       return;
     }
 
     const timeRes = parseAndNormalizeTime(timeRaw);
     if (!timeRes.ok) {
-      await interactReply(interaction, { content: `❌ ${timeRes.error}`, flags: MessageFlags.Ephemeral });
+      await interactReply(interaction, { content: validationMsg(timeRes, locale), flags: MessageFlags.Ephemeral });
       return;
     }
 
     const flexEndRes = validateOptionalFlexibleEndTime(timeRes.value, timeMaxRaw);
     if (!flexEndRes.ok) {
       await interactReply(interaction, {
-        content: `❌ ${flexEndRes.error}`,
+        content: validationMsg(flexEndRes, locale),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -329,12 +354,12 @@ export const rechercheScrim = {
     }
 
     if (!rankRes.ok) {
-      await interactReply(interaction, { content: `❌ ${rankRes.error}`, flags: MessageFlags.Ephemeral });
+      await interactReply(interaction, { content: validationMsg(rankRes, locale), flags: MessageFlags.Ephemeral });
       return;
     }
 
     if (!formatRes.ok) {
-      await interactReply(interaction, { content: `❌ ${formatRes.error}`, flags: MessageFlags.Ephemeral });
+      await interactReply(interaction, { content: validationMsg(formatRes, locale), flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -344,7 +369,7 @@ export const rechercheScrim = {
     if (nombreDeGamesOpt != null && formatRes.value !== FORMAT_SCRIM_SERIE_KEY) {
       await interactReply(interaction, {
         content:
-          '❌ Le nombre de games ne peut être utilisé qu’avec le format scrim série.',
+          t(locale, 'findScrim.nombreDeGamesFormat'),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -352,14 +377,14 @@ export const rechercheScrim = {
 
     const contactRes = validateContactUser(contact);
     if (!contactRes.ok) {
-      await interactReply(interaction, { content: `❌ ${contactRes.error}`, flags: MessageFlags.Ephemeral });
+      await interactReply(interaction, { content: validationMsg(contactRes, locale), flags: MessageFlags.Ephemeral });
       return;
     }
 
     const multiOpggRes = validateMultiOpggUrl(multiOpggRaw, gameKey);
     if (!multiOpggRes.ok) {
       await interactReply(interaction, {
-        content: `❌ ${multiOpggRes.error}`,
+        content: validationMsg(multiOpggRes, locale),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -379,7 +404,7 @@ export const rechercheScrim = {
       const partnerRow = ctx.stmts.getPartnerGuildByGuildId.get(structureRaw.trim());
       if (!partnerRow) {
         await interactReply(interaction, {
-          content: `❌ La structure sélectionnée n'est pas reconnue comme partenaire ScrimRéseau. Utilise l'autocomplétion pour choisir une structure valide.`,
+          content: t(locale, 'findScrim.structureInvalid'),
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -395,7 +420,7 @@ export const rechercheScrim = {
     const activeLimit = checkActiveScrimLimit(ctx.stmts, interaction.user.id);
     if (!activeLimit.ok) {
       await interactReply(interaction, {
-        content: MSG_ACTIVE_SCRIM_LIMIT,
+        content: t(locale, 'findScrim.activeLimit', { max: MAX_ACTIVE_SCRIMS_PER_USER }),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -407,7 +432,7 @@ export const rechercheScrim = {
     );
     if (!burst.ok && burst.remainingSeconds != null) {
       await interactReply(interaction, {
-        content: `❌ Tu dois attendre encore ${burst.remainingSeconds} seconde(s) avant de publier une nouvelle recherche.`,
+        content: t(locale, 'findScrim.cooldown', { seconds: burst.remainingSeconds }),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -421,7 +446,7 @@ export const rechercheScrim = {
       const winMin = Math.round(scrimModerationEnvWindowMs() / 60000);
       const winLimit = scrimModerationEnvWindowLimit();
       await interactReply(interaction, {
-        content: `❌ Tu as atteint la limite de créations de recherche de scrim (${winLimit} sur ${winMin} minutes). Réessaie un peu plus tard.`,
+        content: t(locale, 'findScrim.windowLimit', { limit: winLimit, min: winMin }),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -435,14 +460,14 @@ export const rechercheScrim = {
       });
       await interactReply(interaction, {
         content:
-          '❌ Aucun serveur du réseau n’a configuré de salon de diffusion pour le scrim League of Legends.',
+          t(locale, 'findScrim.noTargets'),
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
     await interactReply(interaction, {
-      content: '⏳ Envoi de l’annonce…',
+      content: t(locale, 'findScrim.sending'),
       flags: MessageFlags.Ephemeral,
     });
 
@@ -462,7 +487,7 @@ export const rechercheScrim = {
       });
       await interactEditReply(interaction, {
         content:
-          '❌ Date ou heure invalide pour le calendrier français. Vérifie ta saisie.',
+          t(locale, 'findScrim.scheduledAtError'),
       });
       return;
     }
@@ -485,7 +510,7 @@ export const rechercheScrim = {
         });
         await interactEditReply(interaction, {
           content:
-            '❌ Heure max invalide pour le calendrier français. Vérifie ta saisie.',
+            t(locale, 'findScrim.scheduledAtEndError'),
         });
         return;
       }
@@ -518,6 +543,7 @@ export const rechercheScrim = {
           scheduled_at_end: scheduledAtEndIso,
           tags: tagsForInsert,
           multi_opgg_url: multiOpggUrl,
+          elo_precision: eloPrecision,
           structure_guild_id: structureGuildId,
           structure_name_snapshot: structureNameSnapshot,
           structure_invite_url_snapshot: structureInviteUrlSnapshot,
@@ -536,13 +562,13 @@ export const rechercheScrim = {
       });
       await interactEditReply(interaction, {
         content:
-          '❌ Impossible d’enregistrer la recherche. Réessayez plus tard.',
+          t(locale, 'findScrim.dbError'),
       });
       return;
     }
 
     if (!created) {
-      await interactEditReply(interaction, { content: MS_TOO_MANY });
+      await interactEditReply(interaction, { content: t(locale, 'lifecycle.tooMany') });
       return;
     }
 
@@ -564,7 +590,7 @@ export const rechercheScrim = {
       }
       await interactEditReply(interaction, {
         content:
-          '❌ Impossible de préparer l’annonce. Réessayez plus tard.',
+          t(locale, 'findScrim.prepareError'),
       });
       return;
     }
@@ -575,96 +601,291 @@ export const rechercheScrim = {
       contactDisplayName: contact.username ?? null,
     };
 
-    /** Nombre de serveurs où l’embed a été posté (best-effort, voir `broadcastScrimRequest`). */
-    let successCount = 0;
-    try {
-      successCount = await broadcastScrimRequest({
-        client: interaction.client,
-        rows,
-        stmts: ctx.stmts,
-        authorUserId: interaction.user.id,
-        scrimPostDbId: created.dbId,
-        payload: embedPayload,
-      });
-    } catch (err) {
-      /** Rare : `broadcastScrimRequest` absorbe d’habitude les erreurs par cible ; ce catch couvre surtout un throw amont (ex. construction embed). */
-      logger.error('recherche-scrim — échec diffusion', {
-        message: err instanceof Error ? err.message : String(err),
-        scrim_post_db_id: created.dbId,
-      });
+    if (isPersistentBroadcastEnabled()) {
+      // PARCOURS PERSISTANT
+      let batchId;
       try {
-        ctx.db.transaction((dbId) => {
-          ctx.stmts.deleteScrimPostMessagesForPost.run(dbId);
-          ctx.stmts.deleteScrimPostById.run(dbId);
-        })(created.dbId);
-      } catch (delErr) {
-        logger.error('recherche-scrim — nettoyage après diffusion', {
-          scrim_post_db_id: created.dbId,
-          message: delErr instanceof Error ? delErr.message : String(delErr),
-        });
-      }
-      await interactEditReply(interaction, {
-        content: `❌ Une erreur est survenue pendant l’envoi (cible : **${rows.length}** serveur configuré(s)). Réessayez plus tard.`,
-      });
-      return;
-    }
+        const batchResult = ctx.db.transaction(() => {
+          const nowStr = new Date().toISOString();
+          const batchInfo = ctx.stmts.insertScrimBroadcastBatch.run({
+            scrim_post_db_id: created.dbId,
+            operation_type: 'initial',
+            generation: 0,
+            target_count: rows.length,
+            created_at: nowStr,
+            updated_at: nowStr,
+          });
+          const newBatchId = Number(batchInfo.lastInsertRowid);
 
-    if (successCount === 0) {
-      logger.warn('recherche-scrim — zéro livraison', {
+          for (const r of rows) {
+            const isOrigin = r.guild_id === originGuild;
+            ctx.stmts.insertScrimBroadcastDelivery.run({
+              batch_id: newBatchId,
+              scrim_post_db_id: created.dbId,
+              guild_id: r.guild_id,
+              channel_id: r.channel_id,
+              game_key: r.game_key ?? gameKey,
+              operation_type: 'initial',
+              generation: 0,
+              priority: isOrigin ? 1 : 0,
+              next_attempt_at: nowStr,
+              created_at: nowStr,
+              updated_at: nowStr,
+            });
+          }
+
+          return newBatchId;
+        })();
+        batchId = batchResult;
+      } catch (batchErr) {
+        logger.error('recherche-scrim persistent — échec création batch', {
+          scrim_post_db_id: created.dbId,
+          message: batchErr instanceof Error ? batchErr.message : String(batchErr),
+        });
+        try {
+          ctx.db.transaction((dbId) => {
+            ctx.stmts.deleteScrimPostMessagesForPost.run(dbId);
+            ctx.stmts.deleteScrimPostById.run(dbId);
+          })(created.dbId);
+        } catch { /* best effort */ }
+        await interactEditReply(interaction, { content: t(locale, 'findScrim.dbError') });
+        return;
+      }
+
+      // Bootstrap — essayer destinations jusqu'au premier succès
+      const deliveries = ctx.stmts.listDeliveriesForBatch.all(batchId);
+      let firstSuccess = false;
+      const nowBootstrap = new Date().toISOString();
+
+      for (let i = 0; i < deliveries.length; i++) {
+        const claimInfo = ctx.stmts.claimNextDeliveryForBatch.run({
+          batch_id: batchId,
+          now_iso: nowBootstrap,
+          claimed_at: nowBootstrap,
+          updated_at: nowBootstrap,
+        });
+        if (claimInfo.changes === 0) continue;
+
+        const claimedDelivery = ctx.stmts.getProcessingDeliveryForBatch.get(batchId);
+        if (!claimedDelivery) continue;
+
+        const delivRow = { guild_id: claimedDelivery.guild_id, channel_id: claimedDelivery.channel_id };
+
+        const result = await deliverScrimToDestination({
+          client: interaction.client,
+          stmts: ctx.stmts,
+          row: delivRow,
+          authorUserId: interaction.user.id,
+          payload: embedPayload,
+          delayMs: 0,
+        });
+
+        const nowAfter = new Date().toISOString();
+
+        if (result.outcome === 'sent') {
+          try {
+            ctx.db.transaction(() => {
+              ctx.stmts.insertScrimPostMessage.run({
+                scrim_post_db_id: created.dbId,
+                guild_id: delivRow.guild_id,
+                channel_id: delivRow.channel_id,
+                message_id: result.message.id,
+              });
+              ctx.stmts.markDeliverySent.run({
+                id: claimedDelivery.id,
+                message_id: result.message.id,
+                completed_at: nowAfter,
+                updated_at: nowAfter,
+              });
+              ctx.stmts.setScrimBroadcastBatchActive.run({
+                id: batchId,
+                started_at: nowAfter,
+                updated_at: nowAfter,
+              });
+            })();
+            firstSuccess = true;
+            logger.info('recherche-scrim persistent — première livraison confirmée', {
+              scrim_post_db_id: created.dbId,
+              batch_id: batchId,
+              guild_id: delivRow.guild_id,
+              message_id: result.message.id,
+            });
+            break;
+          } catch (dbErr) {
+            logger.error('recherche-scrim persistent — DB échouée après send', {
+              scrim_post_db_id: created.dbId,
+              guild_id: delivRow.guild_id,
+              message_id: result.message.id,
+              message: dbErr instanceof Error ? dbErr.message : String(dbErr),
+            });
+            try {
+              await enqueueDiscordTask(
+                () => result.message.delete(),
+                { kind: 'persistent_bootstrap_rollback', guild_id: delivRow.guild_id },
+                'high',
+              );
+            } catch { /* best effort */ }
+            try {
+              ctx.stmts.markDeliveryUnknownOutcome.run({
+                id: claimedDelivery.id,
+                last_error_code: 'DB_INSERT_FAILED',
+                last_error_message: (dbErr instanceof Error ? dbErr.message : String(dbErr)).slice(0, 200),
+                completed_at: nowAfter,
+                updated_at: nowAfter,
+              });
+            } catch { /* best effort */ }
+          }
+        } else if (result.outcome === 'terminal_error' || result.outcome === 'blocked') {
+          ctx.stmts.markDeliveryTerminal.run({
+            id: claimedDelivery.id,
+            last_error_code: result.errorCode ?? 'TERMINAL',
+            last_error_message: (result.errorMessage ?? '').slice(0, 200),
+            completed_at: nowAfter,
+            updated_at: nowAfter,
+          });
+        } else if (result.outcome === 'retryable_error') {
+          ctx.stmts.markDeliveryRetry.run({
+            id: claimedDelivery.id,
+            next_attempt_at: new Date(Date.now() + 60000).toISOString(),
+            last_error_code: result.errorCode ?? 'RETRYABLE',
+            last_error_message: (result.errorMessage ?? '').slice(0, 200),
+            updated_at: nowAfter,
+          });
+        }
+      }
+
+      if (!firstSuccess) {
+        try {
+          ctx.db.transaction((dbId) => {
+            ctx.stmts.cancelPendingDeliveriesForScrim.run({
+              scrim_post_db_id: dbId,
+              completed_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            });
+            ctx.stmts.setScrimBroadcastBatchCompleted.run({
+              id: batchId,
+              status: 'failed',
+              completed_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            });
+            ctx.stmts.deleteScrimPostMessagesForPost.run(dbId);
+            ctx.stmts.deleteScrimPostById.run(dbId);
+          })(created.dbId);
+        } catch (cleanErr) {
+          logger.error('recherche-scrim persistent — rollback échoué', {
+            scrim_post_db_id: created.dbId,
+            message: cleanErr instanceof Error ? cleanErr.message : String(cleanErr),
+          });
+        }
+        await interactEditReply(interaction, {
+          content: t(locale, 'findScrim.bootstrapZeroDelivery', { targetCount: rows.length }),
+        });
+        return;
+      }
+
+      const tipInviteUrlP = getScrimCommunityServerUrlFromEnv() ?? DEFAULT_SCRIM_COMMUNITY_TIP_URL;
+      await interactEditReply(interaction, {
+        content: t(locale, 'findScrim.successPersistent', {
+          targetCount: rows.length,
+          id: created.publicId,
+          url: tipInviteUrlP,
+        }),
+      });
+
+      logger.event('recherche-scrim-persistent', {
         user_id: interaction.user.id,
         guild_id: interaction.guildId,
         game_key: gameKey,
         targets: rows.length,
+        batch_id: batchId,
         scrim_post_db_id: created.dbId,
+        scrim_public_id: created.publicId,
       });
+
       try {
-        ctx.db.transaction((dbId) => {
-          ctx.stmts.deleteScrimPostMessagesForPost.run(dbId);
-          ctx.stmts.deleteScrimPostById.run(dbId);
-        })(created.dbId);
-      } catch (delErr) {
-        logger.error('recherche-scrim — rollback scrim sans livraison', {
-          scrim_post_db_id: created.dbId,
-          message: delErr instanceof Error ? delErr.message : String(delErr),
+        const jobMod = await import('./scrimBroadcastDeliveryJob.js').catch(() => null);
+        jobMod?.wakeScrimBroadcastDeliveryJob?.();
+      } catch { /* best effort */ }
+
+    } else {
+      // ANCIEN PARCOURS (inchangé)
+      /** Nombre de serveurs où l'embed a été posté (best-effort, voir broadcastScrimRequest). */
+      let successCount = 0;
+      try {
+        successCount = await broadcastScrimRequest({
+          client: interaction.client,
+          rows,
+          stmts: ctx.stmts,
+          authorUserId: interaction.user.id,
+          scrimPostDbId: created.dbId,
+          payload: embedPayload,
         });
+      } catch (err) {
+        /** Rare : broadcastScrimRequest absorbe d'habitude les erreurs par cible. */
+        logger.error('recherche-scrim — échec diffusion', {
+          message: err instanceof Error ? err.message : String(err),
+          scrim_post_db_id: created.dbId,
+        });
+        try {
+          ctx.db.transaction((dbId) => {
+            ctx.stmts.deleteScrimPostMessagesForPost.run(dbId);
+            ctx.stmts.deleteScrimPostById.run(dbId);
+          })(created.dbId);
+        } catch (delErr) {
+          logger.error('recherche-scrim — nettoyage après diffusion', {
+            scrim_post_db_id: created.dbId,
+            message: delErr instanceof Error ? delErr.message : String(delErr),
+          });
+        }
+        await interactEditReply(interaction, {
+          content: t(locale, 'findScrim.broadcastError', { count: rows.length }),
+        });
+        return;
       }
-      await interactEditReply(interaction, {
-        content:
-          `⚠️ Aucune annonce n’a pu être livrée sur **${rows.length}** serveur(s) configuré(s) (permissions, salons ou blocages). Réessayez plus tard.`,
+
+      if (successCount === 0) {
+        logger.warn('recherche-scrim — zéro livraison', {
+          user_id: interaction.user.id,
+          guild_id: interaction.guildId,
+          game_key: gameKey,
+          targets: rows.length,
+          scrim_post_db_id: created.dbId,
+        });
+        try {
+          ctx.db.transaction((dbId) => {
+            ctx.stmts.deleteScrimPostMessagesForPost.run(dbId);
+            ctx.stmts.deleteScrimPostById.run(dbId);
+          })(created.dbId);
+        } catch (delErr) {
+          logger.error('recherche-scrim — rollback scrim sans livraison', {
+            scrim_post_db_id: created.dbId,
+            message: delErr instanceof Error ? delErr.message : String(delErr),
+          });
+        }
+        await interactEditReply(interaction, {
+          content:
+            t(locale, 'findScrim.zeroDelivery', { count: rows.length }),
+        });
+        return;
+      }
+
+      logger.event('recherche-scrim', {
+        user_id: interaction.user.id,
+        guild_id: interaction.guildId,
+        game_key: gameKey,
+        targets: rows.length,
+        success: successCount,
+        scrim_post_db_id: created.dbId,
+        scrim_public_id: created.publicId,
       });
-      return;
+
+      const tipInviteUrl =
+        getScrimCommunityServerUrlFromEnv() ?? DEFAULT_SCRIM_COMMUNITY_TIP_URL;
+
+      await interactEditReply(interaction, {
+        content: t(locale, 'findScrim.success', { count: successCount, id: created.publicId, url: tipInviteUrl }),
+      });
     }
-
-    logger.event('recherche-scrim', {
-      user_id: interaction.user.id,
-      guild_id: interaction.guildId,
-      game_key: gameKey,
-      targets: rows.length,
-      success: successCount,
-      scrim_post_db_id: created.dbId,
-      scrim_public_id: created.publicId,
-    });
-
-    const tipInviteUrl =
-      getScrimCommunityServerUrlFromEnv() ?? DEFAULT_SCRIM_COMMUNITY_TIP_URL;
-
-    await interactEditReply(interaction, {
-      content: `✅ Ta recherche de scrim est en ligne sur le réseau !
-
-📡 Diffusée dans ${successCount} serveurs
-
-🛑 Quand tu as trouvé un scrim :
-/scrim-trouve id:${created.publicId}
-
-💬 Pour ne plus recevoir de messages inutiles et garder les salons propres.
-
-💡 Astuce :
-
-Pour éviter les problèmes de contact, pense à rejoindre le serveur ScrimRéseau :
-${tipInviteUrl}
-👉 Cela crée un discord commun entre les joueurs.
-👉 Tu peux continuer à utiliser le bot normalement depuis ton serveur.`,
-    });
       })();
     } finally {
       endScrimRequest(userId);

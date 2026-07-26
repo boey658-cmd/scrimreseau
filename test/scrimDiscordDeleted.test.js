@@ -62,6 +62,7 @@ function insertFakeScrimPost(db, stmts) {
     scheduled_at_end: null,
     tags: '[]',
     multi_opgg_url: null,
+    elo_precision: null,
     structure_guild_id: null,
     structure_name_snapshot: null,
     structure_invite_url_snapshot: null,

@@ -2,6 +2,7 @@ import { dashboardAdmin } from './dashboardAdmin.js';
 import { dashboardReseau } from './dashboardReseau.js';
 import { help } from './help.js';
 import { helpAdmin } from './helpAdmin.js';
+import { language } from './language.js';
 import { listeScrims } from './listeScrims.js';
 import { mesDemandes } from './mesDemandes.js';
 import { rechercheScrim } from './rechercheScrim.js';
@@ -33,6 +34,7 @@ export const commandListWithoutDev = [
   scrimTrouve,
   spammer,
   structureLien,
+  language,
 ];
 
 /** Commandes réservées à la guilde dev/owner (DEV_GUILD_ID). Invisibles ailleurs. */

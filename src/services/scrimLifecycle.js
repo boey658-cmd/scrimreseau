@@ -5,6 +5,8 @@ import {
 } from './scrimEmbedBuilder.js';
 import { runTransientDiscord } from './discordApiGuard.js';
 import { syncInactiveScrimMessageByPolicy } from './scrimMessagePolicy.js';
+import { getGuildLocale, t } from '../i18n/index.js';
+import { isPersistentBroadcastEnabled } from '../utils/persistentBroadcastFlag.js';
 
 /** Délai entre éditions d’embeds (anti rate-limit Discord), en ms. */
 export const SCRIM_EDIT_DELAY_MS = 75;
@@ -73,12 +75,13 @@ export async function markScrimPostMessagesSuperseded(
 ) {
   if (messages.length === 0) return;
 
-  const editOptions = buildScrimSupersededMessageEditOptions(dbRow);
   const targetStatus = 'superseded_repost';
   const scrimPostDbId = Number(dbRow.id);
 
   for (let i = 0; i < messages.length; i += 1) {
     const m = messages[i];
+    const locale = stmts.getGuildLanguage ? getGuildLocale(m.guild_id, stmts) : 'fr';
+    const editOptions = buildScrimSupersededMessageEditOptions(dbRow, locale);
     if (i > 0) await sleep(SCRIM_EDIT_DELAY_MS);
 
     // Si le message a déjà été supprimé par la policy de suppression automatique,
@@ -209,10 +212,10 @@ export async function updateScrimPostMessagesEmbeds(client, stmts, dbRow) {
     });
     return;
   }
-  const editOptions = buildScrimClosedMessageEditOptions(status, dbRow);
-
   for (let i = 0; i < messages.length; i += 1) {
     const m = messages[i];
+    const locale = stmts.getGuildLanguage ? getGuildLocale(m.guild_id, stmts) : 'fr';
+    const editOptions = buildScrimClosedMessageEditOptions(status, dbRow, locale);
     if (i > 0) await sleep(SCRIM_EDIT_DELAY_MS);
 
     // Si le message a déjà été supprimé par la policy de suppression automatique,
@@ -345,6 +348,22 @@ export function closeScrimPostByDbId(db, stmts, dbId, status, reason) {
     }),
   );
   const info = trx();
+
+    if (isPersistentBroadcastEnabled() && info.changes > 0) {
+      try {
+        stmts.cancelPendingDeliveriesForScrim?.run({
+          scrim_post_db_id: dbId,
+          completed_at: nowIso,
+          updated_at: nowIso,
+        });
+      } catch (cancelErr) {
+      logger.warn('closeScrimPostByDbId: annulation deliveries persistantes echouee', {
+        db_id: dbId,
+        message: cancelErr instanceof Error ? cancelErr.message : String(cancelErr),
+      });
+    }
+  }
+
   return info.changes > 0;
 }
 
@@ -408,17 +427,18 @@ export async function closeScrimPostByPublicIdForAuthor(
   stmts,
   publicId,
   userId,
+  locale = 'fr',
 ) {
   const active = stmts.getScrimPostActiveByPublicId.get(publicId);
   if (!active) {
     const any = stmts.getScrimPostByPublicIdAny.get(publicId);
     if (any) {
-      return { ok: false, code: 'already_done', message: MSG_ALREADY_DONE };
+      return { ok: false, code: 'already_done', message: t(locale, 'lifecycle.alreadyDone') };
     }
-    return { ok: false, code: 'not_found', message: MSG_NO_ACTIVE };
+    return { ok: false, code: 'not_found', message: t(locale, 'lifecycle.noActive') };
   }
   if (active.author_user_id !== userId) {
-    return { ok: false, code: 'not_author', message: MSG_NOT_AUTHOR };
+    return { ok: false, code: 'not_author', message: t(locale, 'lifecycle.notAuthor') };
   }
   const dbId = Number(active.id);
   const closed = await closeScrimPostByDbIdAndSyncMessages(
@@ -430,7 +450,7 @@ export async function closeScrimPostByPublicIdForAuthor(
     'manual',
   );
   if (!closed) {
-    return { ok: false, code: 'already_done', message: MSG_ALREADY_DONE };
+    return { ok: false, code: 'already_done', message: t(locale, 'lifecycle.alreadyDone') };
   }
-  return { ok: true, message: MSG_OK_CLOSE };
+  return { ok: true, message: t(locale, 'lifecycle.okClose') };
 }

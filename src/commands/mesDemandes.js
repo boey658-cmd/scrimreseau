@@ -5,16 +5,19 @@ import {
 } from 'discord.js';
 import { DateTime } from 'luxon';
 import { getEmbedColorForGame } from '../config/gameEmbedColors.js';
+import { localizeRank } from '../config/games.js';
 import { formatParisScrimListSchedule } from '../services/scrimEmbedBuilder.js';
+import { formatRankWithPrecision } from '../config/eloPrecision.js';
 import { SCRIM_PUBLIC_ID_MAX } from '../services/scrimLifecycle.js';
 import { SCRIM_TIMEZONE } from '../utils/scrimScheduledAt.js';
 import { interactReply } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
+import { getGuildLocale, t } from '../i18n/index.js';
 
 const MSG_EMPTY =
   'ℹ️ Tu n’as actuellement aucune recherche de scrim active.';
 
-const FOOTER_HINT = `Utilise /scrim-trouve id:XXX (1–${SCRIM_PUBLIC_ID_MAX}) pour fermer une recherche.`;
+// FOOTER_HINT → t(locale)
 
 /**
  * @param {{
@@ -24,22 +27,29 @@ const FOOTER_HINT = `Utilise /scrim-trouve id:XXX (1–${SCRIM_PUBLIC_ID_MAX}) p
  *   scheduled_time: string,
  * }} row
  */
-function formatScheduleLine(row) {
-  const { dateStr, timeStr } = formatParisScrimListSchedule(row);
-  return `${dateStr} à ${timeStr}`;
+/**
+ * @param {typeof row} row
+ * @param {string} [locale]
+ */
+function formatScheduleLine(row, locale = 'fr') {
+  const schedule = formatParisScrimListSchedule(row, locale);
+  const sep = t(locale, 'listeQuery.at');
+  return `${schedule.dateStr}${sep}${schedule.timeStr}`;
 }
 
-/** @param {number} ms */
-function formatCreatedParis(ms) {
-  return DateTime.fromMillis(ms, { zone: SCRIM_TIMEZONE }).toFormat(
-    "dd/MM/yyyy HH'h'mm",
-  );
+/**
+ * @param {number} ms
+ * @param {string} [locale]
+ */
+function formatCreatedParis(ms, locale = 'fr') {
+  const fmt = t(locale, 'myScrims.createdAtFormat');
+  return DateTime.fromMillis(ms, { zone: SCRIM_TIMEZONE }).toFormat(fmt);
 }
 
 export const mesDemandes = {
   data: new SlashCommandBuilder()
-    .setName('mes-demandes-scrim')
-    .setDescription('Affiche tes recherches de scrim actives'),
+    .setName('my-scrims')
+    .setDescription('Show your active scrim searches.'),
 
   /**
    * @param {import('discord.js').ChatInputCommandInteraction} interaction
@@ -47,13 +57,14 @@ export const mesDemandes = {
    */
   async execute(interaction, ctx) {
     const userId = interaction.user.id;
+    const locale = getGuildLocale(interaction.guildId, ctx.stmts);
 
     try {
       const rows = ctx.stmts.listActiveScrimPostsByAuthor.all(userId);
 
       if (!rows.length) {
         await interactReply(interaction, {
-          content: MSG_EMPTY,
+          content: t(locale, 'myScrims.empty'),
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -64,14 +75,19 @@ export const mesDemandes = {
         const idStr = Number.isFinite(pid)
           ? String(pid).padStart(3, '0')
           : String(row.scrim_public_id ?? '');
-        const sched = formatScheduleLine(row);
-        const rank = String(row.rank_key);
+        const sched = formatScheduleLine(row, locale);
+        const rankRaw = String(row.rank_key);
+        const eloPrecision = typeof row.elo_precision === 'string' && row.elo_precision.trim()
+          ? row.elo_precision.trim()
+          : null;
+        const localizedRankStr = localizeRank(rankRaw, locale);
+        const rankWithPrec = formatRankWithPrecision(localizedRankStr, eloPrecision, locale);
         const fmt = String(row.format_key);
         const created =
           typeof row.created_at === 'number'
-            ? ` · créée ${formatCreatedParis(row.created_at)}`
+            ? ` \u00b7 ${t(locale, 'myScrims.createdAt', { date: formatCreatedParis(row.created_at, locale) })}`
             : '';
-        return `- **ID ${idStr}** — ${sched} — ${rank} — ${fmt}${created}`;
+        return `- **ID ${idStr}** \u2014 ${sched} \u2014 ${rankWithPrec} \u2014 ${fmt}${created}`;
       });
 
       const description = lines.join('\n').slice(0, 4096);
@@ -80,10 +96,10 @@ export const mesDemandes = {
         typeof firstGame === 'string' && firstGame.length > 0 ? firstGame : '';
 
       const embed = new EmbedBuilder()
-        .setTitle('📋 Tes demandes de scrim actives')
+        .setTitle(t(locale, 'myScrims.embedTitle'))
         .setDescription(description)
         .setColor(getEmbedColorForGame(colorKey))
-        .setFooter({ text: FOOTER_HINT })
+        .setFooter({ text: t(locale, 'myScrims.footerHint', { max: SCRIM_PUBLIC_ID_MAX }) })
         .setTimestamp(new Date());
 
       await interactReply(interaction, {
@@ -103,8 +119,7 @@ export const mesDemandes = {
       });
       try {
         await interactReply(interaction, {
-          content:
-            '❌ Impossible de charger tes demandes pour le moment. Réessaie plus tard.',
+          content: t(locale, 'myScrims.error'),
           flags: MessageFlags.Ephemeral,
         });
       } catch (replyErr) {

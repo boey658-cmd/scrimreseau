@@ -1,4 +1,4 @@
-import { GAMES, UI_PRIMARY_GAME_KEY } from '../config/games.js';
+import { GAMES, localizeRank, UI_PRIMARY_GAME_KEY } from '../config/games.js';
 import {
   FORMAT_SCRIM_SERIE_KEY,
   FEARLESS_VALUE_NIMPORTE,
@@ -7,6 +7,8 @@ import {
   parseFearlessFromTags,
   parseNombreDeGamesFromTags,
 } from './scrimEmbedBuilder.js';
+import { formatRankWithPrecision } from '../config/eloPrecision.js';
+import { t } from '../i18n/index.js';
 
 /** Récupéré pour détecter s’il y a plus de résultats. */
 export const LISTE_FETCH_LIMIT = 21;
@@ -73,7 +75,7 @@ export function expandRankKeysForListeFilter(selectedRank) {
  */
 export function buildActiveScrimsListeQuery(filters) {
   let sql = `
-    SELECT id, scrim_public_id, rank_key, scheduled_date, scheduled_time, scheduled_at, scheduled_at_end, format_key, tags, game_key
+    SELECT id, scrim_public_id, rank_key, scheduled_date, scheduled_time, scheduled_at, scheduled_at_end, format_key, tags, game_key, elo_precision
     FROM scrim_posts
     WHERE status = 'active'`;
   const params = [];
@@ -162,10 +164,11 @@ export function runCountActiveScrimsListe(db, filters) {
  *   scheduled_date: string,
  *   scheduled_time: string,
  * }} row
+ * @param {string} [locale]
  * @returns {{ dateStr: string, timeStr: string }}
  */
-function formatScheduleLine(row) {
-  return formatParisScrimListSchedule(row);
+function formatScheduleLine(row, locale = 'fr') {
+  return formatParisScrimListSchedule(row, locale);
 }
 
 /**
@@ -196,10 +199,17 @@ export function buildDiscordMessageUrl(guildId, channelId, messageId) {
  * @param {Record<string, unknown>} row
  * @param {string} tagsStr
  * @param {string | null} messageUrl
+ * @param {string} [locale] 'fr' (défaut) ou 'en'
  */
-export function formatListeScrimLine(row, tagsStr, messageUrl) {
-  const rank = String(row.rank_key ?? '');
-  const { dateStr, timeStr } = formatScheduleLine(row);
+export function formatListeScrimLine(row, tagsStr, messageUrl, locale = 'fr') {
+  const rankRaw = String(row.rank_key ?? '');
+  const eloPrecision = typeof row.elo_precision === 'string' && row.elo_precision.trim()
+    ? row.elo_precision.trim()
+    : null;
+  const localizedRankStr = localizeRank(rankRaw, locale);
+  const rankWithPrec = formatRankWithPrecision(localizedRankStr, eloPrecision, locale);
+
+  const { dateStr, timeStr } = formatScheduleLine(row, locale);
   const nombre = parseNombreDeGamesFromTags(tagsStr);
   const fmtPart = formatFormatPart(String(row.format_key ?? ''), nombre);
 
@@ -208,13 +218,16 @@ export function formatListeScrimLine(row, tagsStr, messageUrl) {
   if (fearless != null && fearless !== FEARLESS_VALUE_NIMPORTE) {
     fearlessPart =
       fearless === FEARLESS_VALUE_OUI
-        ? ' — Fearless : Oui'
-        : ' — Fearless : Non';
+        ? t(locale, 'listeQuery.fearlessYes')
+        : t(locale, 'listeQuery.fearlessNo');
   }
 
-  let line = `${rank} — ${dateStr} à ${timeStr} — ${fmtPart}${fearlessPart}`;
+  const atSep = t(locale, 'listeQuery.at');
+  const seeMsg = t(locale, 'listeQuery.seeMessage');
+
+  let line = `${rankWithPrec} — ${dateStr}${atSep}${timeStr} — ${fmtPart}${fearlessPart}`;
   if (messageUrl) {
-    line += ` — [Voir le message](${messageUrl})`;
+    line += ` — [${seeMsg}](${messageUrl})`;
   }
   return line;
 }

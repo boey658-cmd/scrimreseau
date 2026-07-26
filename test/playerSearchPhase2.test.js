@@ -290,7 +290,7 @@ test('mes-demandes-joueur — liste actives auteur uniquement', async () => {
   });
 });
 
-test('mes-demandes-scrim — renommage slash uniquement', () => {
+test('mes-demandes-scrim — renommé en my-scrims', () => {
   const cmdPath = path.join(
     __dirname,
     '..',
@@ -299,9 +299,12 @@ test('mes-demandes-scrim — renommage slash uniquement', () => {
     'mesDemandes.js',
   );
   const source = fs.readFileSync(cmdPath, 'utf8');
-  assert.match(source, /\.setName\('mes-demandes-scrim'\)/);
+  // Nouveau nom validé
+  assert.match(source, /\.setName\('my-scrims'\)/);
+  assert.doesNotMatch(source, /\.setName\('mes-demandes-scrim'\)/);
   assert.match(source, /listActiveScrimPostsByAuthor/);
-  assert.match(source, /Tes demandes de scrim actives/);
+  // Le texte est maintenant externalisé dans les clés i18n
+  assert.match(source, /myScrims\.embedTitle/);
 });
 
 test('mes-demandes-joueur — commande publique enregistrée', () => {

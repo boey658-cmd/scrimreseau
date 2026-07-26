@@ -11,6 +11,17 @@ const ERR_DATE_WINDOW =
   'La date choisie doit être comprise entre aujourd\'hui et les 30 prochains jours.';
 
 /**
+ * Crée un résultat d'erreur de validation avec code stable pour i18n.
+ * Le champ `error` reste pour la rétrocompatibilité.
+ * @param {string} errorCode  Clé i18n stable (ex. 'validation.date.required')
+ * @param {string} error      Texte français de fallback
+ * @returns {{ ok: false, errorCode: string, error: string }}
+ */
+function validErr(errorCode, error) {
+  return { ok: false, errorCode, error };
+}
+
+/**
  * @param {readonly string[]} list
  * @param {string} value
  * @returns {string | null} valeur canonique de la liste
@@ -32,23 +43,23 @@ function pad2(n) {
 /**
  * Normalise une date saisie (FR) vers DD/MM ou DD/MM/YYYY.
  * @param {string} raw
- * @returns {{ ok: true, value: string } | { ok: false, error: string }}
+ * @returns {{ ok: true, value: string } | { ok: false, errorCode: string, error: string }}
  */
 export function parseAndNormalizeDate(raw) {
   if (typeof raw !== 'string') {
-    return { ok: false, error: 'La date doit être une chaîne de caractères.' };
+    return validErr('validation.date.not_string', 'La date doit être une chaîne de caractères.');
   }
   const s = raw.trim();
-  if (!s) return { ok: false, error: 'La date est obligatoire.' };
+  if (!s) return validErr('validation.date.required', 'La date est obligatoire.');
 
   const normalized = s.replace(/-/g, '/');
   const parts = normalized.split('/').map((p) => p.trim()).filter(Boolean);
 
   if (parts.length !== 2 && parts.length !== 3) {
-    return {
-      ok: false,
-      error: 'Format de date invalide. Utilisez JJ/MM, JJ-MM ou JJ/MM/AAAA.',
-    };
+    return validErr(
+      'validation.date.invalid_format',
+      'Format de date invalide. Utilisez JJ/MM, JJ-MM ou JJ/MM/AAAA.',
+    );
   }
 
   const day = Number(parts[0]);
@@ -56,13 +67,13 @@ export function parseAndNormalizeDate(raw) {
   const year = parts.length === 3 ? Number(parts[2]) : null;
 
   if (!Number.isInteger(day) || !Number.isInteger(month)) {
-    return { ok: false, error: 'La date contient des nombres invalides.' };
+    return validErr('validation.date.invalid_numbers', 'La date contient des nombres invalides.');
   }
   if (parts.length === 3 && (!Number.isInteger(year) || year < 2000 || year > 2100)) {
-    return { ok: false, error: 'Année invalide (attendu entre 2000 et 2100).' };
+    return validErr('validation.date.invalid_year', 'Année invalide (attendu entre 2000 et 2100).');
   }
-  if (month < 1 || month > 12) return { ok: false, error: 'Mois invalide (1–12).' };
-  if (day < 1 || day > 31) return { ok: false, error: 'Jour invalide.' };
+  if (month < 1 || month > 12) return validErr('validation.date.invalid_month', 'Mois invalide (1–12).');
+  if (day < 1 || day > 31) return validErr('validation.date.invalid_day', 'Jour invalide.');
 
   const value =
     year === null
@@ -85,12 +96,11 @@ function calendarStartParis(y, m, d) {
 }
 
 /**
- * Validation /recherche-scrim : format FR, inférence d’année (JJ/MM), fenêtre [aujourd’hui ; +30 j] en Europe/Paris.
- * Sans année : année courante (Paris), puis année suivante si la date est déjà passée ; la date finale doit entrer dans la fenêtre.
+ * Validation /recherche-scrim : format FR, inférence d'année (JJ/MM), fenêtre [aujourd'hui ; +30 j] en Europe/Paris.
  *
  * @param {string} raw
- * @param {{ referenceDateTime?: DateTime }} [options] tests uniquement — « maintenant » simulé (timezone Paris appliquée).
- * @returns {{ ok: true, value: string } | { ok: false, error: string }}
+ * @param {{ referenceDateTime?: DateTime }} [options]
+ * @returns {{ ok: true, value: string } | { ok: false, errorCode: string, error: string }}
  */
 export function parseScrimSearchDate(raw, options = {}) {
   const basic = parseAndNormalizeDate(raw);
@@ -111,13 +121,13 @@ export function parseScrimSearchDate(raw, options = {}) {
   if (explicitYear !== null) {
     const dt = calendarStartParis(explicitYear, month, day);
     if (!dt.isValid) {
-      return { ok: false, error: 'Date invalide (jour ou mois incorrect).' };
+      return validErr('validation.date.invalid_calendar', 'Date invalide (jour ou mois incorrect).');
     }
     if (dt < today) {
-      return { ok: false, error: ERR_DATE_PAST };
+      return validErr('validation.date.past', ERR_DATE_PAST);
     }
     if (dt > maxDay) {
-      return { ok: false, error: ERR_DATE_WINDOW };
+      return validErr('validation.date.window', ERR_DATE_WINDOW);
     }
     return {
       ok: true,
@@ -128,7 +138,7 @@ export function parseScrimSearchDate(raw, options = {}) {
   const y0 = today.year;
   const dt0 = calendarStartParis(y0, month, day);
   if (!dt0.isValid) {
-    return { ok: false, error: 'Date invalide (jour ou mois incorrect).' };
+    return validErr('validation.date.invalid_calendar', 'Date invalide (jour ou mois incorrect).');
   }
 
   /** @type {DateTime} */
@@ -138,16 +148,16 @@ export function parseScrimSearchDate(raw, options = {}) {
   } else {
     const dt1 = calendarStartParis(y0 + 1, month, day);
     if (!dt1.isValid) {
-      return { ok: false, error: 'Date invalide (jour ou mois incorrect).' };
+      return validErr('validation.date.invalid_calendar', 'Date invalide (jour ou mois incorrect).');
     }
     candidate = dt1;
   }
 
   if (candidate < today) {
-    return { ok: false, error: ERR_DATE_PAST };
+    return validErr('validation.date.past', ERR_DATE_PAST);
   }
   if (candidate > maxDay) {
-    return { ok: false, error: ERR_DATE_WINDOW };
+    return validErr('validation.date.window', ERR_DATE_WINDOW);
   }
 
   return {
@@ -157,12 +167,11 @@ export function parseScrimSearchDate(raw, options = {}) {
 }
 
 /**
- * Date pour filtres /liste-scrims : même inférence JJ/MM → année (Paris) que la recherche,
- * sans contrainte de fenêtre « 30 jours » (simple jour calendaire pour filtrer).
+ * Date pour filtres /liste-scrims : même inférence JJ/MM → année (Paris), sans contrainte de fenêtre.
  *
  * @param {string} raw
  * @param {{ referenceDateTime?: DateTime }} [options]
- * @returns {{ ok: true, value: string } | { ok: false, error: string }}
+ * @returns {{ ok: true, value: string } | { ok: false, errorCode: string, error: string }}
  */
 export function parseListeScrimDateFilter(raw, options = {}) {
   const basic = parseAndNormalizeDate(raw);
@@ -182,7 +191,7 @@ export function parseListeScrimDateFilter(raw, options = {}) {
   if (explicitYear !== null) {
     const dt = calendarStartParis(explicitYear, month, day);
     if (!dt.isValid) {
-      return { ok: false, error: 'Date invalide (jour ou mois incorrect).' };
+      return validErr('validation.date.invalid_calendar', 'Date invalide (jour ou mois incorrect).');
     }
     return {
       ok: true,
@@ -193,7 +202,7 @@ export function parseListeScrimDateFilter(raw, options = {}) {
   const y0 = today.year;
   const dt0 = calendarStartParis(y0, month, day);
   if (!dt0.isValid) {
-    return { ok: false, error: 'Date invalide (jour ou mois incorrect).' };
+    return validErr('validation.date.invalid_calendar', 'Date invalide (jour ou mois incorrect).');
   }
 
   /** @type {DateTime} */
@@ -203,7 +212,7 @@ export function parseListeScrimDateFilter(raw, options = {}) {
   } else {
     const dt1 = calendarStartParis(y0 + 1, month, day);
     if (!dt1.isValid) {
-      return { ok: false, error: 'Date invalide (jour ou mois incorrect).' };
+      return validErr('validation.date.invalid_calendar', 'Date invalide (jour ou mois incorrect).');
     }
     candidate = dt1;
   }
@@ -217,20 +226,21 @@ export function parseListeScrimDateFilter(raw, options = {}) {
 /**
  * Normalise une heure vers HH:MM.
  * @param {string} raw
+ * @returns {{ ok: true, value: string } | { ok: false, errorCode: string, error: string }}
  */
 export function parseAndNormalizeTime(raw) {
   if (typeof raw !== 'string') {
-    return { ok: false, error: 'L’heure doit être une chaîne de caractères.' };
+    return validErr('validation.time.not_string', 'L\u2019heure doit \u00eatre une cha\u00eene de caract\u00e8res.');
   }
   let s = raw.trim().toLowerCase().replace(/h/gi, ':');
-  if (!s) return { ok: false, error: 'L’heure est obligatoire.' };
+  if (!s) return validErr('validation.time.required', 'L\u2019heure est obligatoire.');
 
   const parts = s.split(':').map((p) => p.trim()).filter((p) => p.length > 0);
 
   if (parts.length === 1) {
     const h = Number(parts[0]);
     if (!Number.isInteger(h) || h < 0 || h > 23) {
-      return { ok: false, error: 'Heure invalide (0–23).' };
+      return validErr('validation.time.invalid_hour', 'Heure invalide (0\u201323).');
     }
     return { ok: true, value: `${pad2(h)}:00` };
   }
@@ -239,30 +249,29 @@ export function parseAndNormalizeTime(raw) {
     const h = Number(parts[0]);
     const m = Number(parts[1]);
     if (!Number.isInteger(h) || h < 0 || h > 23) {
-      return { ok: false, error: 'Heures invalides (0–23).' };
+      return validErr('validation.time.invalid_hours', 'Heures invalides (0\u201323).');
     }
     if (!Number.isInteger(m) || m < 0 || m > 59) {
-      return { ok: false, error: 'Minutes invalides (0–59).' };
+      return validErr('validation.time.invalid_minutes', 'Minutes invalides (0\u201359).');
     }
     return { ok: true, value: `${pad2(h)}:${pad2(m)}` };
   }
 
-  return {
-    ok: false,
-    error: 'Format d’heure invalide. Ex. : 20:30, 20h30, 20h.',
-  };
+  return validErr(
+    'validation.time.invalid_format',
+    'Format d\u2019heure invalide. Ex.\u00a0: 20:30, 20h30, 20h.',
+  );
 }
 
 /** Écart max entre heure de début et heure max (flexible), en minutes (12 h). */
 const SCRIM_FLEXIBLE_TIME_MAX_SPAN_MINUTES = 12 * 60;
 
 /**
- * Heure max optionnelle pour créneau flexible : strictement après `startTimeNormalized` (HH:MM),
- * plage max {@link SCRIM_FLEXIBLE_TIME_MAX_SPAN_MINUTES}.
+ * Heure max optionnelle pour créneau flexible.
  *
- * @param {string} startTimeNormalized HH:MM (ex. sortie de {@link parseAndNormalizeTime})
- * @param {string | null | undefined} endRaw saisie brute ou vide
- * @returns {{ ok: true, value: string | null } | { ok: false, error: string }}
+ * @param {string} startTimeNormalized HH:MM
+ * @param {string | null | undefined} endRaw
+ * @returns {{ ok: true, value: string | null } | { ok: false, errorCode: string, error: string }}
  */
 export function validateOptionalFlexibleEndTime(startTimeNormalized, endRaw) {
   if (endRaw == null || (typeof endRaw === 'string' && !endRaw.trim())) {
@@ -282,21 +291,19 @@ export function validateOptionalFlexibleEndTime(startTimeNormalized, endRaw) {
   const startMin = toMinutes(startTimeNormalized);
   const endMin = toMinutes(endRes.value);
   if (!Number.isFinite(startMin) || !Number.isFinite(endMin)) {
-    return { ok: false, error: 'Heure de début ou heure max invalide.' };
+    return validErr('validation.time.flex_parse_error', 'Heure de d\u00e9but ou heure max invalide.');
   }
   if (endMin <= startMin) {
-    return {
-      ok: false,
-      error:
-        'L’heure max doit être strictement après l’heure de début.',
-    };
+    return validErr(
+      'validation.time.flex_before_start',
+      'L\u2019heure max doit \u00eatre strictement apr\u00e8s l\u2019heure de d\u00e9but.',
+    );
   }
   if (endMin - startMin > SCRIM_FLEXIBLE_TIME_MAX_SPAN_MINUTES) {
-    return {
-      ok: false,
-      error:
-        'L’écart entre l’heure de début et l’heure max ne peut pas dépasser 12 heures.',
-    };
+    return validErr(
+      'validation.time.flex_max_span',
+      'L\u2019\u00e9cart entre l\u2019heure de d\u00e9but et l\u2019heure max ne peut pas d\u00e9passer 12 heures.',
+    );
   }
   return { ok: true, value: endRes.value };
 }
@@ -304,20 +311,20 @@ export function validateOptionalFlexibleEndTime(startTimeNormalized, endRaw) {
 /**
  * @param {string} gameKey
  * @param {string} rank
+ * @returns {{ ok: true, value: string } | { ok: false, errorCode: string, error: string }}
  */
 export function validateRank(gameKey, rank) {
   const game = getGame(gameKey);
-  if (!game) return { ok: false, error: 'Jeu inconnu.' };
+  if (!game) return validErr('validation.rank.unknown_game', 'Jeu inconnu.');
   if (typeof rank !== 'string' || !rank.trim()) {
-    return { ok: false, error: 'Le rang est obligatoire.' };
+    return validErr('validation.rank.required', 'Le rang est obligatoire.');
   }
   const canon = matchFromList(game.ranks, rank);
   if (!canon) {
-    return {
-      ok: false,
-      error:
-        'Le rang sélectionné ne correspond pas au jeu choisi. Merci de sélectionner un rang valide pour ce jeu.',
-    };
+    return validErr(
+      'validation.rank.invalid',
+      'Le rang s\u00e9lectionn\u00e9 ne correspond pas au jeu choisi. Merci de s\u00e9lectionner un rang valide pour ce jeu.',
+    );
   }
   return { ok: true, value: canon };
 }
@@ -325,33 +332,34 @@ export function validateRank(gameKey, rank) {
 /**
  * @param {string} gameKey
  * @param {string} format
+ * @returns {{ ok: true, value: string } | { ok: false, errorCode: string, error: string }}
  */
 export function validateFormat(gameKey, format) {
   const game = getGame(gameKey);
-  if (!game) return { ok: false, error: 'Jeu inconnu.' };
+  if (!game) return validErr('validation.format.unknown_game', 'Jeu inconnu.');
   if (typeof format !== 'string' || !format.trim()) {
-    return { ok: false, error: 'Le format est obligatoire.' };
+    return validErr('validation.format.required', 'Le format est obligatoire.');
   }
   const canon = matchFromList(game.formats, format);
   if (!canon) {
-    return {
-      ok: false,
-      error:
-        'Le format sélectionné ne correspond pas au jeu choisi. Merci de sélectionner un format valide pour ce jeu.',
-    };
+    return validErr(
+      'validation.format.invalid',
+      'Le format s\u00e9lectionn\u00e9 ne correspond pas au jeu choisi. Merci de s\u00e9lectionner un format valide pour ce jeu.',
+    );
   }
   return { ok: true, value: canon };
 }
 
 /**
  * @param {import('discord.js').User | null | undefined} user
+ * @returns {{ ok: true, userId: string } | { ok: false, errorCode: string, error: string }}
  */
 export function validateContactUser(user) {
   if (!user) {
-    return { ok: false, error: 'Contact Discord invalide (utilisateur manquant).' };
+    return validErr('validation.contact.missing', 'Contact Discord invalide (utilisateur manquant).');
   }
   if (user.bot) {
-    return { ok: false, error: 'Le contact ne peut pas être un bot.' };
+    return validErr('validation.contact.bot', 'Le contact ne peut pas \u00eatre un bot.');
   }
   return { ok: true, userId: user.id };
 }
@@ -359,23 +367,15 @@ export function validateContactUser(user) {
 /**
  * Valide et normalise un lien d'invitation Discord.
  *
- * Liens acceptés :
- *   https://discord.gg/<code>
- *   https://discord.com/invite/<code>
- *   https://discordapp.com/invite/<code>
- *   discord.gg/<code>  (normalisé automatiquement en https://discord.gg/<code>)
- *
- * Le code d'invitation doit être non vide et ne contenir que des caractères alphanumériques,
- * tirets et underscores.
- *
  * @param {string | null | undefined} raw
- * @returns {{ ok: true, value: string } | { ok: false, error: string }}
+ * @returns {{ ok: true, value: string } | { ok: false, errorCode: string, error: string }}
  */
 export function validateDiscordInviteUrl(raw) {
-  const ERR = 'Merci d\'indiquer un lien d\'invitation Discord valide (ex. https://discord.gg/xxxx).';
+  const errFr = 'Merci d\u2019indiquer un lien d\u2019invitation Discord valide (ex. https://discord.gg/xxxx).';
+  const fail = () => validErr('validation.discordUrl.invalid', errFr);
 
   if (typeof raw !== 'string' || !raw.trim()) {
-    return { ok: false, error: ERR };
+    return fail();
   }
 
   let input = raw.trim();
@@ -389,19 +389,18 @@ export function validateDiscordInviteUrl(raw) {
   try {
     parsed = new URL(input);
   } catch {
-    return { ok: false, error: ERR };
+    return fail();
   }
 
   // Schéma obligatoirement https
   if (parsed.protocol !== 'https:') {
-    return { ok: false, error: ERR };
+    return fail();
   }
 
   const host = parsed.hostname.toLowerCase();
   let code = null;
 
   if (host === 'discord.gg') {
-    // /code ou /invite/code
     const match = parsed.pathname.match(/^\/(?:invite\/)?([A-Za-z0-9_-]+)\/?$/);
     if (match) code = match[1];
   } else if (host === 'discord.com' || host === 'discordapp.com') {
@@ -410,9 +409,8 @@ export function validateDiscordInviteUrl(raw) {
   }
 
   if (!code || code.length < 2) {
-    return { ok: false, error: ERR };
+    return fail();
   }
 
-  // Normalise toujours vers discord.gg pour un affichage propre
   return { ok: true, value: `https://discord.gg/${code}` };
 }

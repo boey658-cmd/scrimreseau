@@ -1,22 +1,16 @@
 /**
- * Règle : configuration du salon de **réception** des scrims (pas /recherche-scrim).
+ * Règle : configuration du salon de **réception** des scrims (pas /find-scrim).
  * Autorisation uniquement via validation manuelle (`guild_scrim_reception_bypass`).
  */
+
+import { t } from '../i18n/index.js';
 
 const SCRIM_RECEPTION_MIN_MEMBERS_FALLBACK = 150;
 
 const DEFAULT_TICKET_URL = 'https://discord.gg/dcjhQq5Ur9';
 
-const REFUSAL_BODY =
-  '🔒 La réception des scrims ScrimRéseau est activée manuellement afin de garder un réseau propre et actif.\n\n' +
-  'Pour demander l\'accès :\n' +
-  '• ouvrez un ticket sur le Discord ScrimRéseau\n' +
-  '• envoyez le lien de votre serveur\n' +
-  '• indiquez le salon prévu pour les scrims\n\n' +
-  'Une fois validé, votre serveur pourra recevoir automatiquement les scrims du réseau directement chez vous 🙂';
-
 /**
- * Compatibilité — n’est plus utilisé pour autoriser la configuration réception.
+ * Compatibilité — n'est plus utilisé pour autoriser la configuration réception.
  * Seuil effectif : `SCRIM_RECEPTION_MIN_MEMBERS` (entier > 0) ou 150 si absent / invalide.
  */
 export function getScrimReceptionMinMembers() {
@@ -39,7 +33,7 @@ export function isGuildReceptionBypassActive(row) {
 }
 
 /**
- * @param {number | null | undefined} _memberCount Conservé pour compatibilité d’appel ; ignoré.
+ * @param {number | null | undefined} _memberCount Conservé pour compatibilité d'appel ; ignoré.
  * @param {{ bypass_member_minimum?: number | null } | undefined} bypassRow
  */
 export function mayConfigureScrimReceptionChannel(_memberCount, bypassRow) {
@@ -47,10 +41,19 @@ export function mayConfigureScrimReceptionChannel(_memberCount, bypassRow) {
 }
 
 /**
- * Dernière ligne : `SCRIM_RECEPTION_TICKET_URL` si défini (HTTPS), sinon invite par défaut.
+ * Contenu du message de refus d'accès à la réception scrim.
+ * Accepte optionnellement un traducteur (ex. createTranslator(locale)) pour localiser le message.
+ * Si absent, utilise le français (fallback).
+ *
+ * @param {((key: string) => string) | undefined} [T] - Traducteur optionnel
+ * @returns {string}
  */
-export function buildScrimReceptionConfigRefusalContent() {
+export function buildScrimReceptionConfigRefusalContent(T) {
   const url = process.env.SCRIM_RECEPTION_TICKET_URL?.trim();
   const linkLine = url && /^https?:\/\//i.test(url) ? url : DEFAULT_TICKET_URL;
-  return `${REFUSAL_BODY}\n\n${linkLine}`;
+  const locale = T ? undefined : 'fr';
+  const refusalBody = T
+    ? T('gate.refusalBody')
+    : t('fr', 'gate.refusalBody');
+  return `${refusalBody}\n\n${linkLine}`;
 }

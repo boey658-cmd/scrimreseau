@@ -106,7 +106,7 @@ test('affichage embed : plage compacte Paris', () => {
   assert.match(desc, /19h–21h/);
 });
 
-test('affichage embed : heure seule inchangée (sans fin)', () => {
+test('affichage embed FR : heure seule inchangée (sans fin) — maintenant (CET)', () => {
   const start = computeScheduledAtIso('20/01/2026', '19:30', Date.now());
   const embed = buildScrimEmbed({
     gameKey: 'league_of_legends',
@@ -119,5 +119,5 @@ test('affichage embed : heure seule inchangée (sans fin)', () => {
     scheduledAtEndIso: null,
   });
   const desc = embed.data.description ?? '';
-  assert.match(desc, /19h30 \(heure française\)/);
+  assert.match(desc, /19h30 \(CET\)/, 'FR embed doit afficher (CET) en hiver');
 });

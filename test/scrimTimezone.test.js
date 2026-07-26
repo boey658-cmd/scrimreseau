@@ -13,15 +13,33 @@ test('CEST — 20/07/2026 20:30 interprété comme Paris → 18:30 UTC', () => {
   assert.match(iso, /^2026-07-20T18:30:00\.?\d*Z$/);
 });
 
-test('affichage Intl : ISO UTC → date FR + 20h30 (heure française)', () => {
-  const fmt = formatParisDisplayFromUtcIso('2026-01-20T19:30:00.000Z');
+test('affichage FR hiver (CET) : ISO UTC → date + 20h30 (CET)', () => {
+  const fmt = formatParisDisplayFromUtcIso('2026-01-20T19:30:00.000Z', 'fr');
   assert.equal(fmt?.dateStr, '20/01/2026');
-  assert.equal(fmt?.timeStr, '20h30 (heure française)');
+  assert.equal(fmt?.timeStr, '20h30 (CET)');
 });
 
-test('affichage avec minutes et zéro', () => {
-  const fmt = formatParisDisplayFromUtcIso('2026-01-20T08:05:00.000Z');
-  assert.equal(fmt?.timeStr, '09h05 (heure française)');
+test('affichage EN hiver (CET) : ISO UTC → date + 20:30 (CET)', () => {
+  const fmt = formatParisDisplayFromUtcIso('2026-01-20T19:30:00.000Z', 'en');
+  assert.equal(fmt?.dateStr, '20/01/2026');
+  assert.equal(fmt?.timeStr, '20:30 (CET)');
+});
+
+test('affichage FR été (CEST) : ISO UTC → 20:30 Paris → 18:30 UTC', () => {
+  const fmt = formatParisDisplayFromUtcIso('2026-07-27T19:00:00.000Z', 'fr');
+  assert.equal(fmt?.dateStr, '27/07/2026');
+  assert.equal(fmt?.timeStr, '21h00 (CEST)');
+});
+
+test('affichage EN été (CEST) : ISO UTC → 21:00 (CEST)', () => {
+  const fmt = formatParisDisplayFromUtcIso('2026-07-27T19:00:00.000Z', 'en');
+  assert.equal(fmt?.dateStr, '27/07/2026');
+  assert.equal(fmt?.timeStr, '21:00 (CEST)');
+});
+
+test('affichage avec minutes et zéro (FR, CET)', () => {
+  const fmt = formatParisDisplayFromUtcIso('2026-01-20T08:05:00.000Z', 'fr');
+  assert.equal(fmt?.timeStr, '09h05 (CET)');
 });
 
 test('scheduled_at invalide → null', () => {

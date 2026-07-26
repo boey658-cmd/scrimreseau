@@ -4,6 +4,7 @@ import {
   SlashCommandBuilder,
 } from 'discord.js';
 import { getEmbedColorForGame } from '../config/gameEmbedColors.js';
+import { getGuildLocale, t } from '../i18n/index.js';
 import { interactReply } from '../utils/interactionDiscord.js';
 
 const EMBED_COLOR = getEmbedColorForGame('');
@@ -11,33 +12,30 @@ const EMBED_COLOR = getEmbedColorForGame('');
 export const help = {
   data: new SlashCommandBuilder()
     .setName('help-scrim')
-    .setDescription('Aide générale sur ScrimRéseau — scrims'),
+    .setDescription('Show ScrimRéseau help.'),
 
   /**
    * @param {import('discord.js').ChatInputCommandInteraction} interaction
-   * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']>, db: import('better-sqlite3').Database }} _ctx
+   * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']>, db: import('better-sqlite3').Database }} ctx
    */
-  async execute(interaction, _ctx) {
+  async execute(interaction, ctx) {
+    const locale = getGuildLocale(interaction.guildId ?? '', ctx.stmts);
+
     const embed = new EmbedBuilder()
-      .setTitle('🎮 ScrimRéseau — Aide')
+      .setTitle(t(locale, 'help.title'))
       .setColor(EMBED_COLOR)
       .addFields(
         {
-          name: '📢 Trouver un scrim',
-          value:
-            '`/recherche-scrim` → publie une recherche de scrim dans le réseau\n' +
-            '`/liste-scrims` → affiche les scrims actuellement disponibles selon tes filtres',
+          name: t(locale, 'help.findTitle'),
+          value: t(locale, 'help.findValue'),
         },
         {
-          name: '📌 Gérer tes scrims',
-          value:
-            '`/mes-demandes-scrim` → affiche tes demandes de scrim en cours\n' +
-            '`/scrim-trouve` → ferme une de tes demandes quand tu as trouvé un scrim',
+          name: t(locale, 'help.manageTitle'),
+          value: t(locale, 'help.manageValue'),
         },
         {
-          name: '💡 Astuce',
-          value:
-            'Les scrims expirent automatiquement une fois la date/heure dépassée, et les messages sont ensuite nettoyés pour garder les salons lisibles.',
+          name: t(locale, 'help.tipTitle'),
+          value: t(locale, 'help.tipValue'),
         },
       );
 

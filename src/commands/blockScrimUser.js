@@ -1,15 +1,17 @@
 import { MessageFlags } from 'discord.js';
+import { t } from '../i18n/index.js';
 import { interactReply } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
 
 /**
  * @param {import('discord.js').ChatInputCommandInteraction} interaction
  * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']> }} ctx
+ * @param {string} [locale='fr']
  */
-export async function executeBlockScrimUserCore(interaction, ctx) {
+export async function executeBlockScrimUserCore(interaction, ctx, locale = 'fr') {
   if (!interaction.inGuild()) {
     await interactReply(interaction, {
-      content: '❌ Cette commande doit être utilisée sur un serveur.',
+      content: t(locale, 'generic.guildOnly'),
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -19,7 +21,7 @@ export async function executeBlockScrimUserCore(interaction, ctx) {
 
   if (user.id === interaction.client.user?.id) {
     await interactReply(interaction, {
-      content: '❌ Vous ne pouvez pas bloquer le bot.',
+      content: t(locale, 'scrimModeration.blockBot'),
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -30,7 +32,7 @@ export async function executeBlockScrimUserCore(interaction, ctx) {
 
   if (info.changes === 0) {
     await interactReply(interaction, {
-      content: `ℹ️ **${user.tag}** est déjà bloqué pour les scrims sur ce serveur.`,
+      content: t(locale, 'scrimModeration.alreadyBlocked', { tag: user.tag }),
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -43,7 +45,7 @@ export async function executeBlockScrimUserCore(interaction, ctx) {
   });
 
   await interactReply(interaction, {
-    content: `✅ Les annonces de **${user.tag}** ne seront plus diffusées sur ce serveur.`,
+    content: t(locale, 'scrimModeration.blockSuccess', { tag: user.tag }),
     flags: MessageFlags.Ephemeral,
   });
 }

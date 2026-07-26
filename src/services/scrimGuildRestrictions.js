@@ -1,3 +1,4 @@
+import { t } from '../i18n/index.js';
 import { logger } from '../utils/logger.js';
 
 /** @typedef {{ ok: true } | { ok: false, error: string }} ScrimGateResult */
@@ -42,7 +43,7 @@ export function getScrimUsageParentChannelId(channel) {
  * @param {{ getScrimUsageChannel: import('better-sqlite3').Statement }} stmts
  * @returns {ScrimGateResult}
  */
-export function checkScrimChannel(guildId, channel, stmts) {
+export function checkScrimChannel(guildId, channel, stmts, locale = 'fr') {
   try {
     const row = stmts.getScrimUsageChannel.get(guildId);
     if (!row?.channel_id) {
@@ -55,10 +56,10 @@ export function checkScrimChannel(guildId, channel, stmts) {
         guild_id: guildId,
         channel_id_configured: row.channel_id,
       });
-      return { ok: false, error: MSG_SCRIM_GUILD_CONFIG_ERROR };
+      return { ok: false, error: t(locale, 'restrictions.configError') };
     }
     if (row.channel_id !== effectiveId) {
-      return { ok: false, error: MSG_WRONG_SCRIM_CHANNEL };
+      return { ok: false, error: t(locale, 'restrictions.wrongChannel') };
     }
     return { ok: true };
   } catch (err) {
@@ -67,7 +68,7 @@ export function checkScrimChannel(guildId, channel, stmts) {
       message: err instanceof Error ? err.message : String(err),
       stack: err instanceof Error ? err.stack : undefined,
     });
-    return { ok: false, error: MSG_SCRIM_GUILD_CONFIG_ERROR };
+    return { ok: false, error: t(locale, 'restrictions.configError') };
   }
 }
 
@@ -136,7 +137,7 @@ export function cleanInvalidRoles(guildId, guild, stmts) {
  * }} stmts
  * @returns {ScrimGateResult}
  */
-export function checkScrimPermissions(member, guildId, guild, stmts) {
+export function checkScrimPermissions(member, guildId, guild, stmts, locale = 'fr') {
   try {
     const rowMode = stmts.getScrimPermissionMode.get(guildId);
     const mode = rowMode?.mode ?? 'everyone';
@@ -150,7 +151,7 @@ export function checkScrimPermissions(member, guildId, guild, stmts) {
         guild_id: guildId,
         mode,
       });
-      return { ok: false, error: MSG_NO_SCRIM_PERMISSION };
+      return { ok: false, error: t(locale, 'restrictions.noPermission') };
     }
 
     const roleRows = stmts.listScrimAllowedRoles.all(guildId);
@@ -159,7 +160,7 @@ export function checkScrimPermissions(member, guildId, guild, stmts) {
       logger.warn('checkScrimPermissions: cache des rôles indisponible', {
         guild_id: guildId,
       });
-      return { ok: false, error: MSG_SCRIM_GUILD_CONFIG_ERROR };
+      return { ok: false, error: t(locale, 'restrictions.configError') };
     }
 
     const validRoleIds = roleRows
@@ -176,7 +177,7 @@ export function checkScrimPermissions(member, guildId, guild, stmts) {
     const allowedIds = new Set(validRoleIds);
 
     if (!member || typeof member !== 'object') {
-      return { ok: false, error: MSG_NO_SCRIM_PERMISSION };
+      return { ok: false, error: t(locale, 'restrictions.noPermission') };
     }
 
     /** GuildMember */
@@ -193,7 +194,7 @@ export function checkScrimPermissions(member, guildId, guild, stmts) {
           return { ok: true };
         }
       }
-      return { ok: false, error: MSG_NO_SCRIM_PERMISSION };
+      return { ok: false, error: t(locale, 'restrictions.noPermission') };
     }
 
     /** APIInteractionGuildMember : roles = Snowflake[] */
@@ -208,16 +209,16 @@ export function checkScrimPermissions(member, guildId, guild, stmts) {
           return { ok: true };
         }
       }
-      return { ok: false, error: MSG_NO_SCRIM_PERMISSION };
+      return { ok: false, error: t(locale, 'restrictions.noPermission') };
     }
 
-    return { ok: false, error: MSG_NO_SCRIM_PERMISSION };
+    return { ok: false, error: t(locale, 'restrictions.noPermission') };
   } catch (err) {
     logger.error('checkScrimPermissions', {
       guild_id: guildId,
       message: err instanceof Error ? err.message : String(err),
       stack: err instanceof Error ? err.stack : undefined,
     });
-    return { ok: false, error: MSG_SCRIM_GUILD_CONFIG_ERROR };
+    return { ok: false, error: t(locale, 'restrictions.configError') };
   }
 }

@@ -37,7 +37,7 @@ export function buildMultiOpggEmbedFieldValue(validatedHttpsUrl) {
 /**
  * @param {string | null | undefined} raw
  * @param {string} gameKey
- * @returns {{ ok: true, value: string | null } | { ok: false, error: string }}
+ * @returns {{ ok: true, value: string | null } | { ok: false, errorCode: string, error: string }}
  */
 export function validateMultiOpggUrl(raw, gameKey) {
   const isLoL = gameKey === LEAGUE_GAME_KEY;
@@ -50,7 +50,7 @@ export function validateMultiOpggUrl(raw, gameKey) {
       return { ok: true, value: null };
     }
     logReject('wrong_game', { game_key: gameKey });
-    return { ok: false, error: MSG_MULTI_OPGG_WRONG_GAME };
+    return { ok: false, errorCode: 'validation.multiOpgg.wrong_game', error: MSG_MULTI_OPGG_WRONG_GAME };
   }
 
   if (raw == null || typeof raw !== 'string') {
@@ -62,19 +62,21 @@ export function validateMultiOpggUrl(raw, gameKey) {
     return { ok: true, value: null };
   }
 
+  const failInvalid = () => ({ ok: false, errorCode: 'validation.multiOpgg.invalid', error: MSG_MULTI_OPGG_INVALID });
+
   if (trimmed.length > MULTI_OPGG_MAX_LEN) {
     logReject('too_long', { length: trimmed.length });
-    return { ok: false, error: MSG_MULTI_OPGG_INVALID };
+    return failInvalid();
   }
 
   if (/\s/.test(trimmed)) {
     logReject('multi_value_or_whitespace');
-    return { ok: false, error: MSG_MULTI_OPGG_INVALID };
+    return failInvalid();
   }
 
   if (/[\u0000-\u001F\u007F]/.test(trimmed)) {
     logReject('control_chars');
-    return { ok: false, error: MSG_MULTI_OPGG_INVALID };
+    return failInvalid();
   }
 
   let url;
@@ -82,41 +84,41 @@ export function validateMultiOpggUrl(raw, gameKey) {
     url = new URL(trimmed);
   } catch {
     logReject('url_parse_error');
-    return { ok: false, error: MSG_MULTI_OPGG_INVALID };
+    return failInvalid();
   }
 
   if (url.protocol !== 'https:') {
     logReject('protocol', { protocol: url.protocol });
-    return { ok: false, error: MSG_MULTI_OPGG_INVALID };
+    return failInvalid();
   }
 
   const host = url.hostname.toLowerCase();
   if (!ALLOWED_HOSTS.has(host)) {
     logReject('host_not_allowed', { host });
-    return { ok: false, error: MSG_MULTI_OPGG_INVALID };
+    return failInvalid();
   }
 
   if (url.username !== '' || url.password !== '') {
     logReject('userinfo_present');
-    return { ok: false, error: MSG_MULTI_OPGG_INVALID };
+    return failInvalid();
   }
 
   const port = url.port;
   if (port !== '' && port !== '443') {
     logReject('non_default_port', { port });
-    return { ok: false, error: MSG_MULTI_OPGG_INVALID };
+    return failInvalid();
   }
 
   const normalized = url.href;
 
   if (normalized.length > MULTI_OPGG_MAX_LEN) {
     logReject('href_too_long', { length: normalized.length });
-    return { ok: false, error: MSG_MULTI_OPGG_INVALID };
+    return failInvalid();
   }
 
   if (/[\])\\]/.test(normalized)) {
     logReject('unsafe_href_for_embed');
-    return { ok: false, error: MSG_MULTI_OPGG_INVALID };
+    return failInvalid();
   }
 
   return { ok: true, value: normalized };
