@@ -3,6 +3,7 @@
  * Vérif. ponctuelle via API (guild.members.fetch) — le bot doit être dans cette guilde.
  */
 
+import { getScrimCommunityServerUrlFromEnv } from '../services/scrimEmbedBuilder.js';
 import { t } from '../i18n/index.js';
 import { logger } from './logger.js';
 
@@ -18,15 +19,12 @@ export function getScrimReseauPublicGuildIdFromEnv() {
 }
 
 /**
- * Lien affiché dans le message de refus (invite ou URL déjà utilisée ailleurs).
+ * Lien affiché dans le message de refus — même source que le bouton
+ * « Rejoindre le serveur ScrimRéseau » (`SCRIM_COMMUNITY_SERVER_URL`).
  * @returns {string}
  */
 export function getScrimReseauPublicInviteUrlForMessage() {
-  const direct = process.env.SCRIMRESEAU_PUBLIC_INVITE_URL?.trim();
-  if (direct) return direct;
-  const fallback = process.env.SCRIM_COMMUNITY_SERVER_URL?.trim();
-  if (fallback) return fallback;
-  return 'https://discord.gg/';
+  return getScrimCommunityServerUrlFromEnv() ?? 'https://discord.gg/';
 }
 
 /**
