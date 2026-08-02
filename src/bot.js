@@ -40,8 +40,6 @@ export async function startBot() {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
-      /** Requis pour vérifier l’appartenance au serveur public ( /recherche-scrim ). */
-      GatewayIntentBits.GuildMembers,
     ],
   });
 
