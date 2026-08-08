@@ -4,6 +4,7 @@ import {
   commandListWithoutDev,
   dashboardAdmin,
   dashboardReseau,
+  scrimChannel,
   scrimDev,
 } from '../src/commands/index.js';
 import { logger } from '../src/utils/logger.js';
@@ -39,13 +40,18 @@ if (!clientId?.trim()) {
 }
 
 const publicBody = commandListWithoutDev.map((c) => c.data.toJSON());
-// /scrim-dev, /dashboard-reseau et /dashboard-admin : guilde dev uniquement, invisibles ailleurs
-const devOnlyBody = [scrimDev.data.toJSON(), dashboardReseau.data.toJSON(), dashboardAdmin.data.toJSON()];
+// Commandes guilde dev uniquement (invisibles en global et sur les guildes clientes)
+const devOnlyBody = [
+  scrimDev.data.toJSON(),
+  dashboardReseau.data.toJSON(),
+  dashboardAdmin.data.toJSON(),
+  scrimChannel.data.toJSON(),
+];
 const devGuildId = process.env.DEV_GUILD_ID?.trim() ?? '';
 
 if (!devGuildId) {
   logger.warn(
-    'DEV_GUILD_ID absent : /scrim-dev ne sera enregistrée sur aucune guilde (commande ignorée au déploiement).',
+    'DEV_GUILD_ID absent : commandes dev (/scrim-dev, /scrim-channel, dashboards) ignorées au déploiement.',
   );
 }
 

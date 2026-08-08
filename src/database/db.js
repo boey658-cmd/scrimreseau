@@ -782,6 +782,17 @@ export function prepareStatements(db) {
       DELETE FROM guild_game_channels
       WHERE guild_id = ? AND game_key = ?
     `),
+    /** Retire une destination par guild_id + channel_id (salon supprimé / nettoyage admin). */
+    deleteGuildChannelByChannelId: db.prepare(`
+      DELETE FROM guild_game_channels
+      WHERE guild_id = ? AND channel_id = ?
+    `),
+    getGuildGameChannelByChannelId: db.prepare(`
+      SELECT guild_id, channel_id, game_key, created_at
+      FROM guild_game_channels
+      WHERE guild_id = ? AND channel_id = ?
+      LIMIT 1
+    `),
     listChannelsByGame: db.prepare(`
       SELECT guild_id, channel_id FROM guild_game_channels
       WHERE game_key = ?

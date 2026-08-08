@@ -98,6 +98,11 @@ describe('commandes dev', () => {
     assert.ok(ALL_NAMES.includes('dashboard-admin'));
     assert.ok(!PUBLIC_NAMES.includes('dashboard-admin'));
   });
+
+  it('scrim-channel n\'est que dans commandList (dev guild only)', () => {
+    assert.ok(ALL_NAMES.includes('scrim-channel'), 'scrim-channel doit être dans commandList');
+    assert.ok(!PUBLIC_NAMES.includes('scrim-channel'), 'scrim-channel ne doit pas être public');
+  });
 });
 
 // ─── 5. Aucun doublon de nom ─────────────────────────────────────────────────

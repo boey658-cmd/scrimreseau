@@ -8,6 +8,7 @@ import { mesDemandes } from './mesDemandes.js';
 import { rechercheScrim } from './rechercheScrim.js';
 import { spammer } from './spammer.js';
 import { scrimConfigurer } from './scrimConfigurer.js';
+import { scrimChannel } from './scrimChannel.js';
 import { scrimDev } from './scrimDev.js';
 import { structureLien } from './structureLien.js';
 import { scrimModeration } from './scrimModeration.js';
@@ -38,7 +39,13 @@ export const commandListWithoutDev = [
 ];
 
 /** Commandes réservées à la guilde dev/owner (DEV_GUILD_ID). Invisibles ailleurs. */
-export { dashboardAdmin, dashboardReseau, scrimDev };
+export { dashboardAdmin, dashboardReseau, scrimDev, scrimChannel };
 
 /** Toutes les commandes (résolution runtime, y compris owner/dev). */
-export const commandList = [...commandListWithoutDev, dashboardAdmin, dashboardReseau, scrimDev];
+export const commandList = [
+  ...commandListWithoutDev,
+  dashboardAdmin,
+  dashboardReseau,
+  scrimDev,
+  scrimChannel,
+];

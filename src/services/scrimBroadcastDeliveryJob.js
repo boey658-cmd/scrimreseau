@@ -134,6 +134,73 @@ export function startScrimBroadcastDeliveryJob(client, db, stmts) {
 }
 
 /**
+ * Finalise un batch s’il ne reste aucune delivery exécutable
+ * (pending / processing / retry). Les états terminaux (sent, failed_terminal,
+ * cancelled, unknown_outcome) comptent comme terminés.
+ *
+ * @param {ReturnType<import('../database/db.js')['prepareStatements']>} stmts
+ * @param {number|string} batchId
+ * @returns {boolean} true si le batch vient d’être marqué completed
+ */
+export function tryFinalizeScrimBroadcastBatch(stmts, batchId) {
+  const pending = stmts.hasPendingDeliveriesForBatch.get(batchId);
+  if (pending) return false;
+  const nowFinal = new Date().toISOString();
+  stmts.setScrimBroadcastBatchCompleted.run({
+    id: batchId,
+    status: 'completed',
+    completed_at: nowFinal,
+    updated_at: nowFinal,
+  });
+  logger.info('scrimBroadcastDeliveryJob: batch terminé', { batch_id: batchId });
+  return true;
+}
+
+/**
+ * Remet en unknown_outcome les deliveries « processing » trop anciennes
+ * (même logique que le recovery au démarrage), pour débloquer la finalisation.
+ *
+ * @param {ReturnType<import('../database/db.js')['prepareStatements']>} stmts
+ */
+function recoverStaleProcessingDuringPass(stmts) {
+  const staleThreshold = new Date(Date.now() - STALE_PROCESSING_THRESHOLD_MS).toISOString();
+  const nowIso = new Date().toISOString();
+  try {
+    const staleDeliveries = stmts.listStaleProcessingDeliveries.all({
+      stale_threshold_iso: staleThreshold,
+    });
+    for (const d of staleDeliveries) {
+      try {
+        stmts.markDeliveryUnknownOutcome.run({
+          id: d.id,
+          last_error_code: 'STALE_PROCESSING',
+          last_error_message: 'Processing sans fin (passe worker)',
+          completed_at: nowIso,
+          updated_at: nowIso,
+        });
+        logger.warn('scrimBroadcastDeliveryJob: delivery stale → unknown_outcome', {
+          delivery_id: d.id,
+          batch_id: d.batch_id,
+          claimed_at: d.claimed_at,
+        });
+        if (d.batch_id != null) {
+          tryFinalizeScrimBroadcastBatch(stmts, d.batch_id);
+        }
+      } catch (err) {
+        logger.error('scrimBroadcastDeliveryJob: erreur markDeliveryUnknownOutcome (passe)', {
+          delivery_id: d.id,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  } catch (err) {
+    logger.error('scrimBroadcastDeliveryJob: erreur lecture stale deliveries (passe)', {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
  * Effectue une passe de livraison : pour chaque batch actif, dispatch une delivery.
  * Testable isolément.
  *
@@ -151,6 +218,10 @@ export async function runScrimBroadcastDeliveryPass(client, db, stmts) {
   let dispatched = 0;
 
   try {
+    // Débloque les batches coincés sur une delivery « processing » abandonnée
+    // sans attendre un redémarrage du processus.
+    recoverStaleProcessingDuringPass(stmts);
+
     const activeBatches = stmts.listActiveBatchesDueForDispatch.all();
 
     for (const batch of activeBatches) {
@@ -158,7 +229,12 @@ export async function runScrimBroadcastDeliveryPass(client, db, stmts) {
 
       const nowIso = new Date().toISOString();
       const due = stmts.getNextDueDeliveryForBatch.get({ batch_id: batch.id, now_iso: nowIso });
-      if (!due) continue;
+      if (!due) {
+        // Plus rien à claim : finaliser si toutes les deliveries sont terminales.
+        // Corrige les batches restés « active » avec dispatched:0 indéfiniment.
+        tryFinalizeScrimBroadcastBatch(stmts, batch.id);
+        continue;
+      }
 
       // Claim atomique
       const claimInfo = stmts.claimNextDeliveryForBatch.run({
@@ -167,7 +243,10 @@ export async function runScrimBroadcastDeliveryPass(client, db, stmts) {
         claimed_at: nowIso,
         updated_at: nowIso,
       });
-      if (claimInfo.changes === 0) continue;
+      if (claimInfo.changes === 0) {
+        tryFinalizeScrimBroadcastBatch(stmts, batch.id);
+        continue;
+      }
 
       // Mettre à jour last_dispatched_at sur le batch
       stmts.updateScrimBroadcastBatchLastDispatched.run({
@@ -177,7 +256,10 @@ export async function runScrimBroadcastDeliveryPass(client, db, stmts) {
       });
 
       const delivery = stmts.getProcessingDeliveryForBatch.get(batch.id);
-      if (!delivery) continue;
+      if (!delivery) {
+        tryFinalizeScrimBroadcastBatch(stmts, batch.id);
+        continue;
+      }
 
       dispatched += 1;
       await processDelivery(client, db, stmts, delivery).catch((err) => {
@@ -186,12 +268,16 @@ export async function runScrimBroadcastDeliveryPass(client, db, stmts) {
           batch_id: batch.id,
           message: err instanceof Error ? err.message : String(err),
         });
+        // Après un crash, tenter quand même la finalisation si plus rien d’exécutable.
+        tryFinalizeScrimBroadcastBatch(stmts, batch.id);
       });
     }
 
-    if (dispatched > 0 || activeBatches.length > 0) {
+    // Recompter les batches encore actifs après éventuelles finalisations
+    const stillActive = stmts.listActiveBatchesDueForDispatch.all().length;
+    if (dispatched > 0 || stillActive > 0) {
       logger.info('scrimBroadcastDeliveryJob: passe terminée', {
-        batches_active: activeBatches.length,
+        batches_active: stillActive,
         batches_processed: batchesProcessed,
         dispatched,
       });
@@ -230,6 +316,7 @@ async function processDelivery(client, db, stmts, delivery) {
       scrim_post_db_id: scrimPostDbId,
       scrim_status: scrimRow?.status ?? 'not_found',
     });
+    tryFinalizeScrimBroadcastBatch(stmts, batchId);
     return;
   }
 
@@ -392,6 +479,14 @@ async function processDelivery(client, db, stmts, delivery) {
       completed_at: nowResult,
       updated_at: nowResult,
     });
+    logger.info('scrimBroadcastDeliveryJob: delivery terminale', {
+      delivery_id: deliveryId,
+      batch_id: batchId,
+      guild_id: row.guild_id,
+      channel_id: row.channel_id,
+      outcome: result.outcome,
+      error_code: result.errorCode ?? 'TERMINAL',
+    });
   } else if (result.outcome === 'retryable_error') {
     const attemptCount = Number(delivery.attempt_count ?? 0) + 1;
     if (attemptCount >= 5) {
@@ -414,18 +509,7 @@ async function processDelivery(client, db, stmts, delivery) {
     }
   }
 
-  // Vérifier si le batch est terminé
-  const pending = stmts.hasPendingDeliveriesForBatch.get(batchId);
-  if (!pending) {
-    const nowFinal = new Date().toISOString();
-    stmts.setScrimBroadcastBatchCompleted.run({
-      id: batchId,
-      status: 'completed',
-      completed_at: nowFinal,
-      updated_at: nowFinal,
-    });
-    logger.info('scrimBroadcastDeliveryJob: batch terminé', { batch_id: batchId });
-  }
+  tryFinalizeScrimBroadcastBatch(stmts, batchId);
 }
 
 /**

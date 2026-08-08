@@ -122,7 +122,7 @@ test('scrimDev — seule commande hors liste publique', () => {
   assert.equal(scrimDev.data.name, 'scrim-dev');
 });
 
-test('deploy-commands — joueur public, devOnlyBody = scrim-dev seul', () => {
+test('deploy-commands — joueur public, devOnlyBody contient les commandes dev', () => {
   const source = readSrc('scripts/deploy-commands.js');
   assert.match(source, /commandListWithoutDev/);
   assert.doesNotMatch(source, /playerSearchDevCommandList/);
@@ -132,6 +132,7 @@ test('deploy-commands — joueur public, devOnlyBody = scrim-dev seul', () => {
     source.indexOf('const devGuildId'),
   );
   assert.match(devOnlyLine, /scrimDev\.data\.toJSON/);
+  assert.match(devOnlyLine, /scrimChannel\.data\.toJSON/);
   assert.doesNotMatch(devOnlyLine, /joueur/);
 });
 
