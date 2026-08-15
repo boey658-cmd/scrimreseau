@@ -1,4 +1,5 @@
 import {
+  ActivityType,
   Client,
   Collection,
   Events,
@@ -50,6 +51,7 @@ export async function startBot() {
   }
 
   client.once(Events.ClientReady, (readyClient) => {
+    readyClient.user.setActivity('⚔️ Scrims LoL EUW', { type: ActivityType.Playing });
     logger.health(`Bot prêt — connecté en tant que ${readyClient.user.tag}`, {
       guilds: readyClient.guilds.cache.size,
     });
