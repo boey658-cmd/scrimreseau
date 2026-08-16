@@ -15,6 +15,7 @@ import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { AttachmentBuilder, EmbedBuilder } from 'discord.js';
+import { fetchBuffer } from '../utils/fetchBuffer.js';
 import { logger } from '../utils/logger.js';
 
 const _dir = dirname(fileURLToPath(import.meta.url));
@@ -108,21 +109,6 @@ async function loadLogoImage(loadImageFn) {
       message: err instanceof Error ? err.message : String(err),
     });
     _logoCache = 'missing';
-    return null;
-  }
-}
-
-/**
- * Télécharge un buffer depuis une URL (timeout strict).
- * @param {string} url
- * @returns {Promise<Buffer | null>}
- */
-async function fetchBuffer(url) {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(ICON_FETCH_TIMEOUT_MS) });
-    if (!res.ok) return null;
-    return Buffer.from(await res.arrayBuffer());
-  } catch {
     return null;
   }
 }
@@ -486,7 +472,7 @@ async function generateDashboardImage(client, stats) {
         if (!guild) return null;
         const url = guild.iconURL({ extension: 'png', size: 64 });
         if (!url) return null;
-        return fetchBuffer(url);
+        return fetchBuffer(url, ICON_FETCH_TIMEOUT_MS);
       }),
     );
 

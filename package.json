@@ -8,6 +8,7 @@
     "start": "node index.js",
     "deploy-commands": "node scripts/deploy-commands.js",
     "upload-emojis": "node scripts/upload-game-emojis.js",
+    "export-partner-logos": "node scripts/exportPartnerLogos.js",
     "test": "node --test"
   },
   "engines": {
