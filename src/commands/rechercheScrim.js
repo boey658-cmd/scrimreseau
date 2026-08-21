@@ -680,6 +680,7 @@ export const rechercheScrim = {
               delayMs: 0,
               sendMode: 'direct',
               discordMaxAttempts: 2,
+              deliveryId: Number(claimed.id),
             });
             return { ...deliveryResult, _claimed: claimed, _delivRow: delivRowInner };
           });

@@ -449,6 +449,7 @@ async function processDelivery(client, db, stmts, delivery) {
     delayMs: 0,
     sendMode: 'direct',
     discordMaxAttempts: 2,
+    deliveryId,
   });
 
   const nowResult = new Date().toISOString();

@@ -8,7 +8,11 @@ import path from 'node:path';
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import { ChannelType, PermissionFlagsBits, PermissionsBitField } from 'discord.js';
 import { closeDb, getDb, prepareStatements } from '../src/database/db.js';
-import { deliverScrimToDestination } from '../src/services/scrimDelivery.js';
+import {
+  deliverScrimToDestination,
+  buildPersistentDeliveryNonce,
+  PERSISTENT_DELIVERY_NONCE_MAX_LEN,
+} from '../src/services/scrimDelivery.js';
 import {
   parseBroadcastConcurrency,
   getConfiguredConcurrency,
@@ -945,6 +949,7 @@ describe('Phase2 Étape2 — concurrency pool', () => {
             expiresAt: null, scrimPublicId: 'x',
           },
           sendMode: 'direct',
+          deliveryId: 42,
         });
       });
       return { result, sendCount };
@@ -984,6 +989,193 @@ describe('Phase2 Étape2 — concurrency pool', () => {
       );
       assert.equal(result.outcome, 'retryable_error');
       assert.equal(sendCount, 1);
+    });
+  });
+
+  describe('Étape4 — nonce + enforceNonce (persistent direct)', () => {
+    it('buildPersistentDeliveryNonce déterministe et ≤25', () => {
+      assert.equal(buildPersistentDeliveryNonce(123), 'sr:123');
+      assert.equal(buildPersistentDeliveryNonce('123'), 'sr:123');
+      assert.equal(buildPersistentDeliveryNonce(123), buildPersistentDeliveryNonce(123));
+      assert.notEqual(buildPersistentDeliveryNonce(123), buildPersistentDeliveryNonce(124));
+      const huge = buildPersistentDeliveryNonce(Number.MAX_SAFE_INTEGER);
+      assert.ok(huge.length <= PERSISTENT_DELIVERY_NONCE_MAX_LEN, huge);
+      assert.throws(() => buildPersistentDeliveryNonce(null));
+      assert.throws(() => buildPersistentDeliveryNonce(undefined));
+      assert.throws(() => buildPersistentDeliveryNonce(0));
+      assert.throws(() => buildPersistentDeliveryNonce(-1));
+      assert.throws(() => buildPersistentDeliveryNonce(NaN));
+      assert.throws(() => buildPersistentDeliveryNonce(''));
+    });
+
+    it('channel.send reçoit nonce + enforceNonce ; 1 send — contrat retries REST internes', async () => {
+      // discord.js REST retries (default 3) réutilisent le même request body → même nonce.
+      await withTempDb(async (db, stmts) => {
+        /** @type {any} */
+        let captured = null;
+        let sendCount = 0;
+        const perms = new PermissionsBitField([
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.EmbedLinks,
+        ]);
+        const ch = {
+          id: 'c1',
+          guildId: 'g1',
+          type: ChannelType.GuildText,
+          permissionsFor: () => perms,
+          send: async (payload) => {
+            sendCount += 1;
+            captured = payload;
+            return { id: 'msg-1' };
+          },
+        };
+        const result = await deliverScrimToDestination({
+          client: mockClient({ g1: mockGuild('g1', { c1: ch }) }),
+          stmts,
+          row: { guild_id: 'g1', channel_id: 'c1' },
+          authorUserId: 'u',
+          payload: {
+            gameKey: 'lol', teamSize: 5, rankMin: null, rankMax: null,
+            region: 'EUW', rolesNeeded: [], notes: null,
+            scheduledAt: null, scheduledAtEnd: null,
+            contactUserId: 'u', contactDisplayName: 'U',
+            authorUserId: 'u', createdAt: new Date().toISOString(),
+            expiresAt: null, scrimPublicId: 'x',
+          },
+          sendMode: 'direct',
+          deliveryId: 123,
+        });
+        assert.equal(result.outcome, 'sent');
+        assert.equal(sendCount, 1);
+        assert.equal(captured.nonce, 'sr:123');
+        assert.equal(captured.enforceNonce, true);
+        assert.ok(Array.isArray(captured.embeds) && captured.embeds.length >= 1);
+      });
+    });
+
+    it('direct sans deliveryId → NONCE_REQUIRED, 0 send', async () => {
+      await withTempDb(async (db, stmts) => {
+        let sendCount = 0;
+        const perms = new PermissionsBitField([
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.EmbedLinks,
+        ]);
+        const ch = {
+          id: 'c1',
+          guildId: 'g1',
+          type: ChannelType.GuildText,
+          permissionsFor: () => perms,
+          send: async () => { sendCount += 1; return { id: 'm' }; },
+        };
+        const result = await deliverScrimToDestination({
+          client: mockClient({ g1: mockGuild('g1', { c1: ch }) }),
+          stmts,
+          row: { guild_id: 'g1', channel_id: 'c1' },
+          authorUserId: 'u',
+          payload: {
+            gameKey: 'lol', teamSize: 5, rankMin: null, rankMax: null,
+            region: 'EUW', rolesNeeded: [], notes: null,
+            scheduledAt: null, scheduledAtEnd: null,
+            contactUserId: 'u', contactDisplayName: 'U',
+            authorUserId: 'u', createdAt: new Date().toISOString(),
+            expiresAt: null, scrimPublicId: 'x',
+          },
+          sendMode: 'direct',
+        });
+        assert.equal(result.outcome, 'terminal_error');
+        assert.equal(result.errorCode, 'NONCE_REQUIRED');
+        assert.equal(sendCount, 0);
+      });
+    });
+
+    it('background pass : nonce = id delivery claimée', async () => {
+      await withTempDb(async (db, stmts) => {
+        // Scrim/batch factices pour décaler les ids AUTOINCREMENT
+        insertScrim(stmts, { publicId: 'pad' });
+        insertBatch(stmts, insertScrim(stmts, { publicId: 'pad2' }));
+
+        const scrimId = insertScrim(stmts);
+        const batchId = insertBatch(stmts, scrimId);
+        const deliveryId = insertDelivery(stmts, batchId, scrimId, 'g1', 'c1');
+        assert.notEqual(deliveryId, batchId);
+        assert.notEqual(deliveryId, scrimId);
+        /** @type {any} */
+        let captured = null;
+        const perms = new PermissionsBitField([
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.EmbedLinks,
+        ]);
+        const ch = {
+          id: 'c1',
+          guildId: 'g1',
+          type: ChannelType.GuildText,
+          permissionsFor: () => perms,
+          send: async (payload) => {
+            captured = payload;
+            return { id: `msg-${deliveryId}`, delete: async () => {} };
+          },
+        };
+        await runScrimBroadcastDeliveryPass(
+          mockClient({ g1: mockGuild('g1', { c1: ch }) }),
+          db,
+          stmts,
+        );
+        assert.equal(captured.nonce, `sr:${deliveryId}`);
+        assert.equal(captured.enforceNonce, true);
+        assert.notEqual(captured.nonce, `sr:${batchId}`);
+        assert.notEqual(captured.nonce, `sr:${scrimId}`);
+      });
+    });
+
+    it('bootstrap-like : nonce depuis claimed.id (même helper)', async () => {
+      await withTempDb(async (db, stmts) => {
+        const scrimId = insertScrim(stmts);
+        const batchId = insertBatch(stmts, scrimId);
+        insertDelivery(stmts, batchId, scrimId, 'g1', 'c1');
+        const now = new Date().toISOString();
+        const claimed = stmts.claimNextDeliveryForBatch.get({
+          batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now,
+        });
+        assert.ok(claimed);
+        /** @type {any} */
+        let captured = null;
+        const perms = new PermissionsBitField([
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.EmbedLinks,
+        ]);
+        const ch = {
+          id: 'c1',
+          guildId: 'g1',
+          type: ChannelType.GuildText,
+          permissionsFor: () => perms,
+          send: async (payload) => {
+            captured = payload;
+            return { id: 'msg-boot' };
+          },
+        };
+        await deliverScrimToDestination({
+          client: mockClient({ g1: mockGuild('g1', { c1: ch }) }),
+          stmts,
+          row: { guild_id: 'g1', channel_id: 'c1' },
+          authorUserId: 'u',
+          payload: {
+            gameKey: 'lol', teamSize: 5, rankMin: null, rankMax: null,
+            region: 'EUW', rolesNeeded: [], notes: null,
+            scheduledAt: null, scheduledAtEnd: null,
+            contactUserId: 'u', contactDisplayName: 'U',
+            authorUserId: 'u', createdAt: new Date().toISOString(),
+            expiresAt: null, scrimPublicId: 'x',
+          },
+          sendMode: 'direct',
+          deliveryId: Number(claimed.id),
+        });
+        assert.equal(captured.nonce, buildPersistentDeliveryNonce(claimed.id));
+        assert.equal(captured.enforceNonce, true);
+      });
     });
   });
 

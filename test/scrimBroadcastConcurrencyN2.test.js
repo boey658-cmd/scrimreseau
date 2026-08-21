@@ -515,6 +515,7 @@ describe('Phase2 Étape3A — N=2 contrôlé (mocks only)', () => {
                 expiresAt: null, scrimPublicId: 'boot',
               },
               sendMode: 'direct',
+              deliveryId: Number(claimed.id),
             });
           }
         });
@@ -578,6 +579,7 @@ describe('Phase2 Étape3A — N=2 contrôlé (mocks only)', () => {
               expiresAt: null, scrimPublicId: 'x',
             },
             sendMode: 'direct',
+            deliveryId: Number(claimed.id),
           });
         });
 

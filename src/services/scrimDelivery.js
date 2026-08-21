@@ -10,6 +10,29 @@ import { enqueueDiscordTask } from './discordTaskQueue.js';
 import { runTransientDiscord } from './discordApiGuard.js';
 import { removeScrimReceptionDestination } from './scrimDestinationCleanup.js';
 
+/** Longueur max Discord pour MessageCreateOptions.nonce. */
+export const PERSISTENT_DELIVERY_NONCE_MAX_LEN = 25;
+
+/**
+ * Nonce déterministe pour Create Message (persistent direct uniquement).
+ * Format `sr:{deliveryId}` — unique par ligne delivery DB, ≤25 chars pour ids SQLite réalistes.
+ *
+ * @param {unknown} deliveryId
+ * @returns {string}
+ * @throws {TypeError} id invalide
+ */
+export function buildPersistentDeliveryNonce(deliveryId) {
+  const n = typeof deliveryId === 'bigint' ? Number(deliveryId) : Number(deliveryId);
+  if (!Number.isInteger(n) || n < 1 || !Number.isSafeInteger(n)) {
+    throw new TypeError(`buildPersistentDeliveryNonce: deliveryId invalide (${String(deliveryId)})`);
+  }
+  const nonce = `sr:${n}`;
+  if (nonce.length > PERSISTENT_DELIVERY_NONCE_MAX_LEN) {
+    throw new TypeError(`buildPersistentDeliveryNonce: nonce trop long (${nonce.length})`);
+  }
+  return nonce;
+}
+
 /**
  * @typedef {{
  *   outcome: 'sent' | 'blocked' | 'terminal_error' | 'retryable_error' | 'cancelled' | 'unknown_outcome',
@@ -51,6 +74,7 @@ export function mapDiscordTerminalErrorCode(code) {
  *   delayMs?: number,
  *   sendMode?: 'queued' | 'direct',
  *   discordMaxAttempts?: number,
+ *   deliveryId?: number | string,
  * }} args
  * @returns {Promise<DeliveryResult>}
  */
@@ -63,6 +87,7 @@ export async function deliverScrimToDestination({
   delayMs = 0,
   sendMode = 'queued',
   discordMaxAttempts,
+  deliveryId,
 }) {
   if (delayMs > 0) await sleep(delayMs);
 
@@ -206,11 +231,28 @@ export async function deliverScrimToDestination({
       : { embeds: [embed] };
 
     // 8. Envoi
-    // Persistant direct : at-most-once applicatif (1 seul channel.send).
+    // Persistant direct : at-most-once applicatif (1 seul channel.send) + nonce Discord.
     // Ambigu (timeout/5xx/réseau) → unknown_outcome, pas de retry auto.
+    // Les retries REST internes discord.js réutilisent le même body (même nonce + enforceNonce).
     if (sendMode === 'direct') {
+      let nonce;
       try {
-        const sent = /** @type {import('discord.js').Message} */ (await channel.send(sendPayload));
+        nonce = buildPersistentDeliveryNonce(deliveryId);
+      } catch (nonceErr) {
+        return {
+          outcome: 'terminal_error',
+          errorCode: 'NONCE_REQUIRED',
+          errorMessage: (nonceErr instanceof Error ? nonceErr.message : String(nonceErr)).slice(0, 200),
+          terminal: true,
+        };
+      }
+      const directPayload = {
+        ...sendPayload,
+        nonce,
+        enforceNonce: true,
+      };
+      try {
+        const sent = /** @type {import('discord.js').Message} */ (await channel.send(directPayload));
         return { outcome: 'sent', message: sent };
       } catch (sendErr) {
         const c = classifyDiscordEditError(sendErr);
@@ -233,7 +275,7 @@ export async function deliverScrimToDestination({
             terminal: false,
           };
         }
-        // Ambigu après tentative send — pas de resend applicatif
+        // Ambigu après tentative send — pas de resend applicatif (nonce ≠ garantie éternelle)
         return {
           outcome: 'unknown_outcome',
           errorCode: c.code ?? 'SEND_AMBIGUOUS',
