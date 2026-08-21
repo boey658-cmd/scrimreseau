@@ -98,6 +98,7 @@ export function classifyDiscordEditError(err) {
   const terminalCodes = new Set([
     RESTJSONErrorCodes.UnknownMessage,
     RESTJSONErrorCodes.UnknownChannel,
+    RESTJSONErrorCodes.UnknownGuild,
     RESTJSONErrorCodes.MissingAccess,
     RESTJSONErrorCodes.MissingPermissions,
   ]);

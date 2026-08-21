@@ -73,6 +73,27 @@ async function repostSingleActiveScrim(client, db, stmts, scrimPostDbId) {
     return { ok: false, successCount: 0, reason: 'not_active' };
   }
 
+  // Ne pas chevaucher un broadcast persistant initial encore ouvert
+  if (typeof stmts.hasOpenPersistentBroadcastForScrim?.get === 'function') {
+    const open = stmts.hasOpenPersistentBroadcastForScrim.get(scrimPostDbId, scrimPostDbId);
+    if (open) {
+      logger.info('scrimRepost: reporté — broadcast persistant encore ouvert', {
+        scrim_post_db_id: scrimPostDbId,
+        scrim_public_id: row.scrim_public_id,
+      });
+      return { ok: false, successCount: 0, reason: 'persistent_broadcast_open' };
+    }
+  } else {
+    const openBatch = stmts.getActiveStagingBatchForScrim?.get(scrimPostDbId);
+    if (openBatch) {
+      logger.info('scrimRepost: reporté — batch staging/active', {
+        scrim_post_db_id: scrimPostDbId,
+        batch_id: openBatch.id,
+      });
+      return { ok: false, successCount: 0, reason: 'persistent_broadcast_open' };
+    }
+  }
+
   const oldMessages = stmts.listScrimPostMessagesByPostId.all(scrimPostDbId);
 
   const gameKey = /** @type {string} */ (row.game_key);
@@ -92,14 +113,29 @@ async function repostSingleActiveScrim(client, db, stmts, scrimPostDbId) {
 
   let successCount = 0;
   try {
-    successCount = await broadcastScrimRequest({
-      client,
-      rows: channelRows,
-      stmts,
-      authorUserId: /** @type {string} */ (row.author_user_id),
-      scrimPostDbId,
-      payload: embedPayload,
-    });
+    const { runWithReservedBroadcastSlot, BROADCAST_POOL_STOPPING } = await import('./scrimBroadcastExecutionPool.js');
+    try {
+      successCount = await runWithReservedBroadcastSlot(async () =>
+        broadcastScrimRequest({
+          client,
+          rows: channelRows,
+          stmts,
+          authorUserId: /** @type {string} */ (row.author_user_id),
+          scrimPostDbId,
+          payload: embedPayload,
+        }),
+      );
+    } catch (poolErr) {
+      const code = poolErr && typeof poolErr === 'object' && 'code' in poolErr
+        ? /** @type {{ code?: string }} */ (poolErr).code
+        : undefined;
+      logger.info('scrimRepost: slot pool indisponible / shutdown', {
+        scrim_post_db_id: scrimPostDbId,
+        code: code ?? null,
+        stopping: code === BROADCAST_POOL_STOPPING,
+      });
+      return { ok: false, successCount: 0, reason: 'pool_unavailable' };
+    }
   } catch (err) {
     logger.error('scrimRepost: échec broadcast', {
       scrim_post_db_id: scrimPostDbId,

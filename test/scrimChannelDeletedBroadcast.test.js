@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { after, before, describe, it } from 'node:test';
+import { after, before, beforeEach, describe, it } from 'node:test';
 import { ChannelType, PermissionFlagsBits, PermissionsBitField } from 'discord.js';
 import { RESTJSONErrorCodes } from 'discord-api-types/v10';
 import { closeDb, getDb, prepareStatements } from '../src/database/db.js';
@@ -20,6 +20,10 @@ import {
   runScrimBroadcastDeliveryPass,
   tryFinalizeScrimBroadcastBatch,
 } from '../src/services/scrimBroadcastDeliveryJob.js';
+import {
+  resetBroadcastPoolForTests,
+  invalidateBroadcastConcurrencyCache,
+} from '../src/services/scrimBroadcastExecutionPool.js';
 import {
   startDiscordTaskQueue,
   stopDiscordTaskQueue,
@@ -164,6 +168,11 @@ describe('/scrim-channel — enregistrement dev-only', () => {
 describe('Discord 10003 — salon supprimé', () => {
   before(() => startDiscordTaskQueue());
   after(async () => stopDiscordTaskQueue());
+  beforeEach(() => {
+    resetBroadcastPoolForTests();
+    invalidateBroadcastConcurrencyCache();
+    delete process.env.SCRIM_BROADCAST_CONCURRENCY;
+  });
 
   it('fetch_channel 10003 → UNKNOWN_CHANNEL + destination retirée (pas PERMISSIONS)', async () => {
     await withTempDb(async (db, stmts) => {
@@ -270,6 +279,11 @@ describe('Discord 10003 — salon supprimé', () => {
 describe('Finalisation batch bloqué (dispatched:0)', () => {
   before(() => startDiscordTaskQueue());
   after(async () => stopDiscordTaskQueue());
+  beforeEach(() => {
+    resetBroadcastPoolForTests();
+    invalidateBroadcastConcurrencyCache();
+    delete process.env.SCRIM_BROADCAST_CONCURRENCY;
+  });
 
   it('batch active avec toutes deliveries failed_terminal → completed sans dispatch', async () => {
     await withTempDb(async (db, stmts) => {
@@ -279,6 +293,7 @@ describe('Finalisation batch bloqué (dispatched:0)', () => {
       ]);
       const now = new Date().toISOString();
       const deliv = stmts.listDeliveriesForBatch.all(batchId)[0];
+      db.prepare("UPDATE scrim_broadcast_deliveries SET status = 'processing' WHERE id = ?").run(deliv.id);
       stmts.markDeliveryTerminal.run({
         id: deliv.id,
         last_error_code: 'UNKNOWN_CHANNEL',
@@ -398,7 +413,8 @@ describe('Finalisation batch bloqué (dispatched:0)', () => {
       ]);
       const now = new Date().toISOString();
       const deliveries = stmts.listDeliveriesForBatch.all(batchId);
-      // Première : déjà sent
+      // Première : déjà sent (via processing → sent)
+      db.prepare("UPDATE scrim_broadcast_deliveries SET status = 'processing' WHERE id = ?").run(deliveries[0].id);
       stmts.markDeliverySent.run({
         id: deliveries[0].id,
         message_id: 'msg-already-sent',
@@ -407,6 +423,7 @@ describe('Finalisation batch bloqué (dispatched:0)', () => {
       });
       // Seconde : retry dans 10 minutes (pas due)
       const future = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+      db.prepare("UPDATE scrim_broadcast_deliveries SET status = 'processing' WHERE id = ?").run(deliveries[1].id);
       stmts.markDeliveryRetry.run({
         id: deliveries[1].id,
         next_attempt_at: future,

@@ -656,27 +656,50 @@ export const rechercheScrim = {
       const nowBootstrap = new Date().toISOString();
 
       for (let i = 0; i < deliveries.length; i++) {
-        const claimInfo = ctx.stmts.claimNextDeliveryForBatch.run({
-          batch_id: batchId,
-          now_iso: nowBootstrap,
-          claimed_at: nowBootstrap,
-          updated_at: nowBootstrap,
-        });
-        if (claimInfo.changes === 0) continue;
+        let result;
+        try {
+          const { runWithReservedBroadcastSlot, BROADCAST_POOL_STOPPING } = await import('../services/scrimBroadcastExecutionPool.js');
+          result = await runWithReservedBroadcastSlot(async (token) => {
+            const claimed = ctx.stmts.claimNextDeliveryForBatch.get({
+              batch_id: batchId,
+              now_iso: nowBootstrap,
+              claimed_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            });
+            if (!claimed) {
+              return { outcome: 'cancelled', _noClaim: true };
+            }
+            token.bindDelivery(Number(claimed.id));
+            const delivRowInner = { guild_id: claimed.guild_id, channel_id: claimed.channel_id };
+            const deliveryResult = await deliverScrimToDestination({
+              client: interaction.client,
+              stmts: ctx.stmts,
+              row: delivRowInner,
+              authorUserId: interaction.user.id,
+              payload: embedPayload,
+              delayMs: 0,
+              sendMode: 'direct',
+              discordMaxAttempts: 2,
+            });
+            return { ...deliveryResult, _claimed: claimed, _delivRow: delivRowInner };
+          });
+        } catch (poolErr) {
+          const code = poolErr && typeof poolErr === 'object' && 'code' in poolErr
+            ? /** @type {{ code?: string }} */ (poolErr).code
+            : undefined;
+          logger.info('recherche-scrim persistent — slot pool indisponible / shutdown', {
+            message: poolErr instanceof Error ? poolErr.message : String(poolErr),
+            code: code ?? null,
+            stopping: code === 'BROADCAST_POOL_STOPPING',
+          });
+          // Aucune delivery claimée — arrêter le bootstrap proprement
+          break;
+        }
 
-        const claimedDelivery = ctx.stmts.getProcessingDeliveryForBatch.get(batchId);
+        if (result && result._noClaim) break;
+        const claimedDelivery = result._claimed;
+        const delivRow = result._delivRow;
         if (!claimedDelivery) continue;
-
-        const delivRow = { guild_id: claimedDelivery.guild_id, channel_id: claimedDelivery.channel_id };
-
-        const result = await deliverScrimToDestination({
-          client: interaction.client,
-          stmts: ctx.stmts,
-          row: delivRow,
-          authorUserId: interaction.user.id,
-          payload: embedPayload,
-          delayMs: 0,
-        });
 
         const nowAfter = new Date().toISOString();
 
@@ -689,12 +712,15 @@ export const rechercheScrim = {
                 channel_id: delivRow.channel_id,
                 message_id: result.message.id,
               });
-              ctx.stmts.markDeliverySent.run({
+              const markInfo = ctx.stmts.markDeliverySent.run({
                 id: claimedDelivery.id,
                 message_id: result.message.id,
                 completed_at: nowAfter,
                 updated_at: nowAfter,
               });
+              if (markInfo.changes === 0) {
+                throw new Error('markDeliverySent refused (not processing)');
+              }
               ctx.stmts.setScrimBroadcastBatchActive.run({
                 id: batchId,
                 started_at: nowAfter,
@@ -724,31 +750,87 @@ export const rechercheScrim = {
               );
             } catch { /* best effort */ }
             try {
-              ctx.stmts.markDeliveryUnknownOutcome.run({
+              const unkInfo = ctx.stmts.markDeliveryUnknownOutcome.run({
                 id: claimedDelivery.id,
                 last_error_code: 'DB_INSERT_FAILED',
                 last_error_message: (dbErr instanceof Error ? dbErr.message : String(dbErr)).slice(0, 200),
                 completed_at: nowAfter,
                 updated_at: nowAfter,
               });
+              if (unkInfo.changes === 0) {
+                logger.info('recherche-scrim persistent — markDeliveryUnknownOutcome (DB fail) sans effet', {
+                  delivery_id: claimedDelivery.id,
+                });
+              }
             } catch { /* best effort */ }
           }
         } else if (result.outcome === 'terminal_error' || result.outcome === 'blocked') {
-          ctx.stmts.markDeliveryTerminal.run({
+          const termInfo = ctx.stmts.markDeliveryTerminal.run({
             id: claimedDelivery.id,
             last_error_code: result.errorCode ?? 'TERMINAL',
             last_error_message: (result.errorMessage ?? '').slice(0, 200),
             completed_at: nowAfter,
             updated_at: nowAfter,
           });
+          if (termInfo.changes === 0) {
+            logger.info('recherche-scrim persistent — markDeliveryTerminal sans effet', {
+              delivery_id: claimedDelivery.id,
+              outcome: result.outcome,
+            });
+          }
         } else if (result.outcome === 'retryable_error') {
-          ctx.stmts.markDeliveryRetry.run({
+          const retryInfo = ctx.stmts.markDeliveryRetry.run({
             id: claimedDelivery.id,
             next_attempt_at: new Date(Date.now() + 60000).toISOString(),
             last_error_code: result.errorCode ?? 'RETRYABLE',
             last_error_message: (result.errorMessage ?? '').slice(0, 200),
             updated_at: nowAfter,
           });
+          if (retryInfo.changes === 0) {
+            logger.info('recherche-scrim persistent — markDeliveryRetry sans effet', {
+              delivery_id: claimedDelivery.id,
+            });
+          }
+        } else if (result.outcome === 'unknown_outcome') {
+          const unkInfo = ctx.stmts.markDeliveryUnknownOutcome.run({
+            id: claimedDelivery.id,
+            last_error_code: result.errorCode ?? 'SEND_AMBIGUOUS',
+            last_error_message: (result.errorMessage ?? '').slice(0, 200),
+            completed_at: nowAfter,
+            updated_at: nowAfter,
+          });
+          if (unkInfo.changes === 0) {
+            logger.info('recherche-scrim persistent — markDeliveryUnknownOutcome sans effet', {
+              delivery_id: claimedDelivery.id,
+            });
+          }
+        } else if (result.outcome === 'cancelled') {
+          // Aligné processDelivery — deliverScrimToDestination ne produit pas cancelled aujourd’hui.
+          const cancelInfo = ctx.stmts.markDeliveryCancelled.run({
+            id: claimedDelivery.id,
+            completed_at: nowAfter,
+            updated_at: nowAfter,
+          });
+          if (cancelInfo.changes === 0) {
+            logger.info('recherche-scrim persistent — markDeliveryCancelled sans effet', {
+              delivery_id: claimedDelivery.id,
+            });
+          }
+        } else {
+          // Outcome réellement inconnu — ne pas laisser processing
+          const unkInfo = ctx.stmts.markDeliveryUnknownOutcome.run({
+            id: claimedDelivery.id,
+            last_error_code: 'UNEXPECTED_OUTCOME',
+            last_error_message: `outcome=${String(result.outcome)}`.slice(0, 200),
+            completed_at: nowAfter,
+            updated_at: nowAfter,
+          });
+          if (unkInfo.changes === 0) {
+            logger.info('recherche-scrim persistent — markDeliveryUnknownOutcome sans effet', {
+              delivery_id: claimedDelivery.id,
+              outcome: result.outcome,
+            });
+          }
         }
       }
 

@@ -16,10 +16,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, it, before, after } from 'node:test';
+import { describe, it, before, after, beforeEach } from 'node:test';
 import { ChannelType, PermissionFlagsBits, PermissionsBitField } from 'discord.js';
 import { closeDb, getDb, prepareStatements } from '../src/database/db.js';
 import { deliverScrimToDestination } from '../src/services/scrimDelivery.js';
+import {
+  resetBroadcastPoolForTests,
+  invalidateBroadcastConcurrencyCache,
+} from '../src/services/scrimBroadcastExecutionPool.js';
 import {
   runScrimBroadcastDeliveryPass,
   recoverStaleScrimBroadcastDeliveries,
@@ -198,6 +202,13 @@ describe('scrimPersistentBroadcast', () => {
     else process.env.DISCORD_TASK_QUEUE_DELAY_MS = prevQueueDelay;
   });
 
+  beforeEach(() => {
+    // Isoler du pool global (tests parallèles + Étape 2B shutdown)
+    resetBroadcastPoolForTests();
+    invalidateBroadcastConcurrencyCache();
+    delete process.env.SCRIM_BROADCAST_CONCURRENCY;
+  });
+
   // ── 1. Feature flag ────────────────────────────────────────────────────────
 
   describe('feature flag', () => {
@@ -289,11 +300,12 @@ describe('scrimPersistentBroadcast', () => {
         insertTestDelivery(stmts, batchId, scrimId);
         const now = new Date().toISOString();
 
-        const c1 = stmts.claimNextDeliveryForBatch.run({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
-        const c2 = stmts.claimNextDeliveryForBatch.run({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
+        const c1 = stmts.claimNextDeliveryForBatch.get({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
+        const c2 = stmts.claimNextDeliveryForBatch.get({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
 
-        assert.strictEqual(c1.changes, 1, 'Premier claim doit réussir');
-        assert.strictEqual(c2.changes, 0, 'Deuxième claim doit échouer');
+        assert.ok(c1, 'Premier claim doit retourner la delivery');
+        assert.strictEqual(c1.status, 'processing');
+        assert.strictEqual(c2, undefined, 'Deuxième claim doit échouer');
       });
     });
 
@@ -305,8 +317,8 @@ describe('scrimPersistentBroadcast', () => {
         insertTestDelivery(stmts, batchId, scrimId, { nextAttemptAt: future });
         const now = new Date().toISOString();
 
-        const info = stmts.claimNextDeliveryForBatch.run({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
-        assert.strictEqual(info.changes, 0);
+        const row = stmts.claimNextDeliveryForBatch.get({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
+        assert.strictEqual(row, undefined);
       });
     });
 
@@ -320,10 +332,54 @@ describe('scrimPersistentBroadcast', () => {
         const idHigh = insertTestDelivery(stmts, batchId, scrimId, { guildId: 'g-high', channelId: 'c-high', priority: 1, nextAttemptAt: pastIso });
         const now = new Date().toISOString();
 
-        stmts.claimNextDeliveryForBatch.run({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
-        const claimed = stmts.getProcessingDeliveryForBatch.get(batchId);
+        const claimed = stmts.claimNextDeliveryForBatch.get({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
         assert.ok(claimed);
         assert.strictEqual(Number(claimed.id), idHigh, 'Haute priorité doit être claimée en premier');
+      });
+    });
+
+    it('claim RETURNING — identité exacte de la ligne claimée', async () => {
+      await withTempDb(async (db, stmts) => {
+        const scrimId = insertTestScrimPost(stmts);
+        const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
+        const delivId = insertTestDelivery(stmts, batchId, scrimId, { guildId: 'g-exact', channelId: 'c-exact' });
+        const now = new Date().toISOString();
+
+        const claimed = stmts.claimNextDeliveryForBatch.get({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
+        assert.ok(claimed);
+        assert.strictEqual(Number(claimed.id), delivId);
+        assert.strictEqual(claimed.guild_id, 'g-exact');
+        assert.strictEqual(claimed.channel_id, 'c-exact');
+        assert.strictEqual(claimed.status, 'processing');
+      });
+    });
+
+    it('deux claims successifs → deux IDs distincts (multi-processing possible en DB)', async () => {
+      await withTempDb(async (db, stmts) => {
+        const scrimId = insertTestScrimPost(stmts);
+        const batchId = insertTestBatch(stmts, scrimId, { status: 'active', targetCount: 2 });
+        const pastIso = new Date(Date.now() - 1000).toISOString();
+        const idA = insertTestDelivery(stmts, batchId, scrimId, { guildId: 'gA', channelId: 'cA', nextAttemptAt: pastIso });
+        const idB = insertTestDelivery(stmts, batchId, scrimId, { guildId: 'gB', channelId: 'cB', nextAttemptAt: pastIso });
+        const now = new Date().toISOString();
+
+        const c1 = stmts.claimNextDeliveryForBatch.get({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
+        const c2 = stmts.claimNextDeliveryForBatch.get({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
+        assert.ok(c1 && c2);
+        assert.notStrictEqual(Number(c1.id), Number(c2.id));
+        assert.ok([idA, idB].includes(Number(c1.id)));
+        assert.ok([idA, idB].includes(Number(c2.id)));
+
+        const processing = db.prepare(
+          "SELECT id FROM scrim_broadcast_deliveries WHERE batch_id = ? AND status = 'processing' ORDER BY id",
+        ).all(batchId);
+        assert.strictEqual(processing.length, 2, 'Deux processing simultanées en DB');
+        // getProcessingDeliveryForBatch reste ambigu — ne doit pas être la source d’identité worker
+        const ambiguous = stmts.getProcessingDeliveryForBatch.get(batchId);
+        assert.ok(ambiguous);
+        assert.ok(
+          Number(ambiguous.id) === Number(c1.id) || Number(ambiguous.id) === Number(c2.id),
+        );
       });
     });
   });
@@ -580,14 +636,15 @@ describe('scrimPersistentBroadcast', () => {
       });
     });
 
-    it('delivery retryable → marquée retry avec next_attempt_at dans le futur', async () => {
+    it('delivery retryable (429 prouvé) → marquée retry avec next_attempt_at dans le futur', async () => {
       await withTempDb(async (db, stmts) => {
         const scrimId = insertTestScrimPost(stmts);
         const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
         const delivId = insertTestDelivery(stmts, batchId, scrimId, { guildId: 'g1', channelId: 'c1' });
 
-        const netErr = Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' });
-        const channel = buildMockChannel('c1', [], { guildId: 'g1', sendThrows: netErr });
+        // 429 = non envoyé → retry SQLite OK. ETIMEDOUT send → unknown_outcome (at-most-once).
+        const rateErr = Object.assign(new Error('rate limited'), { status: 429, code: 429 });
+        const channel = buildMockChannel('c1', [], { guildId: 'g1', sendThrows: rateErr });
         const guild = buildMockGuild('g1', { 'c1': channel });
         const client = buildMockClient({ 'g1': guild });
 
@@ -600,7 +657,25 @@ describe('scrimPersistentBroadcast', () => {
       });
     });
 
-    it('delivery terminal après attempt_count >= 5', async () => {
+    it('send ETIMEDOUT persistant → unknown_outcome (pas retry auto)', async () => {
+      await withTempDb(async (db, stmts) => {
+        const scrimId = insertTestScrimPost(stmts);
+        const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
+        const delivId = insertTestDelivery(stmts, batchId, scrimId, { guildId: 'g1', channelId: 'c1' });
+
+        const netErr = Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' });
+        const channel = buildMockChannel('c1', [], { guildId: 'g1', sendThrows: netErr });
+        const guild = buildMockGuild('g1', { 'c1': channel });
+        const client = buildMockClient({ 'g1': guild });
+
+        await runScrimBroadcastDeliveryPass(client, db, stmts);
+
+        const d = db.prepare('SELECT status, last_error_code FROM scrim_broadcast_deliveries WHERE id = ?').get(delivId);
+        assert.strictEqual(d.status, 'unknown_outcome');
+      });
+    });
+
+    it('delivery terminal après attempt_count >= 5 (429 retryable)', async () => {
       await withTempDb(async (db, stmts) => {
         const scrimId = insertTestScrimPost(stmts);
         const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
@@ -610,8 +685,8 @@ describe('scrimPersistentBroadcast', () => {
         const pastIso = new Date(Date.now() - 1000).toISOString();
         db.prepare('UPDATE scrim_broadcast_deliveries SET attempt_count = 5, status = \'retry\', next_attempt_at = ? WHERE id = ?').run(pastIso, delivId);
 
-        const netErr = Object.assign(new Error('ECONNRESET'), { code: 'ECONNRESET' });
-        const channel = buildMockChannel('c1', [], { guildId: 'g1', sendThrows: netErr });
+        const rateErr = Object.assign(new Error('rate limited'), { status: 429, code: 429 });
+        const channel = buildMockChannel('c1', [], { guildId: 'g1', sendThrows: rateErr });
         const guild = buildMockGuild('g1', { 'c1': channel });
         const client = buildMockClient({ 'g1': guild });
 
@@ -703,7 +778,7 @@ describe('scrimPersistentBroadcast', () => {
       });
     });
 
-    it('delivery processing récente → non affectée par recovery', async () => {
+    it('delivery processing (même récente) au startup → unknown_outcome', async () => {
       await withTempDb(async (db, stmts) => {
         const scrimId = insertTestScrimPost(stmts);
         const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
@@ -715,7 +790,7 @@ describe('scrimPersistentBroadcast', () => {
         recoverStaleScrimBroadcastDeliveries(db, stmts);
 
         const d = db.prepare('SELECT status FROM scrim_broadcast_deliveries WHERE id = ?').get(delivId);
-        assert.strictEqual(d.status, 'processing', 'Delivery récente ne doit pas être affectée');
+        assert.strictEqual(d.status, 'unknown_outcome', 'Toute processing au startup est abandonnée → unknown (pas de resend)');
       });
     });
 
@@ -751,7 +826,7 @@ describe('scrimPersistentBroadcast', () => {
       });
     });
 
-    it('batch staging sans sent → deliveries unknown_outcome remises en pending', async () => {
+    it('batch staging sans sent → unknown_outcome JAMAIS remis en pending', async () => {
       await withTempDb(async (db, stmts) => {
         const scrimId = insertTestScrimPost(stmts);
         const batchId = insertTestBatch(stmts, scrimId); // staging
@@ -762,7 +837,87 @@ describe('scrimPersistentBroadcast', () => {
         recoverStaleScrimBroadcastDeliveries(db, stmts);
 
         const d = db.prepare('SELECT status FROM scrim_broadcast_deliveries WHERE id = ?').get(delivId);
-        assert.strictEqual(d.status, 'pending');
+        assert.strictEqual(d.status, 'unknown_outcome', 'unknown_outcome = terminal soft, pas de resend auto');
+        const batch = stmts.getScrimBroadcastBatchById.get(batchId);
+        assert.strictEqual(batch.status, 'failed', 'staging 0 sent → failed même si seule unknown');
+        assert.ok(!stmts.getScrimPostById.get(scrimId), 'scrim post rollback');
+      });
+    });
+
+    it('batch staging + 0 sent + pending → failed/cancel, jamais repris', async () => {
+      await withTempDb(async (db, stmts) => {
+        const scrimId = insertTestScrimPost(stmts);
+        const batchId = insertTestBatch(stmts, scrimId); // staging
+        const dPending = insertTestDelivery(stmts, batchId, scrimId, { guildId: 'g1', channelId: 'c1' });
+        const dUnk = insertTestDelivery(stmts, batchId, scrimId, { guildId: 'g2', channelId: 'c2' });
+        db.prepare("UPDATE scrim_broadcast_deliveries SET status = 'unknown_outcome' WHERE id = ?").run(dUnk);
+
+        recoverStaleScrimBroadcastDeliveries(db, stmts);
+
+        const batch = stmts.getScrimBroadcastBatchById.get(batchId);
+        assert.notStrictEqual(batch.status, 'staging');
+        assert.strictEqual(batch.status, 'failed');
+
+        const pending = db.prepare('SELECT status FROM scrim_broadcast_deliveries WHERE id = ?').get(dPending);
+        const unk = db.prepare('SELECT status FROM scrim_broadcast_deliveries WHERE id = ?').get(dUnk);
+        assert.strictEqual(pending.status, 'cancelled');
+        assert.strictEqual(unk.status, 'unknown_outcome', 'unknown jamais resend ni cancelled');
+
+        assert.ok(!stmts.hasPendingDeliveriesForBatch.get(batchId), 'rien d’exécutable');
+        assert.ok(!stmts.getScrimPostById.get(scrimId));
+
+        // Pas de futur claim possible
+        const now = new Date().toISOString();
+        const claimed = stmts.claimNextDeliveryForBatch.get({
+          batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now,
+        });
+        assert.strictEqual(claimed, undefined);
+      });
+    });
+
+    it('batch staging + 0 sent + retry future → failed/cancel, jamais repris', async () => {
+      await withTempDb(async (db, stmts) => {
+        const scrimId = insertTestScrimPost(stmts);
+        const batchId = insertTestBatch(stmts, scrimId);
+        const future = new Date(Date.now() + 3600000).toISOString();
+        const dRetry = insertTestDelivery(stmts, batchId, scrimId, {
+          guildId: 'g-retry', channelId: 'c-retry', nextAttemptAt: future,
+        });
+        db.prepare("UPDATE scrim_broadcast_deliveries SET status = 'retry', next_attempt_at = ? WHERE id = ?")
+          .run(future, dRetry);
+
+        recoverStaleScrimBroadcastDeliveries(db, stmts);
+
+        const batch = stmts.getScrimBroadcastBatchById.get(batchId);
+        assert.strictEqual(batch.status, 'failed');
+        const d = db.prepare('SELECT status FROM scrim_broadcast_deliveries WHERE id = ?').get(dRetry);
+        assert.strictEqual(d.status, 'cancelled');
+        assert.ok(!stmts.hasPendingDeliveriesForBatch.get(batchId));
+        assert.ok(!stmts.getScrimPostById.get(scrimId));
+      });
+    });
+
+    it('runtime stale processing → unknown ; processing récente runtime non touchée par passe', async () => {
+      await withTempDb(async (db, stmts) => {
+        const scrimId = insertTestScrimPost(stmts);
+        const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
+        const staleId = insertTestDelivery(stmts, batchId, scrimId, { guildId: 'g-stale', channelId: 'c-stale' });
+        const recentId = insertTestDelivery(stmts, batchId, scrimId, { guildId: 'g-recent', channelId: 'c-recent' });
+
+        const staleTime = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+        const recentTime = new Date().toISOString();
+        db.prepare('UPDATE scrim_broadcast_deliveries SET status = \'processing\', claimed_at = ?, next_attempt_at = ? WHERE id = ?')
+          .run(staleTime, staleTime, staleId);
+        db.prepare('UPDATE scrim_broadcast_deliveries SET status = \'processing\', claimed_at = ?, next_attempt_at = ? WHERE id = ?')
+          .run(recentTime, recentTime, recentId);
+
+        const client = buildMockClient({});
+        await runScrimBroadcastDeliveryPass(client, db, stmts);
+
+        const stale = db.prepare('SELECT status FROM scrim_broadcast_deliveries WHERE id = ?').get(staleId);
+        const recent = db.prepare('SELECT status FROM scrim_broadcast_deliveries WHERE id = ?').get(recentId);
+        assert.strictEqual(stale.status, 'unknown_outcome');
+        assert.strictEqual(recent.status, 'processing', 'processing récente encore en cours runtime');
       });
     });
   });
@@ -870,7 +1025,7 @@ describe('scrimPersistentBroadcast', () => {
         const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
         const delivId = insertTestDelivery(stmts, batchId, scrimId);
         const now = new Date().toISOString();
-        stmts.claimNextDeliveryForBatch.run({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
+        stmts.claimNextDeliveryForBatch.get({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
         stmts.markDeliverySent.run({ id: delivId, message_id: 'msg-xyz', completed_at: now, updated_at: now });
 
         const d = db.prepare('SELECT * FROM scrim_broadcast_deliveries WHERE id = ?').get(delivId);
@@ -886,7 +1041,7 @@ describe('scrimPersistentBroadcast', () => {
         const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
         const delivId = insertTestDelivery(stmts, batchId, scrimId);
         const now = new Date().toISOString();
-        stmts.claimNextDeliveryForBatch.run({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
+        stmts.claimNextDeliveryForBatch.get({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
         const future = new Date(Date.now() + 60000).toISOString();
         stmts.markDeliveryRetry.run({ id: delivId, next_attempt_at: future, last_error_code: 'RATE_LIMIT', last_error_message: 'Too many requests', updated_at: now });
 
@@ -903,7 +1058,7 @@ describe('scrimPersistentBroadcast', () => {
         const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
         const delivId = insertTestDelivery(stmts, batchId, scrimId);
         const now = new Date().toISOString();
-        stmts.claimNextDeliveryForBatch.run({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
+        stmts.claimNextDeliveryForBatch.get({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
         stmts.markDeliveryTerminal.run({ id: delivId, last_error_code: 'PERMS', last_error_message: 'No perms', completed_at: now, updated_at: now });
 
         const d = db.prepare('SELECT status FROM scrim_broadcast_deliveries WHERE id = ?').get(delivId);
@@ -917,11 +1072,60 @@ describe('scrimPersistentBroadcast', () => {
         const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
         const delivId = insertTestDelivery(stmts, batchId, scrimId);
         const now = new Date().toISOString();
-        stmts.claimNextDeliveryForBatch.run({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
+        stmts.claimNextDeliveryForBatch.get({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
         stmts.markDeliveryUnknownOutcome.run({ id: delivId, last_error_code: 'DB_ERR', last_error_message: 'DB failed', completed_at: now, updated_at: now });
 
         const d = db.prepare('SELECT status FROM scrim_broadcast_deliveries WHERE id = ?').get(delivId);
         assert.strictEqual(d.status, 'unknown_outcome');
+      });
+    });
+
+    it('markDeliverySent refuse si status ≠ processing (pas d’écrasement)', async () => {
+      await withTempDb(async (db, stmts) => {
+        const scrimId = insertTestScrimPost(stmts);
+        const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
+        const delivId = insertTestDelivery(stmts, batchId, scrimId);
+        const now = new Date().toISOString();
+        db.prepare("UPDATE scrim_broadcast_deliveries SET status = 'failed_terminal' WHERE id = ?").run(delivId);
+
+        const info = stmts.markDeliverySent.run({
+          id: delivId,
+          message_id: 'msg-late',
+          completed_at: now,
+          updated_at: now,
+        });
+        assert.strictEqual(info.changes, 0);
+        const d = db.prepare('SELECT status, message_id FROM scrim_broadcast_deliveries WHERE id = ?').get(delivId);
+        assert.strictEqual(d.status, 'failed_terminal');
+        assert.notStrictEqual(d.message_id, 'msg-late');
+      });
+    });
+
+    it('markDeliveryRetry / Terminal / Unknown refusent si plus processing', async () => {
+      await withTempDb(async (db, stmts) => {
+        const scrimId = insertTestScrimPost(stmts);
+        const batchId = insertTestBatch(stmts, scrimId, { status: 'active', targetCount: 3 });
+        const now = new Date().toISOString();
+        const idSent = insertTestDelivery(stmts, batchId, scrimId, { guildId: 'g1', channelId: 'c1' });
+        const idUnk = insertTestDelivery(stmts, batchId, scrimId, { guildId: 'g2', channelId: 'c2' });
+        const idTerm = insertTestDelivery(stmts, batchId, scrimId, { guildId: 'g3', channelId: 'c3' });
+        db.prepare("UPDATE scrim_broadcast_deliveries SET status = 'sent', message_id = 'm' WHERE id = ?").run(idSent);
+        db.prepare("UPDATE scrim_broadcast_deliveries SET status = 'unknown_outcome' WHERE id = ?").run(idUnk);
+        db.prepare("UPDATE scrim_broadcast_deliveries SET status = 'cancelled' WHERE id = ?").run(idTerm);
+
+        assert.strictEqual(stmts.markDeliveryRetry.run({
+          id: idSent, next_attempt_at: now, last_error_code: 'X', last_error_message: 'x', updated_at: now,
+        }).changes, 0);
+        assert.strictEqual(stmts.markDeliveryTerminal.run({
+          id: idUnk, last_error_code: 'X', last_error_message: 'x', completed_at: now, updated_at: now,
+        }).changes, 0);
+        assert.strictEqual(stmts.markDeliveryUnknownOutcome.run({
+          id: idTerm, last_error_code: 'X', last_error_message: 'x', completed_at: now, updated_at: now,
+        }).changes, 0);
+
+        assert.strictEqual(db.prepare('SELECT status FROM scrim_broadcast_deliveries WHERE id = ?').get(idSent).status, 'sent');
+        assert.strictEqual(db.prepare('SELECT status FROM scrim_broadcast_deliveries WHERE id = ?').get(idUnk).status, 'unknown_outcome');
+        assert.strictEqual(db.prepare('SELECT status FROM scrim_broadcast_deliveries WHERE id = ?').get(idTerm).status, 'cancelled');
       });
     });
 
@@ -1129,7 +1333,7 @@ describe('scrimPersistentBroadcast', () => {
         const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
         const delivId = insertTestDelivery(stmts, batchId, scrimId);
         const now = new Date().toISOString();
-        stmts.claimNextDeliveryForBatch.run({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
+        stmts.claimNextDeliveryForBatch.get({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
 
         assert.doesNotThrow(() => {
           stmts.markDeliveryUnknownOutcome.run({
@@ -1167,8 +1371,8 @@ describe('scrimPersistentBroadcast', () => {
         const now = new Date().toISOString();
         db.prepare("UPDATE scrim_broadcast_deliveries SET status = 'unknown_outcome', updated_at = ? WHERE id = ?").run(now, delivId);
 
-        const claimResult = stmts.claimNextDeliveryForBatch.run({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
-        assert.strictEqual(claimResult.changes, 0, 'unknown_outcome ne doit pas être claimable');
+        const claimResult = stmts.claimNextDeliveryForBatch.get({ batch_id: batchId, now_iso: now, claimed_at: now, updated_at: now });
+        assert.strictEqual(claimResult, undefined, 'unknown_outcome ne doit pas être claimable');
       });
     });
   });
@@ -1256,11 +1460,11 @@ describe('scrimPersistentBroadcast', () => {
       });
     });
 
-    it('Cas B — staging + pending restante → batch reste staging, scrim existe', async () => {
+    it('Cas B (Étape 1B) — staging + pending restante + 0 sent → failed, pas de reprise', async () => {
       await withTempDb(async (db, stmts) => {
         const scrimId = insertTestScrimPost(stmts);
         const batchId = insertTestBatch(stmts, scrimId);
-        insertTestDelivery(stmts, batchId, scrimId, { guildId: 'g-pending' });
+        const delivPending = insertTestDelivery(stmts, batchId, scrimId, { guildId: 'g-pending' });
         const delivId2 = insertTestDelivery(stmts, batchId, scrimId, { guildId: 'g-terminal' });
         const now = new Date().toISOString();
         db.prepare("UPDATE scrim_broadcast_deliveries SET status = 'failed_terminal', completed_at = ?, updated_at = ? WHERE id = ?").run(now, now, delivId2);
@@ -1268,9 +1472,11 @@ describe('scrimPersistentBroadcast', () => {
         recoverStaleScrimBroadcastDeliveries(db, stmts);
 
         const batchAfter = stmts.getScrimBroadcastBatchById.get(batchId);
-        assert.strictEqual(batchAfter.status, 'staging', 'Cas B : batch doit rester staging');
+        assert.strictEqual(batchAfter.status, 'failed', '0 sent staging → failed (plus de conservation pending)');
+        const pendingAfter = db.prepare('SELECT status FROM scrim_broadcast_deliveries WHERE id = ?').get(delivPending);
+        assert.strictEqual(pendingAfter.status, 'cancelled');
         const scrimAfter = db.prepare('SELECT * FROM scrim_posts WHERE id = ?').get(scrimId);
-        assert.ok(scrimAfter, 'Cas B : scrim doit exister');
+        assert.ok(!scrimAfter, 'scrim rollback — pas de diffusion post-restart');
       });
     });
 

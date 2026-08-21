@@ -12,7 +12,7 @@ import { removeScrimReceptionDestination } from './scrimDestinationCleanup.js';
 
 /**
  * @typedef {{
- *   outcome: 'sent' | 'blocked' | 'terminal_error' | 'retryable_error' | 'cancelled',
+ *   outcome: 'sent' | 'blocked' | 'terminal_error' | 'retryable_error' | 'cancelled' | 'unknown_outcome',
  *   message?: import('discord.js').Message,
  *   errorCode?: string,
  *   errorMessage?: string,
@@ -30,6 +30,7 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 export function mapDiscordTerminalErrorCode(code) {
   const n = typeof code === 'number' ? code : Number(code);
   if (n === RESTJSONErrorCodes.UnknownChannel) return 'UNKNOWN_CHANNEL';
+  if (n === RESTJSONErrorCodes.UnknownGuild) return 'GUILD_NOT_FOUND';
   if (n === RESTJSONErrorCodes.MissingPermissions) return 'MISSING_PERMISSIONS';
   if (n === RESTJSONErrorCodes.MissingAccess) return 'MISSING_ACCESS';
   if (code == null || code === '') return 'TERMINAL';
@@ -48,11 +49,26 @@ export function mapDiscordTerminalErrorCode(code) {
  *   authorUserId: string,
  *   payload: object,
  *   delayMs?: number,
+ *   sendMode?: 'queued' | 'direct',
+ *   discordMaxAttempts?: number,
  * }} args
  * @returns {Promise<DeliveryResult>}
  */
-export async function deliverScrimToDestination({ client, stmts, row, authorUserId, payload, delayMs = 0 }) {
+export async function deliverScrimToDestination({
+  client,
+  stmts,
+  row,
+  authorUserId,
+  payload,
+  delayMs = 0,
+  sendMode = 'queued',
+  discordMaxAttempts,
+}) {
   if (delayMs > 0) await sleep(delayMs);
+
+  const transientOpts = discordMaxAttempts != null
+    ? { maxAttempts: discordMaxAttempts }
+    : {};
 
   try {
     // 1. Blocage local de l'auteur
@@ -61,12 +77,34 @@ export async function deliverScrimToDestination({ client, stmts, row, authorUser
       return { outcome: 'blocked' };
     }
 
-    // 2. Guilde
-    const guild = client.guilds.cache.get(row.guild_id)
-      ?? (await runTransientDiscord(
-        () => client.guilds.fetch(row.guild_id),
-        { kind: 'delivery.fetch_guild', metadata: { guild_id: row.guild_id } },
-      ).catch(() => null));
+    // 2. Guilde — ne pas avaler les erreurs réseau en GUILD_NOT_FOUND
+    let guild = client.guilds.cache.get(row.guild_id) ?? null;
+    if (!guild) {
+      try {
+        guild = await runTransientDiscord(
+          () => client.guilds.fetch(row.guild_id),
+          { kind: 'delivery.fetch_guild', metadata: { guild_id: row.guild_id }, ...transientOpts },
+        );
+      } catch (fetchErr) {
+        const c = classifyDiscordEditError(fetchErr);
+        const errMsg = (fetchErr instanceof Error ? fetchErr.message : String(fetchErr)).slice(0, 200);
+        if (c.kind === 'terminal') {
+          const errorCode = mapDiscordTerminalErrorCode(c.code);
+          return {
+            outcome: 'terminal_error',
+            errorCode: errorCode === 'TERMINAL' ? 'GUILD_NOT_FOUND' : errorCode,
+            errorMessage: errMsg || 'Guilde introuvable',
+            terminal: true,
+          };
+        }
+        return {
+          outcome: 'retryable_error',
+          errorCode: c.code,
+          errorMessage: errMsg,
+          terminal: false,
+        };
+      }
+    }
     if (!guild) {
       return { outcome: 'terminal_error', errorCode: 'GUILD_NOT_FOUND', errorMessage: 'Guilde introuvable', terminal: true };
     }
@@ -77,7 +115,7 @@ export async function deliverScrimToDestination({ client, stmts, row, authorUser
       try {
         channel = await runTransientDiscord(
           () => guild.channels.fetch(row.channel_id),
-          { kind: 'delivery.fetch_channel', metadata: { guild_id: row.guild_id, channel_id: row.channel_id } },
+          { kind: 'delivery.fetch_channel', metadata: { guild_id: row.guild_id, channel_id: row.channel_id }, ...transientOpts },
         );
       } catch (fetchErr) {
         const c = classifyDiscordEditError(fetchErr);
@@ -113,10 +151,32 @@ export async function deliverScrimToDestination({ client, stmts, row, authorUser
       };
     }
 
-    // 4. Bot member
+    // 4. Bot member — ne pas avaler les erreurs réseau en faux PERMISSIONS
     let botMember = guild.members.me;
     if (!botMember) {
-      botMember = await guild.members.fetchMe().catch(() => null);
+      try {
+        botMember = await runTransientDiscord(
+          () => guild.members.fetchMe(),
+          { kind: 'delivery.fetch_me', metadata: { guild_id: row.guild_id }, ...transientOpts },
+        );
+      } catch (fetchErr) {
+        const c = classifyDiscordEditError(fetchErr);
+        const errMsg = (fetchErr instanceof Error ? fetchErr.message : String(fetchErr)).slice(0, 200);
+        if (c.kind === 'terminal') {
+          return {
+            outcome: 'terminal_error',
+            errorCode: mapDiscordTerminalErrorCode(c.code),
+            errorMessage: errMsg || 'Impossible de résoudre le membre bot',
+            terminal: true,
+          };
+        }
+        return {
+          outcome: 'retryable_error',
+          errorCode: c.code,
+          errorMessage: errMsg,
+          terminal: false,
+        };
+      }
     }
 
     // 5. Permissions
@@ -145,7 +205,44 @@ export async function deliverScrimToDestination({ client, stmts, row, authorUser
       ? { embeds: [embed], components: communityRows }
       : { embeds: [embed] };
 
-    // 8. Envoi via la file existante
+    // 8. Envoi
+    // Persistant direct : at-most-once applicatif (1 seul channel.send).
+    // Ambigu (timeout/5xx/réseau) → unknown_outcome, pas de retry auto.
+    if (sendMode === 'direct') {
+      try {
+        const sent = /** @type {import('discord.js').Message} */ (await channel.send(sendPayload));
+        return { outcome: 'sent', message: sent };
+      } catch (sendErr) {
+        const c = classifyDiscordEditError(sendErr);
+        const errMsg = (sendErr instanceof Error ? sendErr.message : String(sendErr)).slice(0, 200);
+        if (c.kind === 'terminal') {
+          const errorCode = mapDiscordTerminalErrorCode(c.code);
+          if (errorCode === 'UNKNOWN_CHANNEL') {
+            try {
+              removeScrimReceptionDestination(stmts, row.guild_id, row.channel_id, 'UNKNOWN_CHANNEL');
+            } catch { /* best effort */ }
+          }
+          return { outcome: 'terminal_error', errorCode, errorMessage: errMsg, terminal: true };
+        }
+        // 429 / RATE_LIMIT : requête typiquement non acceptée → retry SQLite OK
+        if (c.code === 'RATE_LIMIT' || String(c.code).includes('429')) {
+          return {
+            outcome: 'retryable_error',
+            errorCode: c.code,
+            errorMessage: errMsg,
+            terminal: false,
+          };
+        }
+        // Ambigu après tentative send — pas de resend applicatif
+        return {
+          outcome: 'unknown_outcome',
+          errorCode: c.code ?? 'SEND_AMBIGUOUS',
+          errorMessage: errMsg,
+          terminal: false,
+        };
+      }
+    }
+
     const sent = /** @type {import('discord.js').Message} */ (await enqueueDiscordTask(
       async () => channel.send(sendPayload),
       { kind: 'scrim_delivery_send', guild_id: row.guild_id, channel_id: row.channel_id },

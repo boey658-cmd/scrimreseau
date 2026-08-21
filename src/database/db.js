@@ -1280,6 +1280,37 @@ export function prepareStatements(db) {
       WHERE status = 'active'
       ORDER BY COALESCE(last_dispatched_at, '1970-01-01') ASC, id ASC
     `),
+    /**
+     * Prochain batch ACTIVE ayant réellement une delivery due (fairness).
+     * last_dispatched_at NULL d’abord, puis le plus ancien, tie-break id.
+     */
+    getNextActiveBatchDueForDispatch: db.prepare(`
+      SELECT b.* FROM scrim_broadcast_batches b
+      WHERE b.status = 'active'
+        AND EXISTS (
+          SELECT 1 FROM scrim_broadcast_deliveries d
+          WHERE d.batch_id = b.id
+            AND d.status IN ('pending','retry')
+            AND d.next_attempt_at <= @now_iso
+        )
+      ORDER BY COALESCE(b.last_dispatched_at, '1970-01-01') ASC, b.id ASC
+      LIMIT 1
+    `),
+    /**
+     * Repost : true si un broadcast persistant initial est encore ouvert
+     * (batch staging/active ou deliveries exécutables).
+     */
+    hasOpenPersistentBroadcastForScrim: db.prepare(`
+      SELECT 1 AS ok WHERE EXISTS (
+        SELECT 1 FROM scrim_broadcast_batches
+        WHERE scrim_post_db_id = ?
+          AND status IN ('staging','active')
+      ) OR EXISTS (
+        SELECT 1 FROM scrim_broadcast_deliveries
+        WHERE scrim_post_db_id = ?
+          AND status IN ('pending','retry','processing')
+      )
+    `),
     listStagingBatchesForRecovery: db.prepare(`
       SELECT * FROM scrim_broadcast_batches WHERE status = 'staging'
       ORDER BY created_at ASC
@@ -1294,6 +1325,11 @@ export function prepareStatements(db) {
          @operation_type, @generation, 'pending', @priority, 0,
          @next_attempt_at, @created_at, @updated_at)
     `),
+    /**
+     * Claim atomique : utiliser `.get(params)` (pas `.run`).
+     * Retourne la ligne exacte claimée, ou `undefined` si aucune due.
+     * Ne claim que pending|retry — jamais sent / terminal / cancelled / unknown_outcome.
+     */
     claimNextDeliveryForBatch: db.prepare(`
       UPDATE scrim_broadcast_deliveries
       SET status = 'processing', claimed_at = @claimed_at, updated_at = @updated_at
@@ -1305,12 +1341,20 @@ export function prepareStatements(db) {
         ORDER BY priority DESC, id ASC
         LIMIT 1
       ) AND status IN ('pending','retry')
+      RETURNING *
     `),
+    /**
+     * Lecture diagnostic uniquement — NE PAS utiliser après un claim pour identifier
+     * « la » delivery du worker (ambigu si plusieurs processing). Préférer RETURNING du claim.
+     */
     getProcessingDeliveryForBatch: db.prepare(`
       SELECT * FROM scrim_broadcast_deliveries
       WHERE batch_id = ? AND status = 'processing'
       ORDER BY claimed_at DESC
       LIMIT 1
+    `),
+    getScrimBroadcastDeliveryById: db.prepare(`
+      SELECT * FROM scrim_broadcast_deliveries WHERE id = ?
     `),
     getNextDueDeliveryForBatch: db.prepare(`
       SELECT * FROM scrim_broadcast_deliveries
@@ -1320,13 +1364,15 @@ export function prepareStatements(db) {
       ORDER BY priority DESC, id ASC
       LIMIT 1
     `),
+    /** Transition processing → sent uniquement. */
     markDeliverySent: db.prepare(`
       UPDATE scrim_broadcast_deliveries
       SET status = 'sent', message_id = @message_id, attempt_count = attempt_count + 1,
           last_error_code = NULL, last_error_message = NULL,
           completed_at = @completed_at, updated_at = @updated_at
-      WHERE id = @id
+      WHERE id = @id AND status = 'processing'
     `),
+    /** Transition processing → retry uniquement. */
     markDeliveryRetry: db.prepare(`
       UPDATE scrim_broadcast_deliveries
       SET status = 'retry', attempt_count = attempt_count + 1,
@@ -1334,28 +1380,38 @@ export function prepareStatements(db) {
           last_error_code = @last_error_code,
           last_error_message = @last_error_message,
           claimed_at = NULL, updated_at = @updated_at
-      WHERE id = @id
+      WHERE id = @id AND status = 'processing'
     `),
+    /** Transition processing → failed_terminal uniquement. */
     markDeliveryTerminal: db.prepare(`
       UPDATE scrim_broadcast_deliveries
       SET status = 'failed_terminal', attempt_count = attempt_count + 1,
           last_error_code = @last_error_code,
           last_error_message = @last_error_message,
           completed_at = @completed_at, claimed_at = NULL, updated_at = @updated_at
-      WHERE id = @id
+      WHERE id = @id AND status = 'processing'
     `),
     markDeliveryCancelled: db.prepare(`
       UPDATE scrim_broadcast_deliveries
       SET status = 'cancelled', completed_at = @completed_at, updated_at = @updated_at
       WHERE id = @id AND status IN ('pending','retry','processing')
     `),
+    /**
+     * Transition processing → unknown_outcome uniquement (terminal soft, pas de resend auto).
+     * Ne touche jamais unknown_outcome / sent / etc.
+     */
     markDeliveryUnknownOutcome: db.prepare(`
       UPDATE scrim_broadcast_deliveries
       SET status = 'unknown_outcome', attempt_count = attempt_count + 1,
           last_error_code = @last_error_code,
           last_error_message = @last_error_message,
           completed_at = @completed_at, claimed_at = NULL, updated_at = @updated_at
-      WHERE id = @id
+      WHERE id = @id AND status = 'processing'
+    `),
+    /** Startup only : toutes les processing de l’ancien process. */
+    listAllProcessingDeliveries: db.prepare(`
+      SELECT * FROM scrim_broadcast_deliveries
+      WHERE status = 'processing'
     `),
     cancelPendingDeliveriesForScrim: db.prepare(`
       UPDATE scrim_broadcast_deliveries

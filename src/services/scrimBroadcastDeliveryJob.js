@@ -7,14 +7,38 @@ import { safeScrimEmbedMessageEdit } from './safeDiscordMessageEdit.js';
 import { buildScrimClosedMessageEditOptions } from './scrimEmbedBuilder.js';
 import { getGuildScrimMessageLifecyclePolicy } from './scrimMessagePolicy.js';
 import { getGuildLocale } from '../i18n/index.js';
+import {
+  beginBroadcastPoolShutdown,
+  getBroadcastPoolStats,
+  getConfiguredConcurrency,
+  isDeliveryInFlight,
+  resetBroadcastPool,
+  setBroadcastSlotFreedHandler,
+  tryReserveBroadcastSlot,
+  waitForBroadcastPoolIdle,
+} from './scrimBroadcastExecutionPool.js';
 
 /** Durée au-delà de laquelle une delivery "processing" est considérée comme perdue. */
 const STALE_PROCESSING_THRESHOLD_MS = 10 * 60 * 1000;
 
-/** Délai max d'attente de fin de passe lors de l'arrêt (ms). */
-const STOP_WAIT_TIMEOUT_MS = 30_000;
+/** Budget unique d'arrêt (ms). Surchargeable en tests via SCRIM_BROADCAST_STOP_TIMEOUT_MS. */
+const STOP_WAIT_TIMEOUT_MS = 45_000;
 
-/** Intervalle entre passes (ms). Configurable via SCRIM_BROADCAST_DELIVERY_INTERVAL_MS. */
+function getStopWaitTimeoutMs() {
+  const n = Number(process.env.SCRIM_BROADCAST_STOP_TIMEOUT_MS?.trim());
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : STOP_WAIT_TIMEOUT_MS;
+}
+
+/** Horodatage monotone pour last_dispatched_at (fairness même ms). */
+let lastDispatchedMonoMs = 0;
+
+function nextMonotonicDispatchedAtIso() {
+  const now = Date.now();
+  lastDispatchedMonoMs = Math.max(lastDispatchedMonoMs + 1, now);
+  return new Date(lastDispatchedMonoMs).toISOString();
+}
+
+/** Intervalle entre cycles idle (ms). Configurable via SCRIM_BROADCAST_DELIVERY_INTERVAL_MS. */
 function getIntervalMs() {
   const n = Number(process.env.SCRIM_BROADCAST_DELIVERY_INTERVAL_MS?.trim());
   return Number.isFinite(n) && n > 0 ? n : 5000;
@@ -28,6 +52,9 @@ let jobStarted = false;
 /** @type {boolean} */
 let isPassRunning = false;
 
+/** @type {boolean} */
+let wakeRequested = false;
+
 /** @type {ReturnType<typeof setTimeout> | null} */
 let timerRef = null;
 
@@ -35,9 +62,18 @@ let timerRef = null;
 let wakeResolve = null;
 
 /**
- * Réveille le worker si en attente.
+ * Exposé tests : état wake sticky / passe.
+ * @returns {{ wakeRequested: boolean, isPassRunning: boolean, jobStarted: boolean }}
+ */
+export function getBroadcastDeliveryJobDebugState() {
+  return { wakeRequested, isPassRunning, jobStarted };
+}
+
+/**
+ * Réveille le dispatcher (sticky : survivit si appelé pendant une passe).
  */
 export function wakeScrimBroadcastDeliveryJob() {
+  wakeRequested = true;
   if (wakeResolve) {
     const r = wakeResolve;
     wakeResolve = null;
@@ -46,32 +82,40 @@ export function wakeScrimBroadcastDeliveryJob() {
 }
 
 /**
- * Arrête le worker de livraison (idempotent).
- * Attend la fin de la passe courante avec un timeout borné à 30 s.
+ * Arrête le dispatcher (idempotent).
+ * Plus de nouveaux claims ; attend les in-flight (budget unique 45s).
+ * Ne remet JAMAIS processing → pending.
+ * Ne réouvre PAS le pool (reset uniquement au prochain start).
  * @returns {Promise<void>}
  */
 export async function stopScrimBroadcastDeliveryJob() {
   jobStarted = false;
+  beginBroadcastPoolShutdown();
   if (timerRef !== null) {
     clearTimeout(timerRef);
     timerRef = null;
   }
   wakeScrimBroadcastDeliveryJob();
 
-  // Attendre la fin de la passe courante (timeout borné)
-  if (isPassRunning) {
-    const deadline = Date.now() + STOP_WAIT_TIMEOUT_MS;
-    while (isPassRunning && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    if (isPassRunning) {
-      logger.warn('stopScrimBroadcastDeliveryJob: timeout atteint, passe courante interrompue');
-    }
+  const deadline = Date.now() + getStopWaitTimeoutMs();
+
+  while (isPassRunning && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50));
   }
+
+  const remaining = Math.max(0, deadline - Date.now());
+  const idle = await waitForBroadcastPoolIdle(remaining);
+  if (idle.timedOut || isPassRunning || getBroadcastPoolStats().activeCount > 0) {
+    logger.warn('stopScrimBroadcastDeliveryJob: timeout — processing laissées pour startup→unknown', {
+      ...getBroadcastPoolStats(),
+      pass_running: isPassRunning,
+    });
+  }
+  // NE PAS resetBroadcastPool ici — pool reste stopping jusqu’au prochain start.
 }
 
 /**
- * Démarre le worker de livraison persistante (idempotent, désactivé si flag off).
+ * Démarre le dispatcher de livraison persistante (idempotent, désactivé si flag off).
  *
  * @param {import('discord.js').Client} client
  * @param {import('better-sqlite3').Database} db
@@ -87,46 +131,51 @@ export function startScrimBroadcastDeliveryJob(client, db, stmts) {
     return;
   }
   jobStarted = true;
+  resetBroadcastPool();
   logger.info('scrimBroadcastDeliveryJob: démarrage', {
     interval_ms: getIntervalMs(),
     first_pass_delay_ms: FIRST_PASS_DELAY_MS,
+    concurrency: getConfiguredConcurrency(),
   });
 
   const loop = async () => {
-    if (!jobStarted) return;
-    if (!isPassRunning) {
-      try {
-        await runScrimBroadcastDeliveryPass(client, db, stmts);
-      } catch (err) {
-        logger.error('scrimBroadcastDeliveryJob: erreur passe', {
-          message: err instanceof Error ? err.message : String(err),
-        });
+    while (jobStarted) {
+      if (!isPassRunning) {
+        try {
+          await runScrimBroadcastDeliveryPass(client, db, stmts);
+        } catch (err) {
+          logger.error('scrimBroadcastDeliveryJob: erreur passe', {
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
-    }
-    if (!jobStarted) return;
+      if (!jobStarted) return;
 
-    // Attendre l'intervalle ou un wake
-    await new Promise((resolve) => {
-      wakeResolve = resolve;
-      timerRef = setTimeout(() => {
-        wakeResolve = null;
-        resolve(undefined);
-      }, getIntervalMs());
-    });
+      // Sticky wake : travail signalé pendant la passe → pas de sleep poll
+      if (wakeRequested) {
+        wakeRequested = false;
+        continue;
+      }
 
-    if (jobStarted) {
-      void loop().catch((err) => {
-        logger.error('scrimBroadcastDeliveryJob: boucle crash', {
-          message: err instanceof Error ? err.message : String(err),
-        });
+      await new Promise((resolve) => {
+        wakeResolve = resolve;
+        timerRef = setTimeout(() => {
+          wakeResolve = null;
+          resolve(undefined);
+        }, getIntervalMs());
       });
+      if (timerRef !== null) {
+        clearTimeout(timerRef);
+        timerRef = null;
+      }
+      wakeRequested = false;
     }
   };
 
   timerRef = setTimeout(() => {
     timerRef = null;
     void loop().catch((err) => {
-      logger.error('scrimBroadcastDeliveryJob: premier démarrage crash', {
+      logger.error('scrimBroadcastDeliveryJob: boucle crash', {
         message: err instanceof Error ? err.message : String(err),
       });
     });
@@ -158,7 +207,7 @@ export function tryFinalizeScrimBroadcastBatch(stmts, batchId) {
 
 /**
  * Remet en unknown_outcome les deliveries « processing » trop anciennes
- * (même logique que le recovery au démarrage), pour débloquer la finalisation.
+ * qui ne sont PAS actuellement in-flight dans CE process.
  *
  * @param {ReturnType<import('../database/db.js')['prepareStatements']>} stmts
  */
@@ -170,6 +219,9 @@ function recoverStaleProcessingDuringPass(stmts) {
       stale_threshold_iso: staleThreshold,
     });
     for (const d of staleDeliveries) {
+      if (isDeliveryInFlight(Number(d.id))) {
+        continue;
+      }
       try {
         stmts.markDeliveryUnknownOutcome.run({
           id: d.id,
@@ -178,7 +230,7 @@ function recoverStaleProcessingDuringPass(stmts) {
           completed_at: nowIso,
           updated_at: nowIso,
         });
-        logger.warn('scrimBroadcastDeliveryJob: delivery stale → unknown_outcome', {
+        logger.info('scrimBroadcastDeliveryJob: delivery stale → unknown_outcome', {
           delivery_id: d.id,
           batch_id: d.batch_id,
           claimed_at: d.claimed_at,
@@ -201,8 +253,8 @@ function recoverStaleProcessingDuringPass(stmts) {
 }
 
 /**
- * Effectue une passe de livraison : pour chaque batch actif, dispatch une delivery.
- * Testable isolément.
+ * Dispatcher : remplit les slots libres en continu (continuous refill).
+ * Fairness : un batch due le plus starved, une delivery claimée, puis slot suivant.
  *
  * @param {import('discord.js').Client} client
  * @param {import('better-sqlite3').Database} db
@@ -218,71 +270,124 @@ export async function runScrimBroadcastDeliveryPass(client, db, stmts) {
   let dispatched = 0;
 
   try {
-    // Débloque les batches coincés sur une delivery « processing » abandonnée
-    // sans attendre un redémarrage du processus.
     recoverStaleProcessingDuringPass(stmts);
 
-    const activeBatches = stmts.listActiveBatchesDueForDispatch.all();
+    await new Promise((resolveOuter) => {
+      let settled = false;
+      const finishIfDone = () => {
+        if (settled) return;
+        const stats = getBroadcastPoolStats();
+        if (stats.inFlight > 0) return;
+        const nowIso = new Date().toISOString();
+        const more = stmts.getNextActiveBatchDueForDispatch.get({ now_iso: nowIso });
+        if (more && stats.acceptNewWork) {
+          // Travail restant sans in-flight : retenter un refill synchrone.
+          // Si aucun slot/claim n’aboutit, terminer la passe (prochain wake/poll).
+          refill();
+          if (!settled && getBroadcastPoolStats().inFlight === 0) {
+            settled = true;
+            setBroadcastSlotFreedHandler(null);
+            resolveOuter(undefined);
+          }
+          return;
+        }
+        settled = true;
+        setBroadcastSlotFreedHandler(null);
+        resolveOuter(undefined);
+      };
 
-    for (const batch of activeBatches) {
-      batchesProcessed += 1;
+      const refill = () => {
+        if (settled) return;
+        const allowClaim = getBroadcastPoolStats().acceptNewWork !== false;
+        while (allowClaim) {
+          const token = tryReserveBroadcastSlot();
+          if (!token) break;
 
-      const nowIso = new Date().toISOString();
-      const due = stmts.getNextDueDeliveryForBatch.get({ batch_id: batch.id, now_iso: nowIso });
-      if (!due) {
-        // Plus rien à claim : finaliser si toutes les deliveries sont terminales.
-        // Corrige les batches restés « active » avec dispatched:0 indéfiniment.
-        tryFinalizeScrimBroadcastBatch(stmts, batch.id);
-        continue;
-      }
+          const nowIso = new Date().toISOString();
+          const batch = stmts.getNextActiveBatchDueForDispatch.get({ now_iso: nowIso });
+          if (!batch) {
+            token.release();
+            try {
+              for (const b of stmts.listActiveBatchesDueForDispatch.all()) {
+                tryFinalizeScrimBroadcastBatch(stmts, b.id);
+              }
+            } catch { /* ignore */ }
+            break;
+          }
 
-      // Claim atomique
-      const claimInfo = stmts.claimNextDeliveryForBatch.run({
-        batch_id: batch.id,
-        now_iso: nowIso,
-        claimed_at: nowIso,
-        updated_at: nowIso,
+          batchesProcessed += 1;
+          const delivery = stmts.claimNextDeliveryForBatch.get({
+            batch_id: batch.id,
+            now_iso: nowIso,
+            claimed_at: nowIso,
+            updated_at: nowIso,
+          });
+          if (!delivery) {
+            token.release();
+            tryFinalizeScrimBroadcastBatch(stmts, batch.id);
+            continue;
+          }
+
+          const dispatchedAt = nextMonotonicDispatchedAtIso();
+          stmts.updateScrimBroadcastBatchLastDispatched.run({
+            id: batch.id,
+            last_dispatched_at: dispatchedAt,
+            updated_at: dispatchedAt,
+          });
+
+          const deliveryId = Number(delivery.id);
+          token.bindDelivery(deliveryId);
+          dispatched += 1;
+
+          void processDelivery(client, db, stmts, delivery)
+            .catch((err) => {
+              logger.error('scrimBroadcastDeliveryJob: processDelivery crash', {
+                delivery_id: deliveryId,
+                batch_id: batch.id,
+                message: err instanceof Error ? err.message : String(err),
+              });
+              // Si encore processing → unknown (pas de resend auto)
+              try {
+                const row = stmts.getScrimBroadcastDeliveryById.get(deliveryId);
+                if (row && row.status === 'processing') {
+                  const nowCrash = new Date().toISOString();
+                  stmts.markDeliveryUnknownOutcome.run({
+                    id: deliveryId,
+                    last_error_code: 'PROCESS_DELIVERY_CRASH',
+                    last_error_message: (err instanceof Error ? err.message : String(err)).slice(0, 200),
+                    completed_at: nowCrash,
+                    updated_at: nowCrash,
+                  });
+                }
+              } catch { /* best effort */ }
+              tryFinalizeScrimBroadcastBatch(stmts, batch.id);
+            })
+            .finally(() => {
+              token.release();
+              wakeScrimBroadcastDeliveryJob();
+              refill();
+              finishIfDone();
+            });
+        }
+        finishIfDone();
+      };
+
+      setBroadcastSlotFreedHandler(() => {
+        refill();
+        finishIfDone();
       });
-      if (claimInfo.changes === 0) {
-        tryFinalizeScrimBroadcastBatch(stmts, batch.id);
-        continue;
-      }
+      refill();
+    });
 
-      // Mettre à jour last_dispatched_at sur le batch
-      stmts.updateScrimBroadcastBatchLastDispatched.run({
-        id: batch.id,
-        last_dispatched_at: nowIso,
-        updated_at: nowIso,
-      });
-
-      const delivery = stmts.getProcessingDeliveryForBatch.get(batch.id);
-      if (!delivery) {
-        tryFinalizeScrimBroadcastBatch(stmts, batch.id);
-        continue;
-      }
-
-      dispatched += 1;
-      await processDelivery(client, db, stmts, delivery).catch((err) => {
-        logger.error('scrimBroadcastDeliveryJob: processDelivery crash', {
-          delivery_id: delivery.id,
-          batch_id: batch.id,
-          message: err instanceof Error ? err.message : String(err),
-        });
-        // Après un crash, tenter quand même la finalisation si plus rien d’exécutable.
-        tryFinalizeScrimBroadcastBatch(stmts, batch.id);
-      });
-    }
-
-    // Recompter les batches encore actifs après éventuelles finalisations
-    const stillActive = stmts.listActiveBatchesDueForDispatch.all().length;
-    if (dispatched > 0 || stillActive > 0) {
+    if (dispatched > 0) {
       logger.info('scrimBroadcastDeliveryJob: passe terminée', {
-        batches_active: stillActive,
         batches_processed: batchesProcessed,
         dispatched,
+        concurrency: getConfiguredConcurrency(),
       });
     }
   } finally {
+    setBroadcastSlotFreedHandler(null);
     isPassRunning = false;
   }
 
@@ -306,16 +411,23 @@ async function processDelivery(client, db, stmts, delivery) {
   // 1. Vérifier que le scrim est encore actif
   const scrimRow = stmts.getScrimPostById.get(scrimPostDbId);
   if (!scrimRow || scrimRow.status !== 'active') {
-    stmts.markDeliveryCancelled.run({
+    const cancelInfo = stmts.markDeliveryCancelled.run({
       id: deliveryId,
       completed_at: nowAfter,
       updated_at: nowAfter,
     });
-    logger.info('scrimBroadcastDeliveryJob: delivery annulée (scrim inactif)', {
-      delivery_id: deliveryId,
-      scrim_post_db_id: scrimPostDbId,
-      scrim_status: scrimRow?.status ?? 'not_found',
-    });
+    if (cancelInfo.changes === 0) {
+      logger.info('scrimBroadcastDeliveryJob: annulation delivery sans effet (état déjà changé)', {
+        delivery_id: deliveryId,
+        scrim_post_db_id: scrimPostDbId,
+      });
+    } else {
+      logger.info('scrimBroadcastDeliveryJob: delivery annulée (scrim inactif)', {
+        delivery_id: deliveryId,
+        scrim_post_db_id: scrimPostDbId,
+        scrim_status: scrimRow?.status ?? 'not_found',
+      });
+    }
     tryFinalizeScrimBroadcastBatch(stmts, batchId);
     return;
   }
@@ -327,7 +439,7 @@ async function processDelivery(client, db, stmts, delivery) {
   const row = { guild_id: String(delivery.guild_id), channel_id: String(delivery.channel_id) };
   const authorUserId = String(scrimRow.author_user_id);
 
-  // 2. Livrer
+  // 2. Livrer (send direct at-most-once applicatif ; fetch micro-retries ≤2)
   const result = await deliverScrimToDestination({
     client,
     stmts,
@@ -335,27 +447,36 @@ async function processDelivery(client, db, stmts, delivery) {
     authorUserId,
     payload,
     delayMs: 0,
+    sendMode: 'direct',
+    discordMaxAttempts: 2,
   });
 
   const nowResult = new Date().toISOString();
 
   if (result.outcome === 'sent') {
-    // 3. Transaction : insertScrimPostMessage + markDeliverySent
+    // 3. Transaction courte APRÈS send Discord : insert message + mark sent (processing → sent)
     try {
-      db.transaction(() => {
+      const txnResult = db.transaction(() => {
         stmts.insertScrimPostMessage.run({
           scrim_post_db_id: scrimPostDbId,
           guild_id: row.guild_id,
           channel_id: row.channel_id,
           message_id: result.message.id,
         });
-        stmts.markDeliverySent.run({
+        const markInfo = stmts.markDeliverySent.run({
           id: deliveryId,
           message_id: result.message.id,
           completed_at: nowResult,
           updated_at: nowResult,
         });
+        if (markInfo.changes === 0) {
+          throw new Error('markDeliverySent: transitions refused (status was not processing)');
+        }
+        return true;
       })();
+      if (!txnResult) {
+        /* unreachable */
+      }
       logger.info('scrimBroadcastDeliveryJob: delivery envoyée', {
         delivery_id: deliveryId,
         batch_id: batchId,
@@ -442,7 +563,7 @@ async function processDelivery(client, db, stmts, delivery) {
         }
       }
     } catch (dbErr) {
-      // DB échoue après send réussi
+      // DB échoue après send réussi — ou mark sent refusé
       logger.error('scrimBroadcastDeliveryJob: DB échouée après send', {
         delivery_id: deliveryId,
         guild_id: row.guild_id,
@@ -460,51 +581,119 @@ async function processDelivery(client, db, stmts, delivery) {
         /* best effort */
       }
       try {
-        stmts.markDeliveryUnknownOutcome.run({
+        const unk = stmts.markDeliveryUnknownOutcome.run({
           id: deliveryId,
           last_error_code: 'DB_INSERT_FAILED',
           last_error_message: (dbErr instanceof Error ? dbErr.message : String(dbErr)).slice(0, 200),
           completed_at: nowResult,
           updated_at: nowResult,
         });
+        if (unk.changes === 0) {
+          logger.warn('scrimBroadcastDeliveryJob: markDeliveryUnknownOutcome sans effet après DB fail', {
+            delivery_id: deliveryId,
+          });
+        }
       } catch {
         /* best effort */
       }
     }
   } else if (result.outcome === 'terminal_error' || result.outcome === 'blocked') {
-    stmts.markDeliveryTerminal.run({
+    const termInfo = stmts.markDeliveryTerminal.run({
       id: deliveryId,
       last_error_code: result.errorCode ?? 'TERMINAL',
       last_error_message: (result.errorMessage ?? '').slice(0, 200),
       completed_at: nowResult,
       updated_at: nowResult,
     });
-    logger.info('scrimBroadcastDeliveryJob: delivery terminale', {
-      delivery_id: deliveryId,
-      batch_id: batchId,
-      guild_id: row.guild_id,
-      channel_id: row.channel_id,
-      outcome: result.outcome,
-      error_code: result.errorCode ?? 'TERMINAL',
-    });
+    if (termInfo.changes === 0) {
+      logger.warn('scrimBroadcastDeliveryJob: markDeliveryTerminal sans effet', {
+        delivery_id: deliveryId,
+        outcome: result.outcome,
+      });
+    } else {
+      logger.info('scrimBroadcastDeliveryJob: delivery terminale', {
+        delivery_id: deliveryId,
+        batch_id: batchId,
+        guild_id: row.guild_id,
+        channel_id: row.channel_id,
+        outcome: result.outcome,
+        error_code: result.errorCode ?? 'TERMINAL',
+      });
+    }
   } else if (result.outcome === 'retryable_error') {
     const attemptCount = Number(delivery.attempt_count ?? 0) + 1;
     if (attemptCount >= 5) {
-      stmts.markDeliveryTerminal.run({
+      const termInfo = stmts.markDeliveryTerminal.run({
         id: deliveryId,
         last_error_code: result.errorCode ?? 'MAX_RETRIES',
         last_error_message: (result.errorMessage ?? '').slice(0, 200),
         completed_at: nowResult,
         updated_at: nowResult,
       });
+      if (termInfo.changes === 0) {
+        logger.warn('scrimBroadcastDeliveryJob: markDeliveryTerminal (max retries) sans effet', {
+          delivery_id: deliveryId,
+        });
+      }
     } else {
       const delayMs = computeNextRetryDelayMs(attemptCount) ?? 3600000;
-      stmts.markDeliveryRetry.run({
+      const retryInfo = stmts.markDeliveryRetry.run({
         id: deliveryId,
         next_attempt_at: new Date(Date.now() + delayMs).toISOString(),
         last_error_code: result.errorCode ?? 'RETRYABLE',
         last_error_message: (result.errorMessage ?? '').slice(0, 200),
         updated_at: nowResult,
+      });
+      if (retryInfo.changes === 0) {
+        logger.warn('scrimBroadcastDeliveryJob: markDeliveryRetry sans effet', {
+          delivery_id: deliveryId,
+        });
+      }
+    }
+  } else if (result.outcome === 'unknown_outcome') {
+    const unk = stmts.markDeliveryUnknownOutcome.run({
+      id: deliveryId,
+      last_error_code: result.errorCode ?? 'SEND_AMBIGUOUS',
+      last_error_message: (result.errorMessage ?? '').slice(0, 200),
+      completed_at: nowResult,
+      updated_at: nowResult,
+    });
+    if (unk.changes === 0) {
+      logger.info('scrimBroadcastDeliveryJob: markDeliveryUnknownOutcome sans effet', {
+        delivery_id: deliveryId,
+      });
+    }
+  } else if (result.outcome === 'cancelled') {
+    // Contrat DeliveryResult : non produit aujourd’hui par deliverScrimToDestination.
+    // Si un jour émis, ne pas laisser la ligne en processing.
+    const cancelInfo = stmts.markDeliveryCancelled.run({
+      id: deliveryId,
+      completed_at: nowResult,
+      updated_at: nowResult,
+    });
+    if (cancelInfo.changes === 0) {
+      logger.info('scrimBroadcastDeliveryJob: markDeliveryCancelled (outcome cancelled) sans effet', {
+        delivery_id: deliveryId,
+      });
+    }
+  } else {
+    // Outcome inattendu — terminal soft, pas de resend
+    const unk = stmts.markDeliveryUnknownOutcome.run({
+      id: deliveryId,
+      last_error_code: 'UNEXPECTED_OUTCOME',
+      last_error_message: `outcome=${String(result.outcome)}`.slice(0, 200),
+      completed_at: nowResult,
+      updated_at: nowResult,
+    });
+    if (unk.changes === 0) {
+      logger.info('scrimBroadcastDeliveryJob: markDeliveryUnknownOutcome (unexpected) sans effet', {
+        delivery_id: deliveryId,
+        outcome: result.outcome,
+      });
+    } else {
+      logger.info('scrimBroadcastDeliveryJob: outcome delivery inattendu → unknown_outcome', {
+        delivery_id: deliveryId,
+        outcome: result.outcome,
       });
     }
   }
@@ -513,33 +702,38 @@ async function processDelivery(client, db, stmts, delivery) {
 }
 
 /**
- * Récupère les deliveries bloquées en "processing" depuis trop longtemps,
+ * Récupère les deliveries abandonnées au démarrage du process,
  * et les batches staging orphelins.
- * À appeler au démarrage, avant de lancer le job.
+ * À appeler au démarrage uniquement (avant de lancer le job).
+ *
+ * Politique unknown_outcome : terminal soft — JAMAIS de resend automatique
+ * (pas de unknown → pending). Une processing de l’ancien process devient
+ * unknown_outcome (Discord a peut‑être déjà reçu le message).
  *
  * @param {import('better-sqlite3').Database} db
  * @param {ReturnType<import('../database/db.js')['prepareStatements']>} stmts
  */
 export function recoverStaleScrimBroadcastDeliveries(db, stmts) {
-  const staleThreshold = new Date(Date.now() - STALE_PROCESSING_THRESHOLD_MS).toISOString();
   const nowIso = new Date().toISOString();
 
-  // 1. Deliveries bloquées en "processing" → unknown_outcome
+  // 1. Toute delivery encore "processing" appartient à l’ancien process → unknown_outcome
   try {
-    const staleDeliveries = stmts.listStaleProcessingDeliveries.all({ stale_threshold_iso: staleThreshold });
-    for (const d of staleDeliveries) {
+    const abandoned = stmts.listAllProcessingDeliveries.all();
+    for (const d of abandoned) {
       try {
-        stmts.markDeliveryUnknownOutcome.run({
+        const info = stmts.markDeliveryUnknownOutcome.run({
           id: d.id,
-          last_error_code: 'STALE_PROCESSING',
-          last_error_message: 'Processing sans fin au démarrage',
+          last_error_code: 'ABANDONED_PROCESSING_STARTUP',
+          last_error_message: 'Processing abandonnée au démarrage (pas de resend auto)',
           completed_at: nowIso,
           updated_at: nowIso,
         });
-        logger.warn('scrimBroadcastDeliveryJob recovery: delivery stale → unknown_outcome', {
-          delivery_id: d.id,
-          claimed_at: d.claimed_at,
-        });
+        if (info.changes > 0) {
+          logger.warn('scrimBroadcastDeliveryJob recovery: processing → unknown_outcome (startup)', {
+            delivery_id: d.id,
+            claimed_at: d.claimed_at,
+          });
+        }
       } catch (err) {
         logger.error('scrimBroadcastDeliveryJob recovery: erreur markDeliveryUnknownOutcome', {
           delivery_id: d.id,
@@ -548,12 +742,17 @@ export function recoverStaleScrimBroadcastDeliveries(db, stmts) {
       }
     }
   } catch (err) {
-    logger.error('scrimBroadcastDeliveryJob recovery: erreur lecture stale deliveries', {
+    logger.error('scrimBroadcastDeliveryJob recovery: erreur lecture processing deliveries', {
       message: err instanceof Error ? err.message : String(err),
     });
   }
 
-  // 2. Batches staging : si au moins 1 sent → active ; sinon remettre pending
+  // 2. Batches staging :
+  //    ≥1 sent → active (bootstrap avait confirmé un succès)
+  //    0 sent → JAMAIS reprendre la diffusion (interaction Discord perdue) :
+  //      cancel pending/retry, unknown inchangé, batch failed, rollback scrim.
+  //    Pas de FK CASCADE : deleteScrimPostById ne supprime pas les deliveries
+  //    (unknown_outcome reste pour diagnostic).
   try {
     const stagingBatches = stmts.listStagingBatchesForRecovery.all();
     for (const batch of stagingBatches) {
@@ -570,18 +769,20 @@ export function recoverStaleScrimBroadcastDeliveries(db, stmts) {
             sent_count: sentCount.n,
           });
         } else {
-          // Remettre les non-terminales en pending avec next_attempt_at = maintenant
+          // processing résiduelles → unknown (pas pending). unknown_outcome inchangé.
           const deliveries = stmts.listDeliveriesForBatch.all(batch.id);
           for (const d of deliveries) {
-            if (d.status === 'processing' || d.status === 'unknown_outcome') {
+            if (d.status === 'processing') {
               try {
-                db.prepare(`
-                  UPDATE scrim_broadcast_deliveries
-                  SET status = 'pending', next_attempt_at = ?, claimed_at = NULL, updated_at = ?
-                  WHERE id = ? AND status IN ('processing', 'unknown_outcome')
-                `).run(nowIso, nowIso, d.id);
+                stmts.markDeliveryUnknownOutcome.run({
+                  id: d.id,
+                  last_error_code: 'ABANDONED_PROCESSING_STAGING',
+                  last_error_message: 'Processing abandonnée (batch staging, pas de resend auto)',
+                  completed_at: nowIso,
+                  updated_at: nowIso,
+                });
               } catch (updErr) {
-                logger.error('scrimBroadcastDeliveryJob recovery: reset delivery staging', {
+                logger.error('scrimBroadcastDeliveryJob recovery: processing→unknown staging', {
                   delivery_id: d.id,
                   message: updErr instanceof Error ? updErr.message : String(updErr),
                 });
@@ -589,35 +790,39 @@ export function recoverStaleScrimBroadcastDeliveries(db, stmts) {
             }
           }
 
-          // Cas C : toutes les deliveries sont terminales et 0 sent → batch mort, rollback scrim
-          const hasPending = stmts.hasPendingDeliveriesForBatch.get(batch.id);
-          if (!hasPending) {
-            const sentNow = stmts.countSentDeliveriesForBatch.get(batch.id);
-            if (!sentNow || Number(sentNow.n) === 0) {
-              try {
-                stmts.setScrimBroadcastBatchCompleted.run({
-                  id: batch.id,
-                  status: 'failed',
-                  completed_at: nowIso,
-                  updated_at: nowIso,
-                });
-                stmts.deleteScrimPostById.run(batch.scrim_post_db_id);
-                logger.warn('scrimBroadcastDeliveryJob recovery: batch staging zéro sent, toutes terminales → batch failed + scrim supprimé', {
-                  batch_id: batch.id,
-                  scrim_post_db_id: batch.scrim_post_db_id,
-                });
-              } catch (casC) {
-                logger.error('scrimBroadcastDeliveryJob recovery: Cas C rollback échoué', {
-                  batch_id: batch.id,
-                  message: casC instanceof Error ? casC.message : String(casC),
-                });
-              }
-            }
+          // Annuler toute delivery encore exécutable (pending/retry uniquement —
+          // cancelPendingDeliveriesForScrim ne touche pas unknown_outcome / sent / terminal).
+          try {
+            stmts.cancelPendingDeliveriesForScrim.run({
+              scrim_post_db_id: batch.scrim_post_db_id,
+              completed_at: nowIso,
+              updated_at: nowIso,
+            });
+          } catch (cancelErr) {
+            logger.error('scrimBroadcastDeliveryJob recovery: cancel pending staging échoué', {
+              batch_id: batch.id,
+              message: cancelErr instanceof Error ? cancelErr.message : String(cancelErr),
+            });
           }
 
-          logger.info('scrimBroadcastDeliveryJob recovery: batch staging — deliveries remises en pending', {
-            batch_id: batch.id,
-          });
+          try {
+            stmts.setScrimBroadcastBatchCompleted.run({
+              id: batch.id,
+              status: 'failed',
+              completed_at: nowIso,
+              updated_at: nowIso,
+            });
+            stmts.deleteScrimPostById.run(batch.scrim_post_db_id);
+            logger.warn('scrimBroadcastDeliveryJob recovery: batch staging zéro sent → failed + scrim supprimé (pas de reprise auto)', {
+              batch_id: batch.id,
+              scrim_post_db_id: batch.scrim_post_db_id,
+            });
+          } catch (casC) {
+            logger.error('scrimBroadcastDeliveryJob recovery: rollback staging 0-sent échoué', {
+              batch_id: batch.id,
+              message: casC instanceof Error ? casC.message : String(casC),
+            });
+          }
         }
       } catch (err) {
         logger.error('scrimBroadcastDeliveryJob recovery: erreur batch staging', {
