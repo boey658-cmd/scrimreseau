@@ -338,4 +338,24 @@ describe('createGracefulShutdown — MUTATION', () => {
       'stopScrimBroadcastDeliveryJob doit être présent dans index.js',
     );
   });
+
+  it('MUTATION : stop broadcast ne doit PAS être conditionné au feature flag', async () => {
+    const fs = await import('node:fs/promises');
+    const indexSrc = await fs.readFile(new URL('../index.js', import.meta.url), 'utf8');
+    assert.equal(
+      indexSrc.includes('isPersistentBroadcastEnabled'),
+      false,
+      'index.js ne doit plus importer/utiliser isPersistentBroadcastEnabled pour le shutdown',
+    );
+    // Le step stop doit appeler stopScrimBroadcastDeliveryJob sans if (flag)
+    const stopBlock = indexSrc.match(
+      /phase:\s*'persistent_broadcast_job_stop'[\s\S]*?stop:\s*([^,}]+)/,
+    );
+    assert.ok(stopBlock, 'step persistent_broadcast_job_stop introuvable');
+    assert.equal(
+      /isPersistentBroadcastEnabled/.test(stopBlock[0]),
+      false,
+      'stop broadcast ne doit pas dépendre du flag',
+    );
+  });
 });

@@ -9,7 +9,6 @@ import { stopScrimExpirationJob } from './src/services/scrimExpirationJob.js';
 import { stopScrimRepostJob } from './src/services/scrimRepostJob.js';
 import { stopDashboardRefreshJob } from './src/services/networkDashboard.js';
 import { stopScrimBroadcastDeliveryJob } from './src/services/scrimBroadcastDeliveryJob.js';
-import { isPersistentBroadcastEnabled } from './src/utils/persistentBroadcastFlag.js';
 import { createGracefulShutdown } from './src/services/shutdownOrchestrator.js';
 import { logger } from './src/utils/logger.js';
 import { recordUncaughtException, recordUnhandledRejection } from './src/utils/processHealth.js';
@@ -67,11 +66,8 @@ const gracefulShutdown = createGracefulShutdown({
       // avant tout autre await, pour empêcher immédiatement toute nouvelle réclamation de delivery.
       name: 'arrêt du worker diffusion persistante',
       phase: 'persistent_broadcast_job_stop',
-      stop: async () => {
-        if (isPersistentBroadcastEnabled()) {
-          await stopScrimBroadcastDeliveryJob();
-        }
-      },
+      // Toujours arrêter : dépend de l’état réel du job, pas du feature flag courant.
+      stop: () => stopScrimBroadcastDeliveryJob(),
     },
     {
       name: 'arrêt du job dashboard réseau',

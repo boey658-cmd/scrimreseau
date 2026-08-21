@@ -32,7 +32,9 @@ import {
   wakeScrimBroadcastDeliveryJob,
   getBroadcastDeliveryJobDebugState,
   stopScrimBroadcastDeliveryJob,
+  startScrimBroadcastDeliveryJob,
 } from '../src/services/scrimBroadcastDeliveryJob.js';
+import { createGracefulShutdown } from '../src/services/shutdownOrchestrator.js';
 
 async function withTempDb(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scrim-p2-conc-'));
@@ -648,6 +650,79 @@ describe('Phase2 Étape2 — concurrency pool', () => {
       assert.equal(s.stopping, true);
       assert.equal(s.acceptNewWork, false);
       resetBroadcastPoolForTests();
+    });
+
+    it('job démarré puis flag OFF → shutdown appelle stop (pool stopping)', async () => {
+      const prevFlag = process.env.SCRIM_PERSISTENT_BROADCAST_ENABLED;
+      const prevStop = process.env.SCRIM_BROADCAST_STOP_TIMEOUT_MS;
+      process.env.SCRIM_PERSISTENT_BROADCAST_ENABLED = '1';
+      process.env.SCRIM_BROADCAST_CONCURRENCY = '1';
+      process.env.SCRIM_BROADCAST_STOP_TIMEOUT_MS = '200';
+      invalidateBroadcastConcurrencyCache();
+      resetBroadcastPoolForTests();
+
+      try {
+        await withTempDb(async (db, stmts) => {
+          const client = { guilds: { cache: { get: () => undefined } } };
+          startScrimBroadcastDeliveryJob(client, db, stmts);
+          assert.equal(getBroadcastDeliveryJobDebugState().jobStarted, true);
+
+          // Simule flag OFF après démarrage (bug historique : skip stop)
+          process.env.SCRIM_PERSISTENT_BROADCAST_ENABLED = '0';
+
+          let stopCalls = 0;
+          const shutdown = createGracefulShutdown({
+            steps: [
+              {
+                name: 'arrêt du worker diffusion persistante',
+                phase: 'persistent_broadcast_job_stop',
+                stop: async () => {
+                  stopCalls += 1;
+                  await stopScrimBroadcastDeliveryJob();
+                },
+              },
+            ],
+            getClient: () => null,
+            closeDb: () => {},
+            onExit: () => {},
+          });
+          await shutdown('SIGTERM');
+
+          assert.equal(stopCalls, 1);
+          assert.equal(getBroadcastDeliveryJobDebugState().jobStarted, false);
+          const s = getBroadcastPoolStats();
+          assert.equal(s.stopping, true);
+          assert.equal(s.acceptNewWork, false);
+          assert.equal(s.waitingCount, 0);
+          assert.equal(tryReserveBroadcastSlot(), null);
+        });
+      } finally {
+        if (prevFlag === undefined) delete process.env.SCRIM_PERSISTENT_BROADCAST_ENABLED;
+        else process.env.SCRIM_PERSISTENT_BROADCAST_ENABLED = prevFlag;
+        if (prevStop === undefined) delete process.env.SCRIM_BROADCAST_STOP_TIMEOUT_MS;
+        else process.env.SCRIM_BROADCAST_STOP_TIMEOUT_MS = prevStop;
+        resetBroadcastPoolForTests();
+      }
+    });
+
+    it('job jamais démarré + flag OFF → stop idempotent sans erreur', async () => {
+      const prevFlag = process.env.SCRIM_PERSISTENT_BROADCAST_ENABLED;
+      delete process.env.SCRIM_PERSISTENT_BROADCAST_ENABLED;
+      process.env.SCRIM_BROADCAST_STOP_TIMEOUT_MS = '100';
+      resetBroadcastPoolForTests();
+      try {
+        assert.equal(getBroadcastDeliveryJobDebugState().jobStarted, false);
+        await assert.doesNotReject(() => stopScrimBroadcastDeliveryJob());
+        const s = getBroadcastPoolStats();
+        assert.equal(s.stopping, true);
+        assert.equal(s.acceptNewWork, false);
+        assert.equal(getBroadcastDeliveryJobDebugState().jobStarted, false);
+      } finally {
+        if (prevFlag === undefined) delete process.env.SCRIM_PERSISTENT_BROADCAST_ENABLED;
+        else process.env.SCRIM_PERSISTENT_BROADCAST_ENABLED = prevFlag;
+        delete process.env.SCRIM_BROADCAST_STOP_TIMEOUT_MS;
+        resetBroadcastPoolForTests();
+      }
     });
   });
 
