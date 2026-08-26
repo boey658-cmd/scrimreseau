@@ -3,10 +3,8 @@ import { logger } from '../utils/logger.js';
 import { deliverScrimToDestination } from './scrimDelivery.js';
 import { computeNextRetryDelayMs } from './discordRetryPolicy.js';
 import { enqueueDiscordTask } from './discordTaskQueue.js';
-import { safeScrimEmbedMessageEdit } from './safeDiscordMessageEdit.js';
-import { buildScrimClosedMessageEditOptions } from './scrimEmbedBuilder.js';
-import { getGuildScrimMessageLifecyclePolicy } from './scrimMessagePolicy.js';
-import { getGuildLocale } from '../i18n/index.js';
+import { orchestrateScrimCloseIntentionsForMessages } from './scrimLifecycleOrchestrator.js';
+import { wakeScrimLifecycleDispatcher } from './scrimLifecycleDispatcher.js';
 import {
   beginBroadcastPoolShutdown,
   getBroadcastPoolStats,
@@ -493,67 +491,26 @@ async function processDelivery(client, db, stmts, delivery) {
           guild_id: row.guild_id,
           message_id: result.message.id,
         });
-        // La synchronisation lifecycle ne doit JAMAIS effacer le succès de la delivery.
-        // Toute erreur ici est loguée mais ne change pas le statut de la delivery.
+        // Phase 3G : déléguer le lifecycle Discord au dispatcher — aucun edit/delete direct.
         try {
-          const locale = getGuildLocale(row.guild_id, stmts);
-          const closedStatus = /** @type {'closed_manual' | 'closed_expired'} */ (
-            scrimAfterSend.status === 'closed_expired' ? 'closed_expired' : 'closed_manual'
+          const { operations } = orchestrateScrimCloseIntentionsForMessages(
+            db,
+            stmts,
+            scrimPostDbId,
+            [{
+              guild_id: row.guild_id,
+              channel_id: row.channel_id,
+              message_id: result.message.id,
+            }],
           );
-          const editOptions = buildScrimClosedMessageEditOptions(closedStatus, scrimAfterSend, locale);
-          const policy = getGuildScrimMessageLifecyclePolicy(stmts, row.guild_id);
-
-          if (policy === 'delete') {
-            // Tenter la suppression directe (best-effort)
-            let deleted = false;
-            try {
-              await enqueueDiscordTask(
-                () => result.message.delete(),
-                { kind: 'persistent_delivery_post_close_delete', guild_id: row.guild_id, delivery_id: deliveryId },
-                'high',
-              );
-              stmts.markScrimPostMessageDiscordDeleted.run({
-                discord_deleted_at: new Date().toISOString(),
-                guild_id: row.guild_id,
-                channel_id: row.channel_id,
-                message_id: result.message.id,
-              });
-              deleted = true;
-            } catch (delErr) {
-              logger.warn('scrimBroadcastDeliveryJob: suppression post-fermeture échouée — fallback édition', {
-                delivery_id: deliveryId,
-                guild_id: row.guild_id,
-                message_id: result.message.id,
-                message: delErr instanceof Error ? delErr.message : String(delErr),
-              });
-            }
-            if (!deleted) {
-              await safeScrimEmbedMessageEdit({
-                client,
-                stmts,
-                scrimPostDbId,
-                guildId: row.guild_id,
-                channelId: row.channel_id,
-                messageId: result.message.id,
-                targetStatus: closedStatus,
-                editOptions,
-                message: result.message,
-              });
-            }
-          } else {
-            // Policy keep : éditer l'embed en rendu inactif (via le service partagé avec retry SQLite)
-            await safeScrimEmbedMessageEdit({
-              client,
-              stmts,
-              scrimPostDbId,
-              guildId: row.guild_id,
-              channelId: row.channel_id,
-              messageId: result.message.id,
-              targetStatus: closedStatus,
-              editOptions,
-              message: result.message,
-            });
-          }
+          logger.info('scrimBroadcastDeliveryJob: intention lifecycle close post-send', {
+            delivery_id: deliveryId,
+            scrim_status: scrimAfterSend.status,
+            guild_id: row.guild_id,
+            message_id: result.message.id,
+            operation_count: operations.length,
+          });
+          wakeScrimLifecycleDispatcher();
         } catch (syncErr) {
           logger.error('scrimBroadcastDeliveryJob: sync lifecycle post-fermeture échouée (delivery reste sent)', {
             delivery_id: deliveryId,

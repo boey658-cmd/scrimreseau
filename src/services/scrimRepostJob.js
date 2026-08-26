@@ -1,9 +1,5 @@
 import { logger } from '../utils/logger.js';
-import { broadcastScrimRequest } from './broadcast.js';
-import {
-  markScrimPostMessagesSuperseded,
-} from './scrimLifecycle.js';
-import { scrimDbRowToEmbedPayload } from './scrimEmbedBuilder.js';
+import { executeRepostCycleForScrim, recoverIncompleteRepostCycles } from './scrimRepostCycle.js';
 
 let jobStarted = false;
 let jobShuttingDown = false;
@@ -64,146 +60,6 @@ export function computeRepostCutoffIso(nowMs = Date.now(), intervalHours = 24) {
  * @param {import('discord.js').Client} client
  * @param {import('better-sqlite3').Database} db
  * @param {ReturnType<import('../database/db.js')['prepareStatements']>} stmts
- * @param {number} scrimPostDbId
- * @returns {Promise<{ ok: boolean, successCount: number, reason?: string }>}
- */
-async function repostSingleActiveScrim(client, db, stmts, scrimPostDbId) {
-  const row = stmts.getScrimPostById.get(scrimPostDbId);
-  if (!row || row.status !== 'active') {
-    return { ok: false, successCount: 0, reason: 'not_active' };
-  }
-
-  // Ne pas chevaucher un broadcast persistant initial encore ouvert
-  if (typeof stmts.hasOpenPersistentBroadcastForScrim?.get === 'function') {
-    const open = stmts.hasOpenPersistentBroadcastForScrim.get(scrimPostDbId, scrimPostDbId);
-    if (open) {
-      logger.info('scrimRepost: reporté — broadcast persistant encore ouvert', {
-        scrim_post_db_id: scrimPostDbId,
-        scrim_public_id: row.scrim_public_id,
-      });
-      return { ok: false, successCount: 0, reason: 'persistent_broadcast_open' };
-    }
-  } else {
-    const openBatch = stmts.getActiveStagingBatchForScrim?.get(scrimPostDbId);
-    if (openBatch) {
-      logger.info('scrimRepost: reporté — batch staging/active', {
-        scrim_post_db_id: scrimPostDbId,
-        batch_id: openBatch.id,
-      });
-      return { ok: false, successCount: 0, reason: 'persistent_broadcast_open' };
-    }
-  }
-
-  const oldMessages = stmts.listScrimPostMessagesByPostId.all(scrimPostDbId);
-
-  const gameKey = /** @type {string} */ (row.game_key);
-  const channelRows = stmts.listChannelsByGame.all(gameKey);
-  if (channelRows.length === 0) {
-    logger.warn('scrimRepost: aucun salon configuré pour le jeu', {
-      scrim_post_db_id: scrimPostDbId,
-      scrim_public_id: row.scrim_public_id,
-      game_key: gameKey,
-    });
-    return { ok: false, successCount: 0, reason: 'no_channels' };
-  }
-
-  // contact_display_name est persisté en DB au moment de la création du scrim.
-  // Il est lu directement via scrimDbRowToEmbedPayload → stable, indépendant du serveur destinataire.
-  const embedPayload = scrimDbRowToEmbedPayload(row);
-
-  let successCount = 0;
-  try {
-    const { runWithReservedBroadcastSlot, BROADCAST_POOL_STOPPING } = await import('./scrimBroadcastExecutionPool.js');
-    try {
-      successCount = await runWithReservedBroadcastSlot(async () =>
-        broadcastScrimRequest({
-          client,
-          rows: channelRows,
-          stmts,
-          authorUserId: /** @type {string} */ (row.author_user_id),
-          scrimPostDbId,
-          payload: embedPayload,
-        }),
-      );
-    } catch (poolErr) {
-      const code = poolErr && typeof poolErr === 'object' && 'code' in poolErr
-        ? /** @type {{ code?: string }} */ (poolErr).code
-        : undefined;
-      logger.info('scrimRepost: slot pool indisponible / shutdown', {
-        scrim_post_db_id: scrimPostDbId,
-        code: code ?? null,
-        stopping: code === BROADCAST_POOL_STOPPING,
-      });
-      return { ok: false, successCount: 0, reason: 'pool_unavailable' };
-    }
-  } catch (err) {
-    logger.error('scrimRepost: échec broadcast', {
-      scrim_post_db_id: scrimPostDbId,
-      scrim_public_id: row.scrim_public_id,
-      message: err instanceof Error ? err.message : String(err),
-      stack: err instanceof Error ? err.stack : undefined,
-    });
-    return { ok: false, successCount: 0, reason: 'broadcast_throw' };
-  }
-
-  if (successCount === 0) {
-    logger.warn('scrimRepost: zéro envoi — anciens messages non modifiés', {
-      scrim_post_db_id: scrimPostDbId,
-      scrim_public_id: row.scrim_public_id,
-      targets: channelRows.length,
-      old_message_count: oldMessages.length,
-    });
-    return { ok: false, successCount: 0, reason: 'broadcast_zero' };
-  }
-
-  const rowStillActive = stmts.getScrimPostById.get(scrimPostDbId);
-  if (!rowStillActive || rowStillActive.status !== 'active') {
-    logger.warn('scrimRepost: scrim plus actif après broadcast — supersede ignoré', {
-      scrim_post_db_id: scrimPostDbId,
-      status: rowStillActive?.status ?? 'missing',
-    });
-    return { ok: false, successCount, reason: 'closed_during_repost' };
-  }
-
-  await markScrimPostMessagesSuperseded(
-    client,
-    stmts,
-    rowStillActive,
-    oldMessages,
-  );
-
-  const nowIso = new Date().toISOString();
-  const trx = db.transaction(() =>
-    stmts.recordScrimPostRepostSuccess.run({
-      id: scrimPostDbId,
-      last_repost_at: nowIso,
-    }),
-  );
-  const info = trx();
-  if (info.changes === 0) {
-    logger.warn('scrimRepost: recordScrimPostRepostSuccess sans effet', {
-      scrim_post_db_id: scrimPostDbId,
-    });
-    return { ok: false, successCount, reason: 'db_record_failed' };
-  }
-
-  const after = stmts.getScrimPostById.get(scrimPostDbId);
-  logger.info('scrimRepost: repost terminé', {
-    scrim_post_db_id: scrimPostDbId,
-    scrim_public_id: row.scrim_public_id,
-    success_count: successCount,
-    old_message_count: oldMessages.length,
-    repost_count: after?.repost_count ?? null,
-    last_repost_at: after?.last_repost_at ?? null,
-  });
-
-  return { ok: true, successCount };
-}
-
-/**
- * @param {import('discord.js').Client} client
- * @param {import('better-sqlite3').Database} db
- * @param {ReturnType<import('../database/db.js')['prepareStatements']>} stmts
  */
 export async function runScrimRepostPass(client, db, stmts) {
   if (jobShuttingDown || !isScrimRepostEnabled()) {
@@ -242,7 +98,7 @@ export async function runScrimRepostPass(client, db, stmts) {
     if (i > 0) await sleep(150);
 
     try {
-      const result = await repostSingleActiveScrim(client, db, stmts, dbId);
+      const result = await executeRepostCycleForScrim(client, db, stmts, dbId);
       if (result.ok) {
         reposted += 1;
       } else {
@@ -372,6 +228,20 @@ export function startScrimRepostJob(client, db, stmts) {
     max_per_pass: SCRIM_REPOST_MAX_PER_PASS,
     first_pass_delay_ms: 20_000,
   });
+
+  void (async () => {
+    try {
+      await recoverIncompleteRepostCycles(client, db, stmts);
+    } catch (err) {
+      try {
+        logger.error('scrimRepostJob: recovery cycles incomplets', {
+          message: err instanceof Error ? err.message : String(err),
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+  })();
 
   const tick = () => {
     if (jobShuttingDown || !isScrimRepostEnabled()) return;

@@ -5,6 +5,28 @@ import {
 } from './discordRetryPolicy.js';
 import { runTransientDiscord } from './discordApiGuard.js';
 import { applyScrimEmbedEditFromPayload } from './safeDiscordMessageEdit.js';
+import {
+  cancelStaleScrimLifecycleEditRetry,
+  recheckScrimLifecycleEditRetryTargetStatus,
+} from './scrimLifecycleEditCoalescing.js';
+import {
+  markScrimLifecycleOperationCompleted,
+  markScrimLifecycleOperationFailedTerminal,
+} from './scrimLifecycleOperationStore.js';
+
+/**
+ * @param {ReturnType<import('../database/db.js')['prepareStatements']>} stmts
+ * @param {Record<string, unknown>} row
+ * @param {string} errorCode
+ * @param {string} errorMessage
+ */
+function markRetryLifecycleOpFailedTerminal(stmts, row, errorCode, errorMessage) {
+  const opId =
+    row.lifecycle_operation_id != null ? Number(row.lifecycle_operation_id) : null;
+  if (opId != null && Number.isFinite(opId)) {
+    markScrimLifecycleOperationFailedTerminal(stmts, opId, errorCode, errorMessage);
+  }
+}
 
 let jobStarted = false;
 let jobShuttingDown = false;
@@ -51,6 +73,7 @@ function handlePrefetchFailure(stmts, row, id, err, phase) {
       last_error_code: c.code,
       last_error_message: `${c.message} (${phaseTag})`,
     });
+    markRetryLifecycleOpFailedTerminal(stmts, row, c.code, `${c.message} (${phaseTag})`);
     logger.warn('discordEditRetryJob: abandon (prefetch terminal)', {
       retry_id: id,
       phase: phaseTag,
@@ -71,6 +94,12 @@ function handlePrefetchFailure(stmts, row, id, err, phase) {
       last_error_code: c.code,
       last_error_message: `${c.message} (${phaseTag}, max tentatives)`,
     });
+    markRetryLifecycleOpFailedTerminal(
+      stmts,
+      row,
+      c.code,
+      `${c.message} (${phaseTag}, max tentatives)`,
+    );
     logger.warn('discordEditRetryJob: abandon (prefetch max tentatives)', {
       retry_id: id,
       phase: phaseTag,
@@ -183,6 +212,12 @@ export async function runDiscordEditRetryPass(client, stmts) {
         last_error_message:
           'Salon non textuel ou type incompatible (prefetch channel)',
       });
+      markRetryLifecycleOpFailedTerminal(
+        stmts,
+        row,
+        'PREFETCH',
+        'Salon non textuel ou type incompatible (prefetch channel)',
+      );
       abandoned += 1;
       logger.warn('discordEditRetryJob: abandon (prefetch terminal)', {
         retry_id: id,
@@ -235,6 +270,18 @@ export async function runDiscordEditRetryPass(client, stmts) {
       continue;
     }
 
+    const staleCheck = recheckScrimLifecycleEditRetryTargetStatus(stmts, row);
+    if (staleCheck.stale) {
+      cancelStaleScrimLifecycleEditRetry(
+        stmts,
+        row,
+        staleCheck.scrimPostStatus ?? 'unknown',
+        staleCheck.reason ?? 'stale_target_status',
+      );
+      abandoned += 1;
+      continue;
+    }
+
     try {
       await applyScrimEmbedEditFromPayload(msg, row.payload_json);
       const resolvedAt = new Date().toISOString();
@@ -243,6 +290,19 @@ export async function runDiscordEditRetryPass(client, stmts) {
         resolved_at: resolvedAt,
         updated_at: resolvedAt,
       });
+      const opId =
+        row.lifecycle_operation_id != null ? Number(row.lifecycle_operation_id) : null;
+      if (opId != null && Number.isFinite(opId)) {
+        try {
+          markScrimLifecycleOperationCompleted(stmts, opId);
+        } catch (shadowErr) {
+          logger.warn('discordEditRetryJob: shadow mark completed échoué (non bloquant)', {
+            lifecycle_operation_id: opId,
+            retry_id: id,
+            message: shadowErr instanceof Error ? shadowErr.message : String(shadowErr),
+          });
+        }
+      }
       success += 1;
       logger.info('discordEditRetryJob: édition retentée OK', {
         retry_id: id,
@@ -259,6 +319,7 @@ export async function runDiscordEditRetryPass(client, stmts) {
           last_error_code: c.code,
           last_error_message: c.message,
         });
+        markRetryLifecycleOpFailedTerminal(stmts, row, c.code, c.message);
         abandoned += 1;
         logger.warn('discordEditRetryJob: abandon (erreur terminal)', {
           retry_id: id,
@@ -276,6 +337,12 @@ export async function runDiscordEditRetryPass(client, stmts) {
             last_error_code: c.code,
             last_error_message: `${c.message} (max tentatives)`,
           });
+          markRetryLifecycleOpFailedTerminal(
+            stmts,
+            row,
+            c.code,
+            `${c.message} (max tentatives)`,
+          );
           abandoned += 1;
           logger.warn('discordEditRetryJob: abandon (max tentatives)', {
             retry_id: id,

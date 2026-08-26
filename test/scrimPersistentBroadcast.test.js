@@ -33,6 +33,11 @@ import {
   startDiscordTaskQueue,
   stopDiscordTaskQueue,
 } from '../src/services/discordTaskQueue.js';
+import {
+  startScrimLifecycleDispatcher,
+  stopScrimLifecycleDispatcher,
+  drainScrimLifecycleDispatcher,
+} from '../src/services/scrimLifecycleDispatcher.js';
 import { t } from '../src/i18n/index.js';
 import { closeScrimPostByDbId } from '../src/services/scrimLifecycle.js';
 
@@ -98,6 +103,67 @@ function buildMockClient(guildMap = {}) {
       fetch: async (id) => guildMap[id] ?? null,
     },
   };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Mock salon avec fetch messages pour le dispatcher lifecycle Phase 3G.
+ */
+function buildCloseDuringSendChannel(options = {}) {
+  const lifecycle = { edit: 0, delete: 0 };
+  const messageId = options.messageId ?? `msg-${Date.now()}`;
+  const messageObj = {
+    id: messageId,
+    guildId: options.guildId ?? 'guild-001',
+    channelId: options.channelId ?? 'chan-001',
+    edit: async () => {
+      lifecycle.edit += 1;
+      if (options.editThrows) throw options.editThrows;
+      return {};
+    },
+    delete: async () => {
+      lifecycle.delete += 1;
+      if (options.deleteThrows) throw options.deleteThrows;
+    },
+  };
+  const channel = {
+    id: options.channelId ?? 'chan-001',
+    type: ChannelType.GuildText,
+    isTextBased: () => true,
+    permissionsFor: () => new PermissionsBitField([
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.SendMessages,
+      PermissionFlagsBits.EmbedLinks,
+      PermissionFlagsBits.ReadMessageHistory,
+      PermissionFlagsBits.ManageMessages,
+    ]),
+    send: async () => {
+      if (options.onSend) options.onSend();
+      return messageObj;
+    },
+    messages: {
+      fetch: async () => messageObj,
+    },
+  };
+  return { channel, lifecycle, messageId };
+}
+
+async function runPassWithLifecycleDispatcher(client, db, stmts) {
+  process.env.DISCORD_TASK_QUEUE_DELAY_MS = '0';
+  process.env.DISCORD_API_MAX_ATTEMPTS = '1';
+  startDiscordTaskQueue();
+  startScrimLifecycleDispatcher(client, stmts);
+  try {
+    await runScrimBroadcastDeliveryPass(client, db, stmts);
+    await drainScrimLifecycleDispatcher(client, stmts, { timeoutMs: 15_000 });
+    await sleep(50);
+  } finally {
+    await stopScrimLifecycleDispatcher();
+    await stopDiscordTaskQueue();
+  }
 }
 
 // ─── Helpers DB ───────────────────────────────────────────────────────────────
@@ -1498,227 +1564,154 @@ describe('scrimPersistentBroadcast', () => {
 
   // ── 15. Fermeture pendant envoi — post-send check ────────────────────────
 
-  describe('fermeture pendant channel.send — policy post-send', () => {
-    it('keep policy — message.edit() appelé, delete non appelé', async () => {
+  describe('fermeture pendant channel.send — policy post-send (Phase 3G dispatcher)', () => {
+    it('keep policy — lifecycle edit via dispatcher, delete non appelé', async () => {
       await withTempDb(async (db, stmts) => {
         const scrimId = insertTestScrimPost(stmts);
         const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
         insertTestDelivery(stmts, batchId, scrimId);
         const now = new Date().toISOString();
-        const deleteCount = { n: 0 };
-        const editCount = { n: 0 };
-
-        const mockChannel = {
-          id: 'chan-001',
-          type: ChannelType.GuildText,
-          permissionsFor: () => new PermissionsBitField([
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.EmbedLinks,
-          ]),
-          send: async () => {
+        const { channel, lifecycle } = buildCloseDuringSendChannel({
+          messageId: 'msg-keep-001',
+          onSend: () => {
             db.prepare("UPDATE scrim_posts SET status = 'closed_manual', closed_at = ? WHERE id = ?").run(now, scrimId);
-            return {
-              id: 'msg-keep-001',
-              guildId: 'guild-001',
-              channelId: 'chan-001',
-              delete: async () => { deleteCount.n += 1; },
-              edit: async () => { editCount.n += 1; return {}; },
-            };
           },
-        };
-        const mockClient = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': mockChannel }) });
+        });
+        const mockClient = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': channel }) });
 
-        await runScrimBroadcastDeliveryPass(mockClient, db, stmts);
+        await runPassWithLifecycleDispatcher(mockClient, db, stmts);
 
-        assert.strictEqual(deleteCount.n, 0, 'keep policy : delete ne doit pas être appelé');
-        assert.strictEqual(editCount.n, 1, 'keep policy : edit doit être appelé exactement une fois');
+        assert.strictEqual(lifecycle.delete, 0, 'keep policy : delete ne doit pas être appelé');
+        assert.strictEqual(lifecycle.edit, 1, 'keep policy : edit lifecycle exactement une fois');
       });
     });
 
-    it('keep policy — delivery reste sent après edit', async () => {
+    it('keep policy — delivery reste sent après edit lifecycle', async () => {
       await withTempDb(async (db, stmts) => {
         const scrimId = insertTestScrimPost(stmts);
         const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
         const delivId = insertTestDelivery(stmts, batchId, scrimId);
         const now = new Date().toISOString();
-
-        const mockChannel = {
-          id: 'chan-001',
-          type: ChannelType.GuildText,
-          permissionsFor: () => new PermissionsBitField([
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.EmbedLinks,
-          ]),
-          send: async () => {
+        const { channel } = buildCloseDuringSendChannel({
+          messageId: 'msg-keep-002',
+          onSend: () => {
             db.prepare("UPDATE scrim_posts SET status = 'closed_manual', closed_at = ? WHERE id = ?").run(now, scrimId);
-            return { id: 'msg-keep-002', guildId: 'guild-001', channelId: 'chan-001',
-              delete: async () => {}, edit: async () => ({}) };
           },
-        };
-        const mockClient = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': mockChannel }) });
+        });
+        const mockClient = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': channel }) });
 
-        await runScrimBroadcastDeliveryPass(mockClient, db, stmts);
+        await runPassWithLifecycleDispatcher(mockClient, db, stmts);
 
         const d = db.prepare('SELECT status FROM scrim_broadcast_deliveries WHERE id = ?').get(delivId);
         assert.strictEqual(d.status, 'sent', 'delivery doit rester sent après edit lifecycle');
       });
     });
 
-    it('keep policy — edit échoue retryable → retry SQLite créé, delivery reste sent', async () => {
+    it('keep policy — edit échoue retryable → lifecycle retry, delivery reste sent', async () => {
       await withTempDb(async (db, stmts) => {
         const scrimId = insertTestScrimPost(stmts);
         const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
         const delivId = insertTestDelivery(stmts, batchId, scrimId);
         const now = new Date().toISOString();
-
         const retryableErr = Object.assign(new Error('Service unavailable'), { status: 503 });
-        const mockChannel = {
-          id: 'chan-001',
-          type: ChannelType.GuildText,
-          permissionsFor: () => new PermissionsBitField([
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.EmbedLinks,
-          ]),
-          send: async () => {
+        const { channel } = buildCloseDuringSendChannel({
+          messageId: 'msg-keep-003',
+          editThrows: retryableErr,
+          onSend: () => {
             db.prepare("UPDATE scrim_posts SET status = 'closed_manual', closed_at = ? WHERE id = ?").run(now, scrimId);
-            return {
-              id: 'msg-keep-003',
-              guildId: 'guild-001',
-              channelId: 'chan-001',
-              delete: async () => {},
-              edit: async () => { throw retryableErr; },
-            };
           },
-        };
-        const mockClient = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': mockChannel }) });
+        });
+        const mockClient = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': channel }) });
 
-        await runScrimBroadcastDeliveryPass(mockClient, db, stmts);
+        await runPassWithLifecycleDispatcher(mockClient, db, stmts);
 
-        // Delivery doit rester sent
         const d = db.prepare('SELECT status FROM scrim_broadcast_deliveries WHERE id = ?').get(delivId);
         assert.strictEqual(d.status, 'sent', 'delivery doit rester sent malgré l\'échec edit');
 
-        // Retry d'édition doit être créé
-        const retry = db.prepare('SELECT * FROM discord_message_edit_retries WHERE message_id = ?').get('msg-keep-003');
-        assert.ok(retry, 'Un retry d\'édition doit être créé après échec retryable');
+        const op = db.prepare(
+          `SELECT status, next_attempt_at FROM scrim_lifecycle_operations WHERE message_id = ? AND event_key IS NOT NULL`,
+        ).get('msg-keep-003');
+        assert.ok(op, 'op lifecycle orchestrée');
+        assert.strictEqual(op.status, 'pending');
+        assert.ok(op.next_attempt_at, 'retry lifecycle planifié');
+
+        const legacy = db.prepare('SELECT * FROM discord_message_edit_retries WHERE message_id = ?').get('msg-keep-003');
+        assert.ok(!legacy, 'pas de retry legacy shadow');
       });
     });
 
-    it('keep policy — edit échoue terminal → delivery reste sent, pas de retry SQLite', async () => {
+    it('keep policy — edit échoue terminal → delivery reste sent, op failed_terminal', async () => {
       await withTempDb(async (db, stmts) => {
         const scrimId = insertTestScrimPost(stmts);
         const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
         const delivId = insertTestDelivery(stmts, batchId, scrimId);
         const now = new Date().toISOString();
-
         const { RESTJSONErrorCodes } = await import('discord-api-types/v10');
         const terminalErr = Object.assign(new Error('Unknown Channel'), { code: RESTJSONErrorCodes.UnknownChannel });
-        const mockChannel = {
-          id: 'chan-001',
-          type: ChannelType.GuildText,
-          permissionsFor: () => new PermissionsBitField([
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.EmbedLinks,
-          ]),
-          send: async () => {
+        const { channel } = buildCloseDuringSendChannel({
+          messageId: 'msg-keep-004',
+          editThrows: terminalErr,
+          onSend: () => {
             db.prepare("UPDATE scrim_posts SET status = 'closed_manual', closed_at = ? WHERE id = ?").run(now, scrimId);
-            return {
-              id: 'msg-keep-004',
-              guildId: 'guild-001',
-              channelId: 'chan-001',
-              delete: async () => {},
-              edit: async () => { throw terminalErr; },
-            };
           },
-        };
-        const mockClient = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': mockChannel }) });
+        });
+        const mockClient = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': channel }) });
 
-        await runScrimBroadcastDeliveryPass(mockClient, db, stmts);
+        await runPassWithLifecycleDispatcher(mockClient, db, stmts);
 
         const d = db.prepare('SELECT status FROM scrim_broadcast_deliveries WHERE id = ?').get(delivId);
         assert.strictEqual(d.status, 'sent', 'delivery doit rester sent malgré erreur terminale edit');
-        const retry = db.prepare('SELECT * FROM discord_message_edit_retries WHERE message_id = ?').get('msg-keep-004');
-        assert.ok(!retry, 'Pas de retry pour une erreur terminale');
+        const op = db.prepare(
+          `SELECT status FROM scrim_lifecycle_operations WHERE message_id = ?`,
+        ).get('msg-keep-004');
+        assert.strictEqual(op.status, 'failed_terminal');
       });
     });
 
-    it('delete policy — message supprimé et discord_deleted_at défini', async () => {
+    it('delete policy — lifecycle delete et discord_deleted_at défini', async () => {
       await withTempDb(async (db, stmts) => {
         const scrimId = insertTestScrimPost(stmts);
         const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
         insertTestDelivery(stmts, batchId, scrimId);
         const now = new Date().toISOString();
         stmts.upsertScrimMessageLifecyclePolicy.run({ guild_id: 'guild-001', policy: 'delete', updated_at: now });
-        const deleteCount = { n: 0 };
-        const editCount = { n: 0 };
-
-        const mockChannel = {
-          id: 'chan-001',
-          type: ChannelType.GuildText,
-          permissionsFor: () => new PermissionsBitField([
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.EmbedLinks,
-          ]),
-          send: async () => {
+        const { channel, lifecycle } = buildCloseDuringSendChannel({
+          messageId: 'msg-del-002',
+          onSend: () => {
             db.prepare("UPDATE scrim_posts SET status = 'closed_manual', closed_at = ? WHERE id = ?").run(now, scrimId);
-            return {
-              id: 'msg-del-002',
-              guildId: 'guild-001',
-              channelId: 'chan-001',
-              delete: async () => { deleteCount.n += 1; },
-              edit: async () => { editCount.n += 1; return {}; },
-            };
           },
-        };
-        const mockClient = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': mockChannel }) });
+        });
+        const mockClient = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': channel }) });
 
-        await runScrimBroadcastDeliveryPass(mockClient, db, stmts);
+        await runPassWithLifecycleDispatcher(mockClient, db, stmts);
 
-        assert.strictEqual(deleteCount.n, 1, 'delete policy : delete doit être appelé une fois');
-        assert.strictEqual(editCount.n, 0, 'delete policy : edit ne doit pas être appelé');
+        assert.strictEqual(lifecycle.delete, 1, 'delete policy : delete lifecycle une fois');
+        assert.strictEqual(lifecycle.edit, 0, 'delete policy : edit ne doit pas être appelé');
         const msgRow = db.prepare('SELECT discord_deleted_at FROM scrim_post_messages WHERE message_id = ?').get('msg-del-002');
-        assert.ok(msgRow?.discord_deleted_at, 'discord_deleted_at doit être défini après suppression post-fermeture');
+        assert.ok(msgRow?.discord_deleted_at, 'discord_deleted_at doit être défini');
       });
     });
 
-    it('delete policy échoue → fallback édition (edit appelé)', async () => {
+    it('delete policy échoue → fallback édition lifecycle (edit appelé)', async () => {
       await withTempDb(async (db, stmts) => {
         const scrimId = insertTestScrimPost(stmts);
         const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
         insertTestDelivery(stmts, batchId, scrimId);
         const now = new Date().toISOString();
         stmts.upsertScrimMessageLifecyclePolicy.run({ guild_id: 'guild-001', policy: 'delete', updated_at: now });
-        const editCount = { n: 0 };
-
-        const mockChannel = {
-          id: 'chan-001',
-          type: ChannelType.GuildText,
-          permissionsFor: () => new PermissionsBitField([
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.EmbedLinks,
-          ]),
-          send: async () => {
+        const { channel, lifecycle } = buildCloseDuringSendChannel({
+          messageId: 'msg-del-fb-001',
+          deleteThrows: Object.assign(new Error('Missing Access'), { code: 50013 }),
+          onSend: () => {
             db.prepare("UPDATE scrim_posts SET status = 'closed_manual', closed_at = ? WHERE id = ?").run(now, scrimId);
-            return {
-              id: 'msg-del-fb-001',
-              guildId: 'guild-001',
-              channelId: 'chan-001',
-              delete: async () => { throw new Error('Cannot delete'); },
-              edit: async () => { editCount.n += 1; return {}; },
-            };
           },
-        };
-        const mockClient = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': mockChannel }) });
+        });
+        const mockClient = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': channel }) });
 
-        await runScrimBroadcastDeliveryPass(mockClient, db, stmts);
+        await runPassWithLifecycleDispatcher(mockClient, db, stmts);
 
-        assert.strictEqual(editCount.n, 1, 'delete échoue → fallback édition : edit doit être appelé');
+        assert.strictEqual(lifecycle.delete, 1);
+        assert.strictEqual(lifecycle.edit, 1, 'delete terminal → fallback édition lifecycle');
       });
     });
 
@@ -1747,41 +1740,26 @@ describe('scrimPersistentBroadcast', () => {
         const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
         const delivId = insertTestDelivery(stmts, batchId, scrimId);
         const now = new Date().toISOString();
-
-        // Erreur retryable sur edit, scrim fermé pendant send
         const retryableErr = Object.assign(new Error('Rate limit'), { status: 503 });
-        const mockChannel = {
-          id: 'chan-001',
-          type: ChannelType.GuildText,
-          permissionsFor: () => new PermissionsBitField([
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.EmbedLinks,
-          ]),
-          send: async () => {
+        const { channel } = buildCloseDuringSendChannel({
+          messageId: 'msg-txn-001',
+          editThrows: retryableErr,
+          onSend: () => {
             db.prepare("UPDATE scrim_posts SET status = 'closed_manual', closed_at = ? WHERE id = ?").run(now, scrimId);
-            return {
-              id: 'msg-txn-001',
-              guildId: 'guild-001',
-              channelId: 'chan-001',
-              delete: async () => {},
-              edit: async () => { throw retryableErr; },
-            };
           },
-        };
-        const mockClient = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': mockChannel }) });
+        });
+        const mockClient = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': channel }) });
 
-        await runScrimBroadcastDeliveryPass(mockClient, db, stmts);
+        await runPassWithLifecycleDispatcher(mockClient, db, stmts);
 
-        // Delivery reste sent — le succès de livraison ne doit pas être effacé
         const d = db.prepare('SELECT status FROM scrim_broadcast_deliveries WHERE id = ?').get(delivId);
         assert.strictEqual(d.status, 'sent', 'delivery doit rester sent même si sync lifecycle échoue');
-        // Message bien présent en DB
         const msg = db.prepare('SELECT * FROM scrim_post_messages WHERE message_id = ?').get('msg-txn-001');
         assert.ok(msg, 'scrim_post_messages doit contenir le message livré');
-        // Retry SQLite créé pour l'édition
-        const retry = db.prepare('SELECT * FROM discord_message_edit_retries WHERE message_id = ?').get('msg-txn-001');
-        assert.ok(retry, 'Un retry d\'édition doit être enregistré');
+        const op = db.prepare(
+          `SELECT status, next_attempt_at FROM scrim_lifecycle_operations WHERE message_id = ? AND event_key IS NOT NULL`,
+        ).get('msg-txn-001');
+        assert.ok(op?.next_attempt_at, 'retry lifecycle orchestré');
       });
     });
 
@@ -1791,32 +1769,16 @@ describe('scrimPersistentBroadcast', () => {
         const batchId = insertTestBatch(stmts, scrimId, { status: 'active' });
         insertTestDelivery(stmts, batchId, scrimId);
         const now = new Date().toISOString();
-        const editCount = { n: 0 };
-
-        const mockChannel = {
-          id: 'chan-001',
-          type: ChannelType.GuildText,
-          permissionsFor: () => new PermissionsBitField([
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.EmbedLinks,
-          ]),
-          send: async () => {
+        const { channel, lifecycle } = buildCloseDuringSendChannel({
+          messageId: 'msg-mut-keep-001',
+          onSend: () => {
             db.prepare("UPDATE scrim_posts SET status = 'closed_manual', closed_at = ? WHERE id = ?").run(now, scrimId);
-            return {
-              id: 'msg-mut-keep-001',
-              guildId: 'guild-001',
-              channelId: 'chan-001',
-              delete: async () => {},
-              edit: async () => { editCount.n += 1; return {}; },
-            };
           },
-        };
-        const mockClient = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': mockChannel }) });
-        await runScrimBroadcastDeliveryPass(mockClient, db, stmts);
+        });
+        const mockClient = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': channel }) });
+        await runPassWithLifecycleDispatcher(mockClient, db, stmts);
 
-        // Avec post-send check actif + keep policy : edit doit avoir été appelé
-        assert.strictEqual(editCount.n, 1, 'Mutation keep détectée : sans post-send check, edit ne serait pas appelé');
+        assert.strictEqual(lifecycle.edit, 1, 'Mutation keep : edit lifecycle via dispatcher');
       });
     });
 
@@ -1827,26 +1789,16 @@ describe('scrimPersistentBroadcast', () => {
         insertTestDelivery(stmts, batchId, scrimId);
         const now = new Date().toISOString();
         stmts.upsertScrimMessageLifecyclePolicy.run({ guild_id: 'guild-001', policy: 'delete', updated_at: now });
-        const deleteCount = { n: 0 };
-
-        const mockChannel = {
-          id: 'chan-001',
-          type: ChannelType.GuildText,
-          permissionsFor: () => new PermissionsBitField([
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.EmbedLinks,
-          ]),
-          send: async () => {
+        const { channel, lifecycle } = buildCloseDuringSendChannel({
+          messageId: 'msg-mut-003',
+          onSend: () => {
             db.prepare("UPDATE scrim_posts SET status = 'closed_manual', closed_at = ? WHERE id = ?").run(now, scrimId);
-            return { id: 'msg-mut-003', guildId: 'guild-001', channelId: 'chan-001',
-              delete: async () => { deleteCount.n += 1; }, edit: async () => ({}) };
           },
-        };
-        const mockClient = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': mockChannel }) });
-        await runScrimBroadcastDeliveryPass(mockClient, db, stmts);
+        });
+        const mockClient = buildMockClient({ 'guild-001': buildMockGuild('guild-001', { 'chan-001': channel }) });
+        await runPassWithLifecycleDispatcher(mockClient, db, stmts);
 
-        assert.strictEqual(deleteCount.n, 1, 'Mutation delete détectée : sans post-send check, delete ne serait pas appelé');
+        assert.strictEqual(lifecycle.delete, 1, 'Mutation delete : delete lifecycle via dispatcher');
       });
     });
   });

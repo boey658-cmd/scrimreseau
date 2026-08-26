@@ -1,12 +1,16 @@
 import { logger } from '../utils/logger.js';
 import {
   buildScrimClosedMessageEditOptions,
-  buildScrimSupersededMessageEditOptions,
 } from './scrimEmbedBuilder.js';
 import { runTransientDiscord } from './discordApiGuard.js';
 import { syncInactiveScrimMessageByPolicy } from './scrimMessagePolicy.js';
 import { getGuildLocale, t } from '../i18n/index.js';
-import { isPersistentBroadcastEnabled } from '../utils/persistentBroadcastFlag.js';
+import {
+  closeScrimPostByDbIdAndExecuteLifecycle,
+  closeScrimPostByDbIdOrchestrated,
+  executeOrchestratedLifecycleOperations,
+  orchestrateScrimSupersedeInTransaction,
+} from './scrimLifecycleOrchestrator.js';
 
 /** Délai entre éditions d’embeds (anti rate-limit Discord), en ms. */
 export const SCRIM_EDIT_DELAY_MS = 75;
@@ -61,139 +65,57 @@ export function allocateScrimPublicId(stmts) {
 
 /**
  * Marque visuellement des messages réseau comme « ancienne annonce » (repost).
+ * Phase 3D : orchestration persistante + exécution immédiate.
  *
  * @param {import('discord.js').Client} client
+ * @param {import('better-sqlite3').Database} db
  * @param {ReturnType<import('../database/db.js')['prepareStatements']>} stmts
  * @param {Record<string, unknown>} dbRow ligne `scrim_posts` (toujours active)
  * @param {{ guild_id: string, channel_id: string, message_id: string }[]} messages snapshot avant broadcast
+ * @param {number} [generation] génération repost explicite (repost_count+1 avant increment)
  */
 export async function markScrimPostMessagesSuperseded(
   client,
+  db,
   stmts,
   dbRow,
   messages,
+  generation,
 ) {
   if (messages.length === 0) return;
 
-  const targetStatus = 'superseded_repost';
-  const scrimPostDbId = Number(dbRow.id);
+  const gen =
+    generation != null
+      ? generation
+      : Number(dbRow.repost_count ?? 0) + 1;
+  const result = orchestrateScrimSupersedeInTransaction(
+    db,
+    stmts,
+    dbRow,
+    messages,
+    gen,
+  );
 
-  for (let i = 0; i < messages.length; i += 1) {
-    const m = messages[i];
-    const locale = stmts.getGuildLanguage ? getGuildLocale(m.guild_id, stmts) : 'fr';
-    const editOptions = buildScrimSupersededMessageEditOptions(dbRow, locale);
-    if (i > 0) await sleep(SCRIM_EDIT_DELAY_MS);
-
-    // Si le message a déjà été supprimé par la policy de suppression automatique,
-    // inutile de le prefetcher — considérer comme traité, log info uniquement.
-    try {
-      const alreadyDeleted = stmts.isScrimPostMessageDiscordDeleted.get(
-        m.guild_id,
-        m.channel_id,
-        m.message_id,
-      );
-      if (alreadyDeleted) {
-        logger.info('markScrimPostMessagesSuperseded: message déjà supprimé par policy — ignoré', {
-          scrim_post_db_id: scrimPostDbId,
-          guild_id: m.guild_id,
-          message_id: m.message_id,
-        });
-        continue;
-      }
-    } catch {
-      /* fail-open : continuer le traitement normal si la vérification DB échoue */
-    }
-
-    try {
-      const guild = await runTransientDiscord(
-        () => client.guilds.fetch(m.guild_id),
-        {
-          kind: 'scrim_supersede_prefetch_guild',
-          metadata: { guild_id: m.guild_id, scrim_post_db_id: scrimPostDbId },
-        },
-      ).catch(() => null);
-      if (!guild) {
-        logger.warn('markScrimPostMessagesSuperseded: guilde introuvable', {
-          guild_id: m.guild_id,
-          scrim_post_db_id: scrimPostDbId,
-        });
-        continue;
-      }
-      const channel = await runTransientDiscord(
-        () => guild.channels.fetch(m.channel_id),
-        {
-          kind: 'scrim_supersede_prefetch_channel',
-          metadata: {
-            guild_id: m.guild_id,
-            channel_id: m.channel_id,
-            scrim_post_db_id: scrimPostDbId,
-          },
-        },
-      ).catch(() => null);
-      if (!channel?.isTextBased()) {
-        logger.warn('markScrimPostMessagesSuperseded: salon introuvable ou non texte', {
-          channel_id: m.channel_id,
-          scrim_post_db_id: scrimPostDbId,
-        });
-        continue;
-      }
-      const msg = await runTransientDiscord(
-        () => channel.messages.fetch(m.message_id),
-        {
-          kind: 'scrim_supersede_prefetch_message',
-          metadata: {
-            guild_id: m.guild_id,
-            channel_id: m.channel_id,
-            message_id: m.message_id,
-            scrim_post_db_id: scrimPostDbId,
-          },
-        },
-      ).catch(() => null);
-      if (!msg) {
-        logger.warn('markScrimPostMessagesSuperseded: message introuvable', {
-          message_id: m.message_id,
-          scrim_post_db_id: scrimPostDbId,
-        });
-        continue;
-      }
-      try {
-        await syncInactiveScrimMessageByPolicy({
-          client,
-          stmts,
-          messageRow: { guild_id: m.guild_id, channel_id: m.channel_id, message_id: m.message_id },
-          scrimPostDbId,
-          eventType: 'superseded_repost',
-          targetStatus,
-          editOptions,
-          guild,
-          channel,
-          message: msg,
-        });
-      } catch (unexpected) {
-        logger.warn('markScrimPostMessagesSuperseded: exception inattendue', {
-          scrim_post_db_id: scrimPostDbId,
-          guild_id: m.guild_id,
-          channel_id: m.channel_id,
-          message_id: m.message_id,
-          message:
-            unexpected instanceof Error
-              ? unexpected.message
-              : String(unexpected),
-        });
-      }
-    } catch (err) {
-      logger.warn('markScrimPostMessagesSuperseded: erreur avant édition', {
-        scrim_post_db_id: scrimPostDbId,
-        guild_id: m.guild_id,
-        channel_id: m.channel_id,
-        message_id: m.message_id,
-        message: err instanceof Error ? err.message : String(err),
+  if (result.skipped || result.operations.length === 0) {
+    if (result.skipped) {
+      logger.warn('markScrimPostMessagesSuperseded: scrim non actif — supersede ignoré', {
+        scrim_post_db_id: dbRow.id,
       });
     }
+    return;
   }
+
+  executeOrchestratedLifecycleOperations(client, stmts, result.operations);
 }
 
 /**
+ * Legacy direct close sync (Phase 3A shadow path).
+ *
+ * NON utiliséé par le hot path prod (close/expiration/supersede passent par
+ * orchestrate* + event_key + dispatcher). Conservé pour compat tests / appels
+ * manuels. Les shadows créées ici ont event_key NULL et ne sont PLUS claimables
+ * par le dispatcher (filtre Phase 3K).
+ *
  * @param {import('discord.js').Client} client
  * @param {{
  *   listScrimPostMessagesByPostId: import('better-sqlite3').Statement,
@@ -338,33 +260,7 @@ export async function updateScrimPostMessagesEmbeds(client, stmts, dbRow) {
  * @returns {boolean} true si une ligne active a été fermée
  */
 export function closeScrimPostByDbId(db, stmts, dbId, status, reason) {
-  const nowIso = new Date().toISOString();
-  const trx = db.transaction(() =>
-    stmts.closeScrimPostIfActive.run({
-      id: dbId,
-      status,
-      closed_at: nowIso,
-      closed_reason: reason,
-    }),
-  );
-  const info = trx();
-
-    if (isPersistentBroadcastEnabled() && info.changes > 0) {
-      try {
-        stmts.cancelPendingDeliveriesForScrim?.run({
-          scrim_post_db_id: dbId,
-          completed_at: nowIso,
-          updated_at: nowIso,
-        });
-      } catch (cancelErr) {
-      logger.warn('closeScrimPostByDbId: annulation deliveries persistantes echouee', {
-        db_id: dbId,
-        message: cancelErr instanceof Error ? cancelErr.message : String(cancelErr),
-      });
-    }
-  }
-
-  return info.changes > 0;
+  return closeScrimPostByDbIdOrchestrated(db, stmts, dbId, status, reason);
 }
 
 /**
@@ -388,17 +284,7 @@ export async function closeScrimPostByDbIdAndSyncMessages(
   status,
   reason,
 ) {
-  const ok = closeScrimPostByDbId(db, stmts, dbId, status, reason);
-  if (!ok) return false;
-  const row = stmts.getScrimPostById.get(dbId);
-  if (!row) {
-    logger.warn('closeScrimPostByDbIdAndSyncMessages: ligne introuvable après close', {
-      db_id: dbId,
-    });
-    return false;
-  }
-  await updateScrimPostMessagesEmbeds(client, stmts, row);
-  return true;
+  return closeScrimPostByDbIdAndExecuteLifecycle(client, db, stmts, dbId, status, reason);
 }
 
 /**

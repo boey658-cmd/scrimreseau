@@ -707,6 +707,176 @@ function migrateGuildLanguages(db) {
   });
 }
 
+/**
+ * Phase 3A — shadow persistence des opérations lifecycle scrim (additive, idempotente).
+ * Aucun worker / replay au startup en 3A.
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateScrimLifecycleOperations(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scrim_lifecycle_operations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scrim_post_db_id INTEGER NOT NULL,
+      guild_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      operation_type TEXT NOT NULL
+        CHECK(operation_type IN ('lifecycle_edit', 'lifecycle_delete')),
+      target_status TEXT,
+      priority TEXT NOT NULL DEFAULT 'low'
+        CHECK(priority IN ('high', 'low')),
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending', 'processing', 'completed', 'failed_terminal', 'cancelled')),
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      payload_json TEXT,
+      last_error_code TEXT,
+      last_error_message TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      completed_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_slo_status
+      ON scrim_lifecycle_operations (status);
+
+    CREATE INDEX IF NOT EXISTS idx_slo_scrim_post
+      ON scrim_lifecycle_operations (scrim_post_db_id);
+
+    CREATE INDEX IF NOT EXISTS idx_slo_message
+      ON scrim_lifecycle_operations (guild_id, channel_id, message_id);
+
+    CREATE INDEX IF NOT EXISTS idx_slo_created_at
+      ON scrim_lifecycle_operations (created_at);
+  `);
+  logger.info('Migration SQLite', {
+    change: 'scrim_lifecycle_operations',
+    action: 'CREATE_TABLE_IF_NOT_EXISTS',
+  });
+}
+
+/**
+ * Phase 3B : lien durable retry legacy ↔ shadow lifecycle op (nullable, rétrocompatible).
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateDiscordEditRetryLifecycleOperationId(db) {
+  if (!tableHasColumn(db, 'discord_message_edit_retries', 'lifecycle_operation_id')) {
+    db.exec(
+      `ALTER TABLE discord_message_edit_retries ADD COLUMN lifecycle_operation_id INTEGER`,
+    );
+    logger.info('Migration SQLite', {
+      change: 'discord_message_edit_retries.lifecycle_operation_id',
+      action: 'ADD_COLUMN',
+    });
+  }
+}
+
+/**
+ * Phase 3C — champs retry delete sur scrim_lifecycle_operations (additive, idempotente).
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateScrimLifecycleOperationsPhase3c(db) {
+  if (!tableHasColumn(db, 'scrim_lifecycle_operations', 'next_attempt_at')) {
+    db.exec(`ALTER TABLE scrim_lifecycle_operations ADD COLUMN next_attempt_at TEXT`);
+    logger.info('Migration SQLite', {
+      change: 'scrim_lifecycle_operations.next_attempt_at',
+      action: 'ADD_COLUMN',
+    });
+  }
+  if (!tableHasColumn(db, 'scrim_lifecycle_operations', 'cancellation_reason')) {
+    db.exec(`ALTER TABLE scrim_lifecycle_operations ADD COLUMN cancellation_reason TEXT`);
+    logger.info('Migration SQLite', {
+      change: 'scrim_lifecycle_operations.cancellation_reason',
+      action: 'ADD_COLUMN',
+    });
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_slo_delete_due
+      ON scrim_lifecycle_operations (operation_type, status, next_attempt_at)
+      WHERE operation_type = 'lifecycle_delete'
+        AND status IN ('pending', 'processing');
+  `);
+}
+
+/**
+ * Phase 3D — clé idempotente d’orchestration lifecycle (event_key).
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateScrimLifecycleOperationsPhase3d(db) {
+  if (!tableHasColumn(db, 'scrim_lifecycle_operations', 'event_key')) {
+    db.exec(`ALTER TABLE scrim_lifecycle_operations ADD COLUMN event_key TEXT`);
+    logger.info('Migration SQLite', {
+      change: 'scrim_lifecycle_operations.event_key',
+      action: 'ADD_COLUMN',
+    });
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_slo_event_key_unique
+      ON scrim_lifecycle_operations (event_key)
+      WHERE event_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_slo_recovery_due
+      ON scrim_lifecycle_operations (status, created_at)
+      WHERE event_key IS NOT NULL
+        AND status = 'pending'
+        AND next_attempt_at IS NULL;
+  `);
+}
+
+/**
+ * Phase 3E — cycles repost durables (additive, idempotente).
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateScrimRepostCycles(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scrim_repost_cycles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scrim_post_db_id INTEGER NOT NULL,
+      generation INTEGER NOT NULL,
+      event_key TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'reserved'
+        CHECK(status IN ('reserved', 'broadcasting', 'broadcast_done', 'finalized', 'cancelled', 'failed')),
+      old_messages_json TEXT NOT NULL,
+      success_count INTEGER NOT NULL DEFAULT 0,
+      started_at TEXT NOT NULL,
+      completed_at TEXT,
+      updated_at TEXT NOT NULL,
+      UNIQUE(scrim_post_db_id, generation),
+      UNIQUE(event_key)
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_src_active_scrim
+      ON scrim_repost_cycles (scrim_post_db_id)
+      WHERE status IN ('reserved', 'broadcasting', 'broadcast_done');
+
+    CREATE INDEX IF NOT EXISTS idx_src_recovery
+      ON scrim_repost_cycles (status, updated_at)
+      WHERE status IN ('reserved', 'broadcasting', 'broadcast_done');
+  `);
+  logger.info('Migration SQLite', {
+    change: 'scrim_repost_cycles',
+    action: 'CREATE_TABLE_IF_NOT_EXISTS',
+  });
+}
+
+/**
+ * Phase 3F — fairness dispatcher lifecycle (additive, idempotente).
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateScrimLifecycleOperationsPhase3f(db) {
+  if (!tableHasColumn(db, 'scrim_lifecycle_operations', 'last_dispatched_at')) {
+    db.exec(`ALTER TABLE scrim_lifecycle_operations ADD COLUMN last_dispatched_at TEXT`);
+    logger.info('Migration SQLite', {
+      change: 'scrim_lifecycle_operations.last_dispatched_at',
+      action: 'ADD_COLUMN',
+    });
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_slo_dispatcher_due
+      ON scrim_lifecycle_operations (status, last_dispatched_at, created_at)
+      WHERE status = 'pending';
+  `);
+}
+
 export function getDb() {
   if (dbInstance) return dbInstance;
   const dbPath = resolveDbPath();
@@ -732,6 +902,12 @@ export function getDb() {
   migrateStructureDiscordLinks(dbInstance);
   migratePlayerSearchInit(dbInstance);
   migrateGuildLanguages(dbInstance);
+  migrateScrimLifecycleOperations(dbInstance);
+  migrateDiscordEditRetryLifecycleOperationId(dbInstance);
+  migrateScrimLifecycleOperationsPhase3c(dbInstance);
+  migrateScrimLifecycleOperationsPhase3d(dbInstance);
+  migrateScrimRepostCycles(dbInstance);
+  migrateScrimLifecycleOperationsPhase3f(dbInstance);
   logger.info(
     'SQLite initialisée : mode WAL, busy_timeout=5000 ms. Une seule instance writer attendue sur ce fichier.',
     { path: dbPath, busy_timeout_ms: 5000, journal_mode: 'WAL' },
@@ -979,6 +1155,58 @@ export function prepareStatements(db) {
           repost_count = COALESCE(repost_count, 0) + 1
       WHERE id = @id AND status = 'active'
     `),
+    recordScrimPostRepostSuccessForGeneration: db.prepare(`
+      UPDATE scrim_posts
+      SET last_repost_at = @last_repost_at,
+          repost_count = COALESCE(repost_count, 0) + 1
+      WHERE id = @id
+        AND status = 'active'
+        AND COALESCE(repost_count, 0) + 1 = @expected_generation
+    `),
+
+    insertScrimRepostCycle: db.prepare(`
+      INSERT INTO scrim_repost_cycles (
+        scrim_post_db_id, generation, event_key, status,
+        old_messages_json, success_count, started_at, updated_at
+      ) VALUES (
+        @scrim_post_db_id, @generation, @event_key, @status,
+        @old_messages_json, @success_count, @started_at, @updated_at
+      )
+    `),
+    getScrimRepostCycleById: db.prepare(`
+      SELECT * FROM scrim_repost_cycles WHERE id = ?
+    `),
+    getActiveRepostCycleForScrim: db.prepare(`
+      SELECT * FROM scrim_repost_cycles
+      WHERE scrim_post_db_id = ?
+        AND status IN ('reserved', 'broadcasting', 'broadcast_done')
+      LIMIT 1
+    `),
+    updateScrimRepostCycleStatus: db.prepare(`
+      UPDATE scrim_repost_cycles
+      SET status = @status,
+          success_count = @success_count,
+          updated_at = @updated_at,
+          completed_at = COALESCE(@completed_at, completed_at)
+      WHERE id = @id
+    `),
+    listIncompleteScrimRepostCycles: db.prepare(`
+      SELECT * FROM scrim_repost_cycles
+      WHERE status IN ('reserved', 'broadcasting', 'broadcast_done')
+      ORDER BY updated_at ASC
+      LIMIT 10
+    `),
+    cancelSupersedeLifecycleOpsForGeneration: db.prepare(`
+      UPDATE scrim_lifecycle_operations
+      SET status = 'cancelled',
+          completed_at = @completed_at,
+          last_error_code = @last_error_code,
+          last_error_message = @last_error_message,
+          updated_at = @updated_at
+      WHERE scrim_post_db_id = @scrim_post_db_id
+        AND event_key LIKE @event_key_like
+        AND status IN ('pending', 'processing')
+    `),
     insertScrimPostMessage: db.prepare(`
       INSERT INTO scrim_post_messages (
         scrim_post_db_id, guild_id, channel_id, message_id
@@ -1072,11 +1300,11 @@ export function prepareStatements(db) {
       INSERT INTO discord_message_edit_retries (
         scrim_post_db_id, guild_id, channel_id, message_id, target_status,
         attempt_count, next_attempt_at, last_error_code, last_error_message,
-        payload_json, created_at, updated_at
+        payload_json, lifecycle_operation_id, created_at, updated_at
       ) VALUES (
         @scrim_post_db_id, @guild_id, @channel_id, @message_id, @target_status,
         @attempt_count, @next_attempt_at, @last_error_code, @last_error_message,
-        @payload_json, @created_at, @updated_at
+        @payload_json, @lifecycle_operation_id, @created_at, @updated_at
       )
     `),
     updateDiscordEditRetryPendingRefresh: db.prepare(`
@@ -1086,8 +1314,19 @@ export function prepareStatements(db) {
           next_attempt_at = @next_attempt_at,
           last_error_code = @last_error_code,
           last_error_message = @last_error_message,
+          lifecycle_operation_id = @lifecycle_operation_id,
           updated_at = @updated_at
       WHERE id = @id
+    `),
+    listActiveDiscordEditRetriesForScrimPost: db.prepare(`
+      SELECT * FROM discord_message_edit_retries
+      WHERE scrim_post_db_id = ?
+        AND resolved_at IS NULL AND abandoned_at IS NULL
+    `),
+    listActiveDiscordEditRetriesForMessage: db.prepare(`
+      SELECT * FROM discord_message_edit_retries
+      WHERE guild_id = ? AND channel_id = ? AND message_id = ?
+        AND resolved_at IS NULL AND abandoned_at IS NULL
     `),
     updateDiscordEditRetryAfterFailure: db.prepare(`
       UPDATE discord_message_edit_retries
@@ -1113,16 +1352,275 @@ export function prepareStatements(db) {
       WHERE id = @id
     `),
     listDueDiscordEditRetries: db.prepare(`
-      SELECT * FROM discord_message_edit_retries
-      WHERE resolved_at IS NULL AND abandoned_at IS NULL
-        AND next_attempt_at <= @now_iso
-      ORDER BY next_attempt_at ASC
+      SELECT r.* FROM discord_message_edit_retries r
+      WHERE r.resolved_at IS NULL AND r.abandoned_at IS NULL
+        AND r.next_attempt_at <= @now_iso
+        AND (
+          r.lifecycle_operation_id IS NULL
+          OR NOT EXISTS (
+            SELECT 1 FROM scrim_lifecycle_operations slo
+            WHERE slo.id = r.lifecycle_operation_id
+              AND slo.event_key IS NOT NULL
+          )
+        )
+      ORDER BY r.next_attempt_at ASC
       LIMIT 25
     `),
     countPendingDiscordEditRetries: db.prepare(`
       SELECT COUNT(*) AS n
       FROM discord_message_edit_retries
       WHERE resolved_at IS NULL AND abandoned_at IS NULL
+    `),
+
+    createScrimLifecycleOperation: db.prepare(`
+      INSERT INTO scrim_lifecycle_operations (
+        scrim_post_db_id, guild_id, channel_id, message_id,
+        operation_type, target_status, priority, status,
+        attempt_count, payload_json, created_at, updated_at
+      ) VALUES (
+        @scrim_post_db_id, @guild_id, @channel_id, @message_id,
+        @operation_type, @target_status, @priority, 'pending',
+        0, @payload_json, @created_at, @updated_at
+      )
+    `),
+    insertOrchestratedScrimLifecycleOperation: db.prepare(`
+      INSERT OR IGNORE INTO scrim_lifecycle_operations (
+        scrim_post_db_id, guild_id, channel_id, message_id,
+        operation_type, target_status, priority, status,
+        attempt_count, payload_json, event_key, created_at, updated_at
+      ) VALUES (
+        @scrim_post_db_id, @guild_id, @channel_id, @message_id,
+        @operation_type, @target_status, @priority, 'pending',
+        0, @payload_json, @event_key, @created_at, @updated_at
+      )
+    `),
+    getScrimLifecycleOperationByEventKey: db.prepare(`
+      SELECT * FROM scrim_lifecycle_operations WHERE event_key = ? LIMIT 1
+    `),
+    listOrchestratedScrimLifecycleOperationsForRecovery: db.prepare(`
+      SELECT slo.* FROM scrim_lifecycle_operations slo
+      WHERE slo.status = 'pending'
+        AND slo.event_key IS NOT NULL
+        AND slo.next_attempt_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM discord_message_edit_retries r
+          WHERE r.lifecycle_operation_id = slo.id
+            AND r.resolved_at IS NULL
+            AND r.abandoned_at IS NULL
+        )
+      ORDER BY slo.created_at ASC
+      LIMIT 25
+    `),
+    recoverOrchestratedScrimLifecycleProcessing: db.prepare(`
+      UPDATE scrim_lifecycle_operations
+      SET status = 'pending',
+          updated_at = @updated_at
+      WHERE event_key IS NOT NULL
+        AND status = 'processing'
+        AND next_attempt_at IS NULL
+    `),
+    markScrimLifecycleOperationProcessing: db.prepare(`
+      UPDATE scrim_lifecycle_operations
+      SET status = 'processing',
+          started_at = COALESCE(started_at, @started_at),
+          updated_at = @updated_at
+      WHERE id = @id AND status IN ('pending', 'processing')
+    `),
+    markScrimLifecycleOperationCompleted: db.prepare(`
+      UPDATE scrim_lifecycle_operations
+      SET status = 'completed',
+          completed_at = @completed_at,
+          updated_at = @updated_at
+      WHERE id = @id AND status IN ('pending', 'processing')
+    `),
+    markScrimLifecycleOperationFailedTerminal: db.prepare(`
+      UPDATE scrim_lifecycle_operations
+      SET status = 'failed_terminal',
+          completed_at = @completed_at,
+          last_error_code = @last_error_code,
+          last_error_message = @last_error_message,
+          updated_at = @updated_at
+      WHERE id = @id AND status NOT IN ('completed', 'cancelled')
+    `),
+    markScrimLifecycleOperationCancelled: db.prepare(`
+      UPDATE scrim_lifecycle_operations
+      SET status = 'cancelled',
+          completed_at = @completed_at,
+          last_error_code = @last_error_code,
+          last_error_message = @last_error_message,
+          updated_at = @updated_at
+      WHERE id = @id AND status IN ('pending', 'processing')
+    `),
+    resetScrimLifecycleOperationPending: db.prepare(`
+      UPDATE scrim_lifecycle_operations
+      SET status = 'pending',
+          last_error_code = @last_error_code,
+          last_error_message = @last_error_message,
+          updated_at = @updated_at
+      WHERE id = @id AND status IN ('pending', 'processing')
+    `),
+    getScrimLifecycleOperationById: db.prepare(`
+      SELECT * FROM scrim_lifecycle_operations WHERE id = ?
+    `),
+
+    listDueScrimLifecycleDeleteOperations: db.prepare(`
+      SELECT * FROM scrim_lifecycle_operations
+      WHERE operation_type = 'lifecycle_delete'
+        AND status = 'pending'
+        AND next_attempt_at IS NOT NULL
+        AND next_attempt_at <= @now_iso
+      ORDER BY next_attempt_at ASC
+      LIMIT 25
+    `),
+    scheduleScrimLifecycleDeleteRetry: db.prepare(`
+      UPDATE scrim_lifecycle_operations
+      SET status = 'pending',
+          attempt_count = @attempt_count,
+          next_attempt_at = @next_attempt_at,
+          last_error_code = @last_error_code,
+          last_error_message = @last_error_message,
+          updated_at = @updated_at
+      WHERE id = @id
+        AND operation_type = 'lifecycle_delete'
+        AND status IN ('pending', 'processing')
+    `),
+    recoverScrimLifecycleDeleteProcessing: db.prepare(`
+      UPDATE scrim_lifecycle_operations
+      SET status = 'pending',
+          next_attempt_at = @next_attempt_at,
+          updated_at = @updated_at
+      WHERE operation_type = 'lifecycle_delete'
+        AND status = 'processing'
+    `),
+    countPendingScrimLifecycleDeleteOperations: db.prepare(`
+      SELECT COUNT(*) AS n
+      FROM scrim_lifecycle_operations
+      WHERE operation_type = 'lifecycle_delete'
+        AND status = 'pending'
+        AND next_attempt_at IS NOT NULL
+    `),
+
+    listExhaustedPendingScrimLifecycleOperations: db.prepare(`
+      SELECT * FROM scrim_lifecycle_operations
+      WHERE status IN ('pending', 'processing')
+        AND event_key IS NOT NULL
+        AND attempt_count >= @max_attempts
+    `),
+    selectNextScrimLifecycleOperationForDispatcher: db.prepare(`
+      SELECT slo.* FROM scrim_lifecycle_operations slo
+      WHERE slo.status = 'pending'
+        AND slo.event_key IS NOT NULL
+        AND slo.attempt_count < @max_attempts
+        AND (slo.next_attempt_at IS NULL OR slo.next_attempt_at <= @now_iso)
+        AND NOT EXISTS (
+          SELECT 1 FROM discord_message_edit_retries r
+          WHERE r.lifecycle_operation_id = slo.id
+            AND r.resolved_at IS NULL
+            AND r.abandoned_at IS NULL
+        )
+      ORDER BY
+        CASE
+          WHEN slo.target_status IN ('closed_manual', 'closed_expired') THEN 0
+          WHEN slo.operation_type = 'lifecycle_delete' THEN 0
+          WHEN (
+            slo.target_status = 'superseded_repost' OR slo.priority = 'low'
+          )
+          AND CAST(
+            (julianday(@now_iso) - julianday(COALESCE(slo.created_at, '1970-01-01T00:00:00.000Z')))
+            * 86400000 AS INTEGER
+          ) >= @starvation_threshold_ms THEN 1
+          WHEN slo.target_status = 'superseded_repost' THEN 2
+          ELSE 3
+        END ASC,
+        CASE WHEN slo.priority = 'high' THEN 0 ELSE 1 END ASC,
+        COALESCE(slo.last_dispatched_at, slo.created_at) ASC,
+        slo.created_at ASC
+      LIMIT 1
+    `),
+    countStarvedPendingScrimLifecycleOperations: db.prepare(`
+      SELECT COUNT(*) AS n
+      FROM scrim_lifecycle_operations slo
+      WHERE slo.status = 'pending'
+        AND slo.event_key IS NOT NULL
+        AND slo.attempt_count < @max_attempts
+        AND (slo.next_attempt_at IS NULL OR slo.next_attempt_at <= @now_iso)
+        AND NOT EXISTS (
+          SELECT 1 FROM discord_message_edit_retries r
+          WHERE r.lifecycle_operation_id = slo.id
+            AND r.resolved_at IS NULL
+            AND r.abandoned_at IS NULL
+        )
+        AND slo.target_status NOT IN ('closed_manual', 'closed_expired')
+        AND slo.operation_type != 'lifecycle_delete'
+        AND (
+          slo.target_status = 'superseded_repost' OR slo.priority = 'low'
+        )
+        AND CAST(
+          (julianday(@now_iso) - julianday(COALESCE(slo.created_at, '1970-01-01T00:00:00.000Z')))
+          * 86400000 AS INTEGER
+        ) >= @starvation_threshold_ms
+    `),
+    selectNextStarvedScrimLifecycleOperationForDispatcher: db.prepare(`
+      SELECT slo.* FROM scrim_lifecycle_operations slo
+      WHERE slo.status = 'pending'
+        AND slo.event_key IS NOT NULL
+        AND slo.attempt_count < @max_attempts
+        AND (slo.next_attempt_at IS NULL OR slo.next_attempt_at <= @now_iso)
+        AND NOT EXISTS (
+          SELECT 1 FROM discord_message_edit_retries r
+          WHERE r.lifecycle_operation_id = slo.id
+            AND r.resolved_at IS NULL
+            AND r.abandoned_at IS NULL
+        )
+        AND slo.target_status NOT IN ('closed_manual', 'closed_expired')
+        AND slo.operation_type != 'lifecycle_delete'
+        AND (
+          slo.target_status = 'superseded_repost' OR slo.priority = 'low'
+        )
+        AND CAST(
+          (julianday(@now_iso) - julianday(COALESCE(slo.created_at, '1970-01-01T00:00:00.000Z')))
+          * 86400000 AS INTEGER
+        ) >= @starvation_threshold_ms
+      ORDER BY COALESCE(slo.last_dispatched_at, slo.created_at) ASC, slo.created_at ASC
+      LIMIT 1
+    `),
+    claimScrimLifecycleOperationForDispatcher: db.prepare(`
+      UPDATE scrim_lifecycle_operations
+      SET status = 'processing',
+          attempt_count = attempt_count + 1,
+          started_at = COALESCE(started_at, @started_at),
+          last_dispatched_at = @last_dispatched_at,
+          updated_at = @updated_at
+      WHERE id = @id AND status = 'pending'
+    `),
+    scheduleScrimLifecycleEditRetry: db.prepare(`
+      UPDATE scrim_lifecycle_operations
+      SET status = 'pending',
+          attempt_count = @attempt_count,
+          next_attempt_at = @next_attempt_at,
+          last_error_code = @last_error_code,
+          last_error_message = @last_error_message,
+          updated_at = @updated_at
+      WHERE id = @id
+        AND operation_type = 'lifecycle_edit'
+        AND status IN ('pending', 'processing')
+    `),
+    recoverScrimLifecycleDispatcherProcessing: db.prepare(`
+      UPDATE scrim_lifecycle_operations
+      SET status = 'pending',
+          updated_at = @updated_at,
+          next_attempt_at = COALESCE(next_attempt_at, @now_iso)
+      WHERE status = 'processing'
+        AND event_key IS NOT NULL
+    `),
+    countScrimLifecycleOperationsProcessing: db.prepare(`
+      SELECT COUNT(*) AS n FROM scrim_lifecycle_operations WHERE status = 'processing'
+    `),
+    countScrimLifecycleOperationsPendingDue: db.prepare(`
+      SELECT COUNT(*) AS n FROM scrim_lifecycle_operations
+      WHERE status = 'pending'
+        AND event_key IS NOT NULL
+        AND (next_attempt_at IS NULL OR next_attempt_at <= @now_iso)
     `),
 
     getGuildScrimReceptionBypass: db.prepare(`

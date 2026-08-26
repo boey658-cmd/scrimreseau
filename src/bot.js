@@ -10,6 +10,7 @@ import { commandList } from './commands/index.js';
 import { getDb, preparePlayerSearchStatements, prepareStatements } from './database/db.js';
 import { startDailyDevReportJob } from './services/dailyDevReportJob.js';
 import { startDiscordEditRetryJob } from './services/discordEditRetryJob.js';
+import { startScrimLifecycleDispatcher } from './services/scrimLifecycleDispatcher.js';
 import { startDiscordTaskQueue } from './services/discordTaskQueue.js';
 import { startPlayerSearchExpirationJob } from './jobs/playerSearchExpirationJob.js';
 import { startScrimExpirationJob } from './services/scrimExpirationJob.js';
@@ -68,6 +69,7 @@ export async function startBot() {
     startScrimRepostJob(readyClient, db, stmts);
     startPlayerSearchExpirationJob(readyClient, db, playerSearchStmts);
     startDiscordEditRetryJob(readyClient, stmts);
+    startScrimLifecycleDispatcher(readyClient, stmts);
     startDailyDevReportJob(readyClient, db);
     // Dashboard réseau : update initiale au démarrage + job 1h
     void updateNetworkDashboard(readyClient, stmts).catch(() => {});

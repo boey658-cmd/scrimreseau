@@ -3,6 +3,7 @@ import { startBot } from './src/bot.js';
 import { closeDb } from './src/database/db.js';
 import { stopDailyDevReportJob } from './src/services/dailyDevReportJob.js';
 import { stopDiscordEditRetryJob } from './src/services/discordEditRetryJob.js';
+import { stopScrimLifecycleDispatcher } from './src/services/scrimLifecycleDispatcher.js';
 import { stopDiscordTaskQueue } from './src/services/discordTaskQueue.js';
 import { stopPlayerSearchExpirationJob } from './src/jobs/playerSearchExpirationJob.js';
 import { stopScrimExpirationJob } from './src/services/scrimExpirationJob.js';
@@ -55,9 +56,12 @@ let clientRef = /** @type {import('discord.js').Client | null} */ (null);
 
 /**
  * Orchestrateur unique de graceful shutdown.
- * Arrêt dans l'ordre : jobs → (worker persistant) → file Discord → client Discord → SQLite.
- * Le garde-fou interne `shutdownPromise` garantit qu'une seule séquence s'exécute
- * même si SIGINT et SIGTERM arrivent simultanément ou deux SIGINT successifs.
+ * Phase 3K — graphe de dépendances :
+ *   1) broadcast Phase 2 (≤45s)
+ *   2) producteurs (repost/expiration/dashboard…) en parallèle (≤10s)
+ *   3) consumers lifecycle/legacy (dispatcher + edit retry) en parallèle (≤15s)
+ *   4) task queue en dernier (après producteurs qui enqueue)
+ * Worst-case théorique ≈ 45+10+15+10 = 80s (kill_timeout PM2 60s = TIGHT → 75–90s recommandé).
  */
 const gracefulShutdown = createGracefulShutdown({
   steps: [
@@ -70,39 +74,33 @@ const gracefulShutdown = createGracefulShutdown({
       stop: () => stopScrimBroadcastDeliveryJob(),
     },
     {
-      name: 'arrêt du job dashboard réseau',
-      phase: 'dashboard_refresh_job_stop',
-      stop: stopDashboardRefreshJob,
+      name: 'arrêt parallèle producteurs (repost / expiration / dashboard)',
+      phase: 'lifecycle_producers_stop',
+      stop: async () => {
+        await Promise.all([
+          stopDashboardRefreshJob(),
+          stopDailyDevReportJob(),
+          stopScrimRepostJob(),
+          stopPlayerSearchExpirationJob(),
+          stopScrimExpirationJob(),
+        ]);
+      },
     },
     {
-      name: 'arrêt du job rapport dev quotidien',
-      phase: 'daily_dev_report_job_stop',
-      stop: stopDailyDevReportJob,
+      name: 'arrêt parallèle consumers lifecycle / legacy edit retry',
+      phase: 'lifecycle_consumers_stop',
+      stop: async () => {
+        await Promise.all([
+          stopDiscordEditRetryJob(),
+          stopScrimLifecycleDispatcher(),
+        ]);
+      },
     },
     {
-      name: 'arrêt du job retry éditions messages scrim',
-      phase: 'edit_retry_job_stop',
-      stop: stopDiscordEditRetryJob,
-    },
-    {
-      name: 'arrêt du job repost scrims',
-      phase: 'repost_job_stop',
-      stop: stopScrimRepostJob,
-    },
-    {
-      name: "arrêt du job d'expiration recherches joueur",
-      phase: 'player_search_expiration_job_stop',
-      stop: stopPlayerSearchExpirationJob,
-    },
-    {
-      name: "arrêt du job d'expiration scrims",
-      phase: 'expiration_job_stop',
-      stop: stopScrimExpirationJob,
-    },
-    {
-      name: 'arrêt de la file tâches Discord (scrim)',
+      // Après producteurs qui enqueue (repost classic) et après edit-retry / dispatcher.
+      name: 'arrêt de la file Discord task queue',
       phase: 'discord_task_queue_stop',
-      stop: stopDiscordTaskQueue,
+      stop: () => stopDiscordTaskQueue(),
     },
   ],
   getClient: () => clientRef,
