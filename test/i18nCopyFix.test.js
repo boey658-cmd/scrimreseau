@@ -98,3 +98,66 @@ describe('FINAL COPY FIX — findScrim', () => {
     }
   });
 });
+
+describe('PASS 3 — polish', () => {
+  const pluralTouched = [
+    'dev.dashboardFooterTruncated',
+    'dev.receptionOverflow',
+    'dev.receptionFooter',
+    ...[
+      'findScrim.cooldown',
+      'findScrim.broadcastError',
+      'findScrim.zeroDelivery',
+      'findScrim.successPersistent',
+      'findScrim.bootstrapZeroDelivery',
+    ],
+  ];
+
+  it('permissions.maxRoles FR uses tutoiement, not Vous', () => {
+    assert.ok(!/\bVous\b/.test(fr['permissions.maxRoles']));
+    assert.match(fr['permissions.maxRoles'], /^Tu /);
+  });
+
+  it('no (s) plural hack on touched user-facing keys (all locales)', () => {
+    for (const code of ALL_LOCALES) {
+      for (const key of pluralTouched) {
+        assert.ok(!String(CATALOGS[code][key]).includes('(s)'), `${code} ${key}`);
+      }
+    }
+  });
+
+  it('no glued ❌/✅ before a letter in any catalog string', () => {
+    const glued = /[❌✅][A-Za-zÀ-ÿ]/;
+    for (const code of ALL_LOCALES) {
+      for (const [key, value] of Object.entries(CATALOGS[code])) {
+        assert.ok(!glued.test(String(value)), `${code} ${key}`);
+      }
+    }
+  });
+
+  it('helpAdmin PL/PT use naturalized wording', () => {
+    assert.match(pl['helpAdmin.scrimConfigValue'], /emisja scrimów/);
+    assert.match(pl['helpAdmin.scrimConfigValue'], /role uprawnione do używania/);
+    assert.ok(!pl['helpAdmin.scrimConfigValue'].includes('scrim transmisja'));
+    assert.ok(!pl['helpAdmin.scrimConfigValue'].includes('role, w których można używać'));
+
+    assert.match(pt['helpAdmin.scrimConfigValue'], /difusão de scrims/);
+    assert.match(pt['helpAdmin.scrimConfigValue'], /cargos autorizados/);
+    assert.ok(!pt['helpAdmin.scrimConfigValue'].includes('scrim transmissão'));
+    assert.ok(!pt['helpAdmin.scrimConfigValue'].includes('funções permitidas'));
+    assert.ok(!pt['helpAdmin.scrimConfigValue'].includes('reinicia uma definição'));
+  });
+});
+
+describe('PASS 3 — slash time examples', () => {
+  it('PL find-scrim heure description keeps 20h and drops 20:00', async () => {
+    const { slashMeta } = await import('../src/i18n/slashLocalizations.js');
+    const desc = slashMeta.findScrim.options.heure.description;
+    // L() returns Discord localization map; values include PL text
+    const values = typeof desc === 'string' ? [desc] : Object.values(desc);
+    const plText = values.find((v) => String(v).includes('Godzina'));
+    assert.ok(plText, 'PL heure description missing');
+    assert.ok(String(plText).includes('20h'), plText);
+    assert.ok(!String(plText).includes('20:00'), plText);
+  });
+});

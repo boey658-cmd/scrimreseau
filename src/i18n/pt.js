@@ -161,7 +161,7 @@ export const pt = {
   'helpAdmin.title': '🛠️ ScrimRéseau — Ajuda do administrador',
   'helpAdmin.description': 'Configuração e moderação da rede de scrims do teu servidor.',
   'helpAdmin.scrimConfigTitle': '⚙️/scrim-config',
-  'helpAdmin.scrimConfigValue': 'Abre o painel interativo de configuração do ScrimRéseau.\n\n**📢 Canais** — canal de anúncio (scrim transmissão) e canal de comando (`/find-scrim`).\n\n**🔑 Permissões** — funções permitidas para utilizar `/find-scrim`, ou todos.\n\n**💬 Mensagens** — comportamento para mensagens scrim fechadas ou substituídas (manter/apagar).\n\n**🔄 Repor** — reinicia uma definição ou toda a definição (é necessária confirmação).\n\nO painel é efémero, interativo e expira ao fim de 10 minutos.',
+  'helpAdmin.scrimConfigValue': 'Abre o painel interativo de configuração do ScrimRéseau.\n\n**📢 Canais** — canal de anúncios (difusão de scrims) e canal de comando (`/find-scrim`).\n\n**🔑 Permissões** — cargos autorizados a usar `/find-scrim`, ou toda a gente.\n\n**💬 Mensagens** — comportamento para mensagens de scrim fechadas ou substituídas (manter/apagar).\n\n**🔄 Repor** — repõe uma definição ou toda a configuração (confirmação necessária).\n\nO painel é efémero, interativo e expira ao fim de 10 minutos.',
   'helpAdmin.moderationTitle': '🛡️ /scrim-moderation',
   'helpAdmin.moderationValue': 'Moderação scrim local:\n\n**• utilizador → bloquear**\nEvita que os anúncios scrim do utilizador sejam transmitidos neste servidor.\n\n**• utilizador → desbloquear**\nPermite que os anúncios scrim do utilizador sejam transmitidos novamente neste servidor.',
   'helpAdmin.reportSpamTitle': '🚨/report-spam',

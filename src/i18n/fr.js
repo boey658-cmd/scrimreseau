@@ -97,13 +97,13 @@ export const fr = {
   'structureLink.dbErrorRemove': '❌ Une erreur est survenue lors de la suppression. Réessayez plus tard.',
 
   // ── /scrim-config panel ───────────────────────────────────────────────
-  'scrimConfig.adminOnly': '❌ Vous devez être administrateur pour utiliser cette commande.',
+  'scrimConfig.adminOnly': '❌ Tu dois être administrateur pour utiliser cette commande.',
   'scrimConfig.guildOnly': '❌ Cette commande doit être utilisée sur un serveur.',
-  'scrimConfig.accessError': '❌ Impossible de vérifier l\'accès à ce moment. Réessayez plus tard.',
-  'scrimConfig.readConfigError': '❌ Impossible de lire la configuration. Réessayez plus tard.',
+  'scrimConfig.accessError': '❌ Impossible de vérifier l\'accès à ce moment. Réessaie plus tard.',
+  'scrimConfig.readConfigError': '❌ Impossible de lire la configuration. Réessaie plus tard.',
   'scrimConfig.panelClosed': '✅ Panneau fermé.',
   'scrimConfig.panelExpired': '⏰ Le panneau a expiré.',
-  'scrimConfig.noPermissions': '❌ Vous n\'avez plus les permissions nécessaires.',
+  'scrimConfig.noPermissions': '❌ Tu n\'as plus les permissions nécessaires.',
   'scrimConfig.genericError': '❌ Une erreur est survenue.',
   // Main embed
   'scrimConfig.mainTitle': '⚙️ Configuration ScrimRéseau',
@@ -148,14 +148,14 @@ export const fr = {
   'scrimConfig.chanCmdRemoved': '✅ Les commandes sont maintenant autorisées partout.',
   // Perms embed
   'scrimConfig.permsTitle': '🔑 Configuration — Permissions',
-  'scrimConfig.permsDesc': 'Sélectionnez les rôles autorisés à utiliser `/find-scrim` (max {max}).\nLa sélection **remplace** la liste actuelle.\nPour autoriser tout le monde, utilisez le bouton dédié.',
+  'scrimConfig.permsDesc': 'Sélectionne les rôles autorisés à utiliser `/find-scrim` (max {max}).\nLa sélection **remplace** la liste actuelle.\nPour autoriser tout le monde, utilise le bouton dédié.',
   'scrimConfig.permsFieldCurrent': 'Configuration actuelle',
   // Perms buttons
   'scrimConfig.btnAllEveryone': 'Autoriser tout le monde',
   // Perms placeholder
-  'scrimConfig.placeholderRoles': 'Sélectionnez les rôles autorisés (1 à {max})',
+  'scrimConfig.placeholderRoles': 'Sélectionne les rôles autorisés (1 à {max})',
   // Perms status
-  'scrimConfig.rolesInvalidCount': '❌ Sélectionnez entre 1 et {max} rôles.',
+  'scrimConfig.rolesInvalidCount': '❌ Sélectionne entre 1 et {max} rôles.',
   'scrimConfig.rolesSet': '✅ Permissions mises à jour : {roles}',
   'scrimConfig.everyoneSet': '✅ Tout le monde peut utiliser /find-scrim.',
   // Messages embed
@@ -199,7 +199,7 @@ export const fr = {
 
   // ── /helpadmin-scrim ──────────────────────────────────────────────────
   'helpAdmin.title': '🛠️ ScrimRéseau — Aide Admin',
-  'helpAdmin.description': 'Configuration et modération du réseau de scrims pour votre serveur.',
+  'helpAdmin.description': 'Configuration et modération du réseau de scrims pour ton serveur.',
   'helpAdmin.scrimConfigTitle': '⚙️ /scrim-config',
   'helpAdmin.scrimConfigValue': 'Ouvre le panneau de configuration interactif ScrimRéseau.\n\n**📢 Salons** — salon des annonces (diffusion scrims) et salon des commandes (`/find-scrim`).\n\n**🔑 Permissions** — rôles autorisés à utiliser `/find-scrim`, ou tout le monde.\n\n**💬 Messages** — comportement des messages de scrims terminés ou remplacés (garder / supprimer).\n\n**🔄 Réinitialiser** — réinitialise un paramètre ou toute la configuration (confirmation requise).\n\nLe panneau est éphémère, interactif, et expire après 10 minutes.',
   'helpAdmin.moderationTitle': '🛡️ /scrim-moderation',
@@ -295,8 +295,8 @@ export const fr = {
   'permissions.okSuffix': '⚠️ Cette configuration s’applique uniquement à ce serveur.',
   'permissions.rolesModeNeedRoles': '❌ Tu dois sélectionner au moins un rôle.',
   'permissions.roleNotInGuild': '❌ Un ou plusieurs rôles n’appartiennent pas à ce serveur.',
-  'permissions.dbError': '❌ Impossible d’enregistrer la configuration. Réessayez plus tard.',
-  'permissions.maxRoles': 'Vous ne pouvez pas configurer plus de 5 rôles autorisés.',
+  'permissions.dbError': '❌ Impossible d’enregistrer la configuration. Réessaie plus tard.',
+  'permissions.maxRoles': 'Tu ne peux pas configurer plus de 5 rôles autorisés.',
   'permissions.roleAlreadyAllowed': 'Ce rôle est déjà autorisé.',
   'permissions.allowedRolesHeader': 'Rôles autorisés :',
   'networkDashboard.embedTitle': '🌐 ScrimRéseau — Tableau de bord',
@@ -361,15 +361,15 @@ export const fr = {
   'dev.dashboardStatusNoPerms': "⚠️ bot sans permission",
   'dev.dashboardStatusNoMessageId': "⚠️ message_id absent en DB",
   'dev.dashboardFieldValue': "Salon : {channel}\nchannel\\_id : `{channelId}`\nmessage\\_id : {messageId}\nMis à jour : {updatedAt}",
-  'dev.dashboardFooterTruncated': "+ {count} entrée(s) non affichée(s)",
+  'dev.dashboardFooterTruncated': '+ {count} éléments supplémentaires non affichés',
   'dev.dashboardFooterAll': "Toutes les entrées affichées",
   'dev.dashboardDbConfigError': "Erreur base de données lors de la configuration.",
   'dev.serversEmpty': "Le bot n'est actuellement présent sur aucun serveur.",
   'dev.serversFooter': "Serveurs actuels du bot : {total} · Page {page}/{pageCount}",
   'dev.receptionUnknownGuild': "serveur inconnu / bot absent du cache",
   'dev.receptionEntryMeta': "ID serveur: `{guildId}`\nSalon: <#{channelId}> (`{channelId}`)\nJeu: `{gameKey}`",
-  'dev.receptionOverflow': "_+ {count} autre(s)._",
-  'dev.receptionFooter': "{shown} affiché(s) sur {total} · tri created_at DESC",
+  'dev.receptionOverflow': '_+ {count} éléments supplémentaires._',
+  'dev.receptionFooter': '{shown} éléments affichés sur {total} · tri created_at DESC',
   'dev.serversUnavailable': "**{idx}. ⚠️ Serveur temporairement indisponible**",
   'dev.serversUnknownName': "*(nom inconnu)*",
   'dev.serversUnknownMembers': "Inconnus",
