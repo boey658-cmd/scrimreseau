@@ -5,14 +5,19 @@ import {
 } from 'discord.js';
 import { getEmbedColorForGame } from '../config/gameEmbedColors.js';
 import { getGuildLocale, t } from '../i18n/index.js';
+import {
+  applyDescriptionLocalizations,
+  slashMeta,
+} from '../i18n/slashLocalizations.js';
 import { interactReply } from '../utils/interactionDiscord.js';
 
 const EMBED_COLOR = getEmbedColorForGame('');
 
 export const help = {
-  data: new SlashCommandBuilder()
-    .setName('help-scrim')
-    .setDescription('Show ScrimRéseau help.'),
+  data: applyDescriptionLocalizations(
+    new SlashCommandBuilder().setName('help-scrim'),
+    slashMeta.helpScrim.description,
+  ),
 
   /**
    * @param {import('discord.js').ChatInputCommandInteraction} interaction

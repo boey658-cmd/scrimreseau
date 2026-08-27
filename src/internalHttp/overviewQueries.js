@@ -59,10 +59,11 @@ export function fetchGuildOverview(db, guildId) {
 }
 
 /**
+ * Sérialise created_at SQLite (epoch ms) en ISO string (partagé guild/network overview).
  * @param {unknown} createdAt
  * @returns {string}
  */
-function formatCreatedAt(createdAt) {
+export function formatCreatedAt(createdAt) {
   const ms = Number(createdAt);
   if (!Number.isFinite(ms) || ms <= 0) {
     return '';

@@ -1,6 +1,11 @@
 import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { getPrimaryGameRankChoicesForSlash } from '../config/games.js';
 import {
+  applyDescriptionLocalizations,
+  applyOptionLocalizations,
+  slashMeta,
+} from '../i18n/slashLocalizations.js';
+import {
   buildDiscordMessageUrl,
   expandRankKeysForListeFilter,
   formatListeScrimLine,
@@ -164,34 +169,38 @@ export async function executeListeScrimsCore(interaction, ctx) {
 }
 
 export const listeScrims = {
-  data: new SlashCommandBuilder()
-    .setName('list-scrims')
-    .setDescription('List active scrim searches.')
-    .addStringOption((opt) =>
-      opt
-        .setName('elo')
-        .setDescription('Filter by rank.')
-        .setRequired(false)
-        .addChoices(...getPrimaryGameRankChoicesForSlash()),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('date')
-        .setDescription('Filter by date (DD/MM or DD/MM/YYYY).')
-        .setRequired(false),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('heure_debut')
-        .setDescription('Minimum start time (requires date).')
-        .setRequired(false),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('heure_fin')
-        .setDescription('Maximum start time (requires date).')
-        .setRequired(false),
-    ),
+  data: applyDescriptionLocalizations(
+    new SlashCommandBuilder()
+      .setName('list-scrims')
+      .addStringOption((opt) =>
+        applyOptionLocalizations(
+          opt
+            .setName('elo')
+            .setRequired(false)
+            .addChoices(...getPrimaryGameRankChoicesForSlash()),
+          slashMeta.listScrims.options.elo,
+        ),
+      )
+      .addStringOption((opt) =>
+        applyOptionLocalizations(
+          opt.setName('date').setRequired(false),
+          slashMeta.listScrims.options.date,
+        ),
+      )
+      .addStringOption((opt) =>
+        applyOptionLocalizations(
+          opt.setName('heure_debut').setRequired(false),
+          slashMeta.listScrims.options.heure_debut,
+        ),
+      )
+      .addStringOption((opt) =>
+        applyOptionLocalizations(
+          opt.setName('heure_fin').setRequired(false),
+          slashMeta.listScrims.options.heure_fin,
+        ),
+      ),
+    slashMeta.listScrims.description,
+  ),
 
   /**
    * @param {import('discord.js').ChatInputCommandInteraction} interaction

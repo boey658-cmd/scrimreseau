@@ -13,6 +13,11 @@
  */
 
 import { EmbedBuilder, MessageFlags, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
+import { getGuildLocale, t } from '../i18n/index.js';
+import {
+  applyDescriptionLocalizations,
+  slashMeta,
+} from '../i18n/slashLocalizations.js';
 import { updateNetworkDashboard } from '../services/networkDashboard.js';
 import {
   interactDeferReply,
@@ -20,16 +25,6 @@ import {
   interactReply,
 } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
-
-// ---------------------------------------------------------------------------
-// Messages
-// ---------------------------------------------------------------------------
-
-const MSG_NOT_OWNER = '❌ Cette commande est réservée au propriétaire de ScrimRéseau.';
-
-// ---------------------------------------------------------------------------
-// Garde owner
-// ---------------------------------------------------------------------------
 
 /**
  * @param {string} userId
@@ -40,45 +35,40 @@ function isOwner(userId) {
   return Boolean(ownerId) && userId === ownerId;
 }
 
-// ---------------------------------------------------------------------------
-// Définition slash
-// ---------------------------------------------------------------------------
-
-const data = new SlashCommandBuilder()
-  .setName('dashboard-admin')
-  .setDescription('Gestion des dashboards réseau ScrimRéseau (owner only)')
-  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-  .addSubcommand((sub) =>
-    sub
-      .setName('list')
-      .setDescription('Liste tous les dashboards réseau configurés avec leur statut'),
-  )
-  .addSubcommand((sub) =>
-    sub
-      .setName('remove')
-      .setDescription('Retire un dashboard de la configuration par son channel_id')
-      .addStringOption((opt) =>
-        opt
-          .setName('channel_id')
-          .setDescription('ID Discord du salon (ex: 123456789012345678)')
-          .setRequired(true),
-      ),
-  )
-  .addSubcommand((sub) =>
-    sub
-      .setName('refresh')
-      .setDescription('Force la mise à jour immédiate de tous les dashboards réseau'),
-  );
-
-// ---------------------------------------------------------------------------
-// Sous-commande : list
-// ---------------------------------------------------------------------------
+const data = applyDescriptionLocalizations(
+  new SlashCommandBuilder()
+    .setName('dashboard-admin')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addSubcommand((sub) =>
+      sub
+        .setName('list')
+        .setDescription('Liste tous les dashboards réseau configurés avec leur statut'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('remove')
+        .setDescription('Retire un dashboard de la configuration par son channel_id')
+        .addStringOption((opt) =>
+          opt
+            .setName('channel_id')
+            .setDescription('ID Discord du salon (ex: 123456789012345678)')
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('refresh')
+        .setDescription('Force la mise à jour immédiate de tous les dashboards réseau'),
+    ),
+  slashMeta.dashboardAdmin.description,
+);
 
 /**
  * @param {import('discord.js').ChatInputCommandInteraction} interaction
  * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']> }} ctx
+ * @param {string} locale
  */
-async function handleList(interaction, ctx) {
+async function handleList(interaction, ctx, locale) {
   let rows;
   try {
     rows = ctx.stmts.getAllNetworkDashboards.all();
@@ -86,12 +76,12 @@ async function handleList(interaction, ctx) {
     logger.error('dashboard-admin list: erreur lecture DB', {
       message: err instanceof Error ? err.message : String(err),
     });
-    await interactEditReply(interaction, { content: '❌ Erreur lors de la lecture de la base.' });
+    await interactEditReply(interaction, { content: t(locale, 'dev.dbReadError') });
     return;
   }
 
   if (!rows || rows.length === 0) {
-    await interactEditReply(interaction, { content: 'ℹ️ Aucun dashboard réseau configuré.' });
+    await interactEditReply(interaction, { content: t(locale, 'dev.dashboardNone') });
     return;
   }
 
@@ -103,21 +93,20 @@ async function handleList(interaction, ctx) {
     const messageId = row.message_id ? String(row.message_id) : null;
 
     const guild = interaction.client.guilds.cache.get(guildId);
-    const guildName = guild?.name ?? `*(serveur inconnu)*`;
+    const guildName = guild?.name ?? t(locale, 'dev.dashboardUnknownGuild');
 
     let channelLabel = `\`${channelId}\``;
-    let status = '✅ OK';
+    let status = t(locale, 'dev.dashboardStatusOk');
 
     if (!guild) {
-      status = '⚠️ serveur introuvable';
+      status = t(locale, 'dev.dashboardStatusGuildMissing');
     } else {
       const channel = guild.channels.cache.get(channelId);
       if (!channel) {
-        status = '⚠️ salon introuvable';
+        status = t(locale, 'dev.dashboardStatusChannelMissing');
       } else {
         channelLabel = `<#${channelId}>`;
 
-        // Vérification permissions bot dans ce salon
         const me = guild.members.me;
         if (me) {
           const perms = channel.permissionsFor(me);
@@ -126,12 +115,12 @@ async function handleList(interaction, ctx) {
             && perms?.has(PermissionFlagsBits.SendMessages)
             && perms?.has(PermissionFlagsBits.AttachFiles);
           if (!hasPerms) {
-            status = '⚠️ bot sans permission';
+            status = t(locale, 'dev.dashboardStatusNoPerms');
           }
         }
 
-        if (status === '✅ OK' && !messageId) {
-          status = '⚠️ message_id absent en DB';
+        if (status === t(locale, 'dev.dashboardStatusOk') && !messageId) {
+          status = t(locale, 'dev.dashboardStatusNoMessageId');
         }
       }
     }
@@ -141,37 +130,39 @@ async function handleList(interaction, ctx) {
 
     fields.push({
       name: `${status} ${guildName}`,
-      value:
-        `Salon : ${channelLabel}\n` +
-        `channel\_id : \`${channelId}\`\n` +
-        `message\_id : ${msgInfo}\n` +
-        `Mis à jour : ${updatedAt}`,
+      value: t(locale, 'dev.dashboardFieldValue', {
+        channel: channelLabel,
+        channelId,
+        messageId: msgInfo,
+        updatedAt,
+      }),
       inline: false,
     });
   }
 
   const embed = new EmbedBuilder()
-    .setTitle(`Dashboards réseau configurés (${rows.length})`)
+    .setTitle(t(locale, 'dev.dashboardListTitle', { count: rows.length }))
     .setColor(0x5865f2)
-    .setFields(fields.slice(0, 25))  // embed limit : 25 fields max
-    .setFooter({ text: rows.length > 25 ? `+ ${rows.length - 25} entrée(s) non affichée(s)` : 'Toutes les entrées affichées' })
+    .setFields(fields.slice(0, 25))
+    .setFooter({
+      text:
+        rows.length > 25
+          ? t(locale, 'dev.dashboardFooterTruncated', { count: rows.length - 25 })
+          : t(locale, 'dev.dashboardFooterAll'),
+    })
     .setTimestamp();
 
   await interactEditReply(interaction, { embeds: [embed] });
 }
 
-// ---------------------------------------------------------------------------
-// Sous-commande : remove
-// ---------------------------------------------------------------------------
-
 /**
  * @param {import('discord.js').ChatInputCommandInteraction} interaction
  * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']> }} ctx
+ * @param {string} locale
  */
-async function handleRemove(interaction, ctx) {
+async function handleRemove(interaction, ctx, locale) {
   const rawChannelId = interaction.options.getString('channel_id', true).trim();
 
-  // Lecture de tous les dashboards pour trouver l'entrée correspondante
   let rows;
   try {
     rows = ctx.stmts.getAllNetworkDashboards.all();
@@ -179,14 +170,14 @@ async function handleRemove(interaction, ctx) {
     logger.error('dashboard-admin remove: erreur lecture DB', {
       message: err instanceof Error ? err.message : String(err),
     });
-    await interactEditReply(interaction, { content: '❌ Erreur lors de la lecture de la base.' });
+    await interactEditReply(interaction, { content: t(locale, 'dev.dbReadError') });
     return;
   }
 
   const row = rows.find((r) => String(r.channel_id) === rawChannelId);
   if (!row) {
     await interactEditReply(interaction, {
-      content: `❌ Aucun dashboard trouvé pour ce salon (\`${rawChannelId}\`).`,
+      content: t(locale, 'dev.dashboardNotFound', { channelId: rawChannelId }),
     });
     return;
   }
@@ -194,7 +185,6 @@ async function handleRemove(interaction, ctx) {
   const guildId = String(row.guild_id);
   const channelId = String(row.channel_id);
 
-  // Suppression DB
   try {
     ctx.stmts.deleteNetworkDashboard.run(guildId, channelId);
   } catch (err) {
@@ -203,7 +193,7 @@ async function handleRemove(interaction, ctx) {
       channel_id: channelId,
       message: err instanceof Error ? err.message : String(err),
     });
-    await interactEditReply(interaction, { content: '❌ Erreur lors de la suppression en base.' });
+    await interactEditReply(interaction, { content: t(locale, 'dev.dashboardDeleteError') });
     return;
   }
 
@@ -214,46 +204,39 @@ async function handleRemove(interaction, ctx) {
     message_id: row.message_id ?? null,
   });
 
-  // Récupérer le nom du serveur et du salon pour feedback
   const guild = interaction.client.guilds.cache.get(guildId);
   const guildName = guild?.name ?? `\`${guildId}\``;
   const channel = guild?.channels.cache.get(channelId);
   const channelMention = channel ? `<#${channelId}>` : `\`${channelId}\``;
 
   await interactEditReply(interaction, {
-    content:
-      `✅ Dashboard retiré de la configuration.\n` +
-      `Serveur : **${guildName}** | Salon : ${channelMention}`,
+    content: t(locale, 'dev.dashboardRemovedDetail', {
+      guild: guildName,
+      channel: channelMention,
+    }),
   });
 }
-
-// ---------------------------------------------------------------------------
-// Sous-commande : refresh
-// ---------------------------------------------------------------------------
 
 /**
  * @param {import('discord.js').ChatInputCommandInteraction} interaction
  * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']> }} ctx
+ * @param {string} locale
  */
-async function handleRefresh(interaction, ctx) {
+async function handleRefresh(interaction, ctx, locale) {
   logger.info('dashboard-admin: refresh forcé', { user_id: interaction.user.id });
 
   try {
     await updateNetworkDashboard(interaction.client, ctx.stmts);
-    await interactEditReply(interaction, { content: '✅ Refresh dashboard terminé.' });
+    await interactEditReply(interaction, { content: t(locale, 'dev.dashboardRefreshOk') });
   } catch (err) {
     logger.error('dashboard-admin refresh: erreur', {
       message: err instanceof Error ? err.message : String(err),
     });
     await interactEditReply(interaction, {
-      content: '❌ Erreur lors du refresh. Consulte les logs pour plus de détails.',
+      content: t(locale, 'dev.dashboardRefreshError'),
     });
   }
 }
-
-// ---------------------------------------------------------------------------
-// Export
-// ---------------------------------------------------------------------------
 
 export const dashboardAdmin = {
   data,
@@ -263,9 +246,11 @@ export const dashboardAdmin = {
    * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']> }} ctx
    */
   async execute(interaction, ctx) {
+    const locale = getGuildLocale(interaction.guildId, ctx.stmts);
+
     if (!isOwner(interaction.user.id)) {
       await interactReply(interaction, {
-        content: MSG_NOT_OWNER,
+        content: t(locale, 'dev.dashboardNotOwner'),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -276,13 +261,13 @@ export const dashboardAdmin = {
     const sub = interaction.options.getSubcommand();
 
     if (sub === 'list') {
-      await handleList(interaction, ctx);
+      await handleList(interaction, ctx, locale);
     } else if (sub === 'remove') {
-      await handleRemove(interaction, ctx);
+      await handleRemove(interaction, ctx, locale);
     } else if (sub === 'refresh') {
-      await handleRefresh(interaction, ctx);
+      await handleRefresh(interaction, ctx, locale);
     } else {
-      await interactEditReply(interaction, { content: '❌ Sous-commande inconnue.' });
+      await interactEditReply(interaction, { content: t(locale, 'dev.unknownSubcommand') });
     }
   },
 };

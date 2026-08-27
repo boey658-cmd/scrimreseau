@@ -1,7 +1,8 @@
 import { MessageFlags } from 'discord.js';
+import { getGuildLocale, t } from '../i18n/index.js';
 import {
-  MSG_BOT_DEV_FORBIDDEN,
-  MSG_BOT_DEV_UNCONFIGURED,
+  botDevForbiddenMessage,
+  botDevUnconfiguredMessage,
   resolveBotDevId,
 } from '../utils/botDevConfig.js';
 import { interactReply } from '../utils/interactionDiscord.js';
@@ -11,15 +12,25 @@ const GUILD_SNOWFLAKE_RE = /^\d{17,20}$/;
 
 /**
  * @param {string | null | undefined} raw
- * @returns {{ ok: true, guildId: string } | { ok: false, error: string }}
+ * @returns {{ ok: true, guildId: string } | { ok: false, reason: 'missing' | 'invalid' }}
  */
 function parseGuildIdOption(raw) {
   const s = typeof raw === 'string' ? raw.trim() : '';
-  if (!s) return { ok: false, error: '❌ `guild_id` invalide ou manquant.' };
+  if (!s) return { ok: false, reason: 'missing' };
   if (!GUILD_SNOWFLAKE_RE.test(s)) {
-    return { ok: false, error: '❌ `guild_id` doit être un identifiant de serveur Discord valide.' };
+    return { ok: false, reason: 'invalid' };
   }
   return { ok: true, guildId: s };
+}
+
+/**
+ * @param {string} locale
+ * @param {'missing' | 'invalid'} reason
+ */
+function guildIdErrorMessage(locale, reason) {
+  return reason === 'missing'
+    ? t(locale, 'dev.guildIdMissing')
+    : t(locale, 'dev.guildIdInvalid');
 }
 
 /**
@@ -27,6 +38,7 @@ function parseGuildIdOption(raw) {
  * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']> }} ctx
  */
 export async function executeScrimDevGuildAccessCore(interaction, ctx) {
+  const locale = getGuildLocale(interaction.guildId, ctx.stmts);
   try {
     const dev = resolveBotDevId();
     if (!dev.ok) {
@@ -38,14 +50,14 @@ export async function executeScrimDevGuildAccessCore(interaction, ctx) {
         /* ignore */
       }
       await interactReply(interaction, {
-        content: MSG_BOT_DEV_UNCONFIGURED,
+        content: botDevUnconfiguredMessage(locale),
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
     if (interaction.user.id !== dev.devId) {
       await interactReply(interaction, {
-        content: MSG_BOT_DEV_FORBIDDEN,
+        content: botDevForbiddenMessage(locale),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -58,7 +70,7 @@ export async function executeScrimDevGuildAccessCore(interaction, ctx) {
       const parsed = parseGuildIdOption(rawGid);
       if (!parsed.ok) {
         await interactReply(interaction, {
-          content: parsed.error,
+          content: guildIdErrorMessage(locale, parsed.reason),
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -73,7 +85,7 @@ export async function executeScrimDevGuildAccessCore(interaction, ctx) {
         note,
       });
       await interactReply(interaction, {
-        content: `✅ Exception réception scrim activée pour la guilde \`${parsed.guildId}\`.`,
+        content: t(locale, 'dev.guildAccessAllow', { guildId: parsed.guildId }),
         flags: MessageFlags.Ephemeral,
       });
       try {
@@ -92,7 +104,7 @@ export async function executeScrimDevGuildAccessCore(interaction, ctx) {
       const parsed = parseGuildIdOption(rawGid);
       if (!parsed.ok) {
         await interactReply(interaction, {
-          content: parsed.error,
+          content: guildIdErrorMessage(locale, parsed.reason),
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -100,13 +112,13 @@ export async function executeScrimDevGuildAccessCore(interaction, ctx) {
       const info = ctx.stmts.deleteGuildScrimReceptionBypass.run(parsed.guildId);
       if (info.changes === 0) {
         await interactReply(interaction, {
-          content: `ℹ️ Aucune exception active pour la guilde \`${parsed.guildId}\`.`,
+          content: t(locale, 'dev.guildAccessNone', { guildId: parsed.guildId }),
           flags: MessageFlags.Ephemeral,
         });
         return;
       }
       await interactReply(interaction, {
-        content: `✅ Exception réception scrim retirée pour la guilde \`${parsed.guildId}\`.`,
+        content: t(locale, 'dev.guildAccessRevoked', { guildId: parsed.guildId }),
         flags: MessageFlags.Ephemeral,
       });
       try {
@@ -126,7 +138,7 @@ export async function executeScrimDevGuildAccessCore(interaction, ctx) {
         const parsed = parseGuildIdOption(rawFilter);
         if (!parsed.ok) {
           await interactReply(interaction, {
-            content: parsed.error,
+            content: guildIdErrorMessage(locale, parsed.reason),
             flags: MessageFlags.Ephemeral,
           });
           return;
@@ -134,18 +146,21 @@ export async function executeScrimDevGuildAccessCore(interaction, ctx) {
         const row = ctx.stmts.getGuildScrimReceptionBypass.get(parsed.guildId);
         if (!row) {
           await interactReply(interaction, {
-            content: `ℹ️ Aucune exception enregistrée pour \`${parsed.guildId}\`.`,
+            content: t(locale, 'dev.guildAccessNoneForGuild', {
+              guildId: parsed.guildId,
+            }),
             flags: MessageFlags.Ephemeral,
           });
           return;
         }
         await interactReply(interaction, {
-          content:
-            `**Exception réception** — guilde \`${row.guild_id}\`\n` +
-            `bypass_member_minimum: ${row.bypass_member_minimum}\n` +
-            `updated_by: ${row.updated_by}\n` +
-            `updated_at: ${row.updated_at}\n` +
-            `note: ${row.note ?? '—'}`,
+          content: t(locale, 'dev.guildAccessDetail', {
+            guildId: row.guild_id,
+            bypass: row.bypass_member_minimum,
+            updatedBy: row.updated_by,
+            updatedAt: row.updated_at,
+            note: row.note ?? '—',
+          }),
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -154,7 +169,7 @@ export async function executeScrimDevGuildAccessCore(interaction, ctx) {
       const rows = ctx.stmts.listGuildScrimReceptionBypassesRecent.all();
       if (rows.length === 0) {
         await interactReply(interaction, {
-          content: 'ℹ️ Aucune exception réception scrim enregistrée.',
+          content: t(locale, 'dev.guildAccessEmpty'),
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -165,7 +180,7 @@ export async function executeScrimDevGuildAccessCore(interaction, ctx) {
       );
       await interactReply(interaction, {
         content:
-          `**Exceptions réception scrim** (${rows.length} dernières)\n` +
+          `${t(locale, 'dev.guildAccessListTitle', { count: rows.length })}\n` +
           lines.join('\n').slice(0, 1900),
         flags: MessageFlags.Ephemeral,
       });
@@ -177,7 +192,7 @@ export async function executeScrimDevGuildAccessCore(interaction, ctx) {
     });
     try {
       await interactReply(interaction, {
-        content: '❌ Erreur lors de la gestion guild-access.',
+        content: t(locale, 'dev.guildAccessError'),
         flags: MessageFlags.Ephemeral,
       });
     } catch {

@@ -15,21 +15,28 @@ import {
 } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
 import { getGuildLocale, t } from '../i18n/index.js';
+import {
+  applyDescriptionLocalizations,
+  applyOptionLocalizations,
+  slashMeta,
+} from '../i18n/slashLocalizations.js';
 
 export const scrimTrouve = {
-  data: new SlashCommandBuilder()
-    .setName('scrim-close')
-    .setDescription('Close one of your active scrim searches.')
-    .addIntegerOption((opt) =>
-      opt
-        .setName('id')
-        .setDescription(
-          `Your scrim search public ID (1–${SCRIM_PUBLIC_ID_MAX}).`,
-        )
-        .setRequired(true)
-        .setMinValue(1)
-        .setMaxValue(SCRIM_PUBLIC_ID_MAX),
-    ),
+  data: applyDescriptionLocalizations(
+    new SlashCommandBuilder()
+      .setName('scrim-close')
+      .addIntegerOption((opt) =>
+        applyOptionLocalizations(
+          opt
+            .setName('id')
+            .setRequired(true)
+            .setMinValue(1)
+            .setMaxValue(SCRIM_PUBLIC_ID_MAX),
+          slashMeta.scrimClose.idOption(SCRIM_PUBLIC_ID_MAX),
+        ),
+      ),
+    slashMeta.scrimClose.description,
+  ),
 
   /**
    * @param {import('discord.js').ChatInputCommandInteraction} interaction

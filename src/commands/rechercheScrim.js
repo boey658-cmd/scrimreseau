@@ -36,6 +36,12 @@ import {
 } from '../services/scrimModeration.js';
 import { getGuildLocale, t } from '../i18n/index.js';
 import {
+  applyDescriptionLocalizations,
+  applyOptionLocalizations,
+  localizedChoice,
+  slashMeta,
+} from '../i18n/slashLocalizations.js';
+import {
   beginScrimRequest,
   endScrimRequest,
   hasActiveScrimRequest,
@@ -133,90 +139,98 @@ function isScrimDebugAutocompleteEnabled() {
 }
 
 export const rechercheScrim = {
-  data: new SlashCommandBuilder()
-    .setName('find-scrim')
-    .setDescription('Broadcast a scrim search on the ScrimRéseau network.')
-    .addStringOption((opt) =>
-      opt
-        .setName('rang')
-        .setDescription('League of Legends rank (type or select).')
-        .setRequired(true)
-        .setAutocomplete(true),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('date')
-        .setDescription('Scrim date (e.g. 23/03 or 23/03/2026).')
-        .setRequired(true),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('heure')
-        .setDescription('Scrim start time (e.g. 20:30 or 20h).')
-        .setRequired(true),
-    )
-    .addUserOption((opt) =>
-      opt
-        .setName('contact')
-        .setDescription('Contact user for organizing the scrim.')
-        .setRequired(true),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('format')
-        .setDescription('Match format (e.g. BO1, BO3).')
-        .setRequired(true)
-        .setAutocomplete(true),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('fearless')
-        .setDescription('Enable Fearless draft pick mode.')
-        .setRequired(true)
-        .addChoices(
-          { name: 'Yes', value: 'oui' },
-          { name: 'No', value: 'non' },
-          { name: 'Any', value: 'nimporte' },
+  data: (() => {
+    const meta = slashMeta.findScrim;
+    const eloChoices = ELO_PRECISION_OPTIONS.map((o) => {
+      if (o.value === 'none') return localizedChoice(o.value, meta.choices.eloNone);
+      if (o.value === 'lp_900_plus') return localizedChoice(o.value, meta.choices.elo900);
+      // Low / High / bandes LP : labels gaming EN partagés (naturels pour toutes les locales).
+      return { name: o.label, value: o.value };
+    });
+    return applyDescriptionLocalizations(
+      new SlashCommandBuilder()
+        .setName('find-scrim')
+        .addStringOption((opt) =>
+          applyOptionLocalizations(
+            opt.setName('rang').setRequired(true).setAutocomplete(true),
+            meta.options.rang,
+          ),
+        )
+        .addStringOption((opt) =>
+          applyOptionLocalizations(
+            opt.setName('date').setRequired(true),
+            meta.options.date,
+          ),
+        )
+        .addStringOption((opt) =>
+          applyOptionLocalizations(
+            opt.setName('heure').setRequired(true),
+            meta.options.heure,
+          ),
+        )
+        .addUserOption((opt) =>
+          applyOptionLocalizations(
+            opt.setName('contact').setRequired(true),
+            meta.options.contact,
+          ),
+        )
+        .addStringOption((opt) =>
+          applyOptionLocalizations(
+            opt.setName('format').setRequired(true).setAutocomplete(true),
+            meta.options.format,
+          ),
+        )
+        .addStringOption((opt) =>
+          applyOptionLocalizations(
+            opt
+              .setName('fearless')
+              .setRequired(true)
+              .addChoices(
+                localizedChoice('oui', meta.choices.fearlessOui),
+                localizedChoice('non', meta.choices.fearlessNon),
+                localizedChoice('nimporte', meta.choices.fearlessAny),
+              ),
+            meta.options.fearless,
+          ),
+        )
+        .addStringOption((opt) =>
+          applyOptionLocalizations(
+            opt.setName('elo_precision').setRequired(false).addChoices(...eloChoices),
+            meta.options.elo_precision,
+          ),
+        )
+        .addStringOption((opt) =>
+          applyOptionLocalizations(
+            opt.setName('heure_max_debut').setRequired(false),
+            meta.options.heure_max_debut,
+          ),
+        )
+        .addStringOption((opt) =>
+          applyOptionLocalizations(
+            opt.setName('multi_opgg').setRequired(false),
+            meta.options.multi_opgg,
+          ),
+        )
+        .addStringOption((opt) =>
+          applyOptionLocalizations(
+            opt.setName('structure').setRequired(false).setAutocomplete(true),
+            meta.options.structure,
+          ),
+        )
+        .addIntegerOption((opt) =>
+          applyOptionLocalizations(
+            opt
+              .setName('nombre_de_games')
+              .setRequired(false)
+              .addChoices(
+                ...NOMBRE_DE_GAMES_CHOICES.map((n) => ({ name: String(n), value: n })),
+              ),
+            meta.options.nombre_de_games,
+          ),
         ),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('elo_precision')
-        .setDescription('Optional Elo precision (e.g. Low, High, 500–599 LP).')
-        .setRequired(false)
-        .addChoices(...ELO_PRECISION_OPTIONS.map((o) => ({
-          name: o.value === 'none' ? 'Not specified' : o.value === 'lp_900_plus' ? '900+ LP' : o.label,
-          value: o.value,
-        }))),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('heure_max_debut')
-        .setDescription('Latest possible start time if flexible.')
-        .setRequired(false),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('multi_opgg')
-        .setDescription('HTTPS link to a Multi-OP.GG page.')
-        .setRequired(false),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('structure')
-        .setDescription('Select your ScrimRéseau partner structure.')
-        .setRequired(false)
-        .setAutocomplete(true),
-    )
-    .addIntegerOption((opt) =>
-      opt
-        .setName('nombre_de_games')
-        .setDescription('Number of games (series format only).')
-        .setRequired(false)
-        .addChoices(
-          ...NOMBRE_DE_GAMES_CHOICES.map((n) => ({ name: String(n), value: n })),
-        ),
-    ),
+      meta.description,
+    );
+  })(),
 
   /**
    * @param {import('discord.js').ChatInputCommandInteraction} interaction

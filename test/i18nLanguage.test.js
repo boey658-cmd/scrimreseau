@@ -34,7 +34,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import test, { describe, it } from 'node:test';
-import { normalizeLocale, getGuildLocale, t, createTranslator } from '../src/i18n/index.js';
+import { normalizeLocale, normalizeEnabledGuildLocale, getGuildLocale, t, createTranslator } from '../src/i18n/index.js';
 import { fr } from '../src/i18n/fr.js';
 import { en } from '../src/i18n/en.js';
 import { getDb, prepareStatements, closeDb } from '../src/database/db.js';
@@ -76,14 +76,31 @@ async function withTempDbAsync(fn) {
 
 // ─── normalizeLocale ─────────────────────────────────────────────────────────
 
-describe('normalizeLocale', () => {
+describe('normalizeLocale (technique ALL_LOCALES)', () => {
   it('fr → fr', () => assert.equal(normalizeLocale('fr'), 'fr'));
   it('en → en', () => assert.equal(normalizeLocale('en'), 'en'));
+  it('es technique → es', () => assert.equal(normalizeLocale('es'), 'es'));
   it('valeur inconnue → fr', () => assert.equal(normalizeLocale('zh'), 'fr'));
   it('vide → fr', () => assert.equal(normalizeLocale(''), 'fr'));
   it('null → fr', () => assert.equal(normalizeLocale(null), 'fr'));
   it('undefined → fr', () => assert.equal(normalizeLocale(undefined), 'fr'));
   it('majuscules EN → en (lowercasé)', () => assert.equal(normalizeLocale('EN'), 'en'));
+});
+
+describe('normalizeEnabledGuildLocale (7 locales)', () => {
+  it('fr/en/es/de/it/pl/pt acceptés', () => {
+    assert.equal(normalizeEnabledGuildLocale('fr'), 'fr');
+    assert.equal(normalizeEnabledGuildLocale('EN'), 'en');
+    assert.equal(normalizeEnabledGuildLocale('es'), 'es');
+    assert.equal(normalizeEnabledGuildLocale('de'), 'de');
+    assert.equal(normalizeEnabledGuildLocale('it'), 'it');
+    assert.equal(normalizeEnabledGuildLocale('pl'), 'pl');
+    assert.equal(normalizeEnabledGuildLocale('pt'), 'pt');
+  });
+  it('invalide → fr', () => {
+    assert.equal(normalizeEnabledGuildLocale('xx'), 'fr');
+    assert.equal(normalizeEnabledGuildLocale('zh'), 'fr');
+  });
 });
 
 // ─── getGuildLocale ──────────────────────────────────────────────────────────
@@ -111,7 +128,8 @@ describe('getGuildLocale', () => {
   });
 
   it('valeur inconnue en DB → fr (test 4 — impossible via CHECK mais testé en contournant)', () => {
-    // La contrainte CHECK empêche les valeurs invalides, donc on teste normalizeLocale
+    // La contrainte CHECK empêche les valeurs invalides ; normalizeEnabledGuildLocale reste fr
+    assert.equal(normalizeEnabledGuildLocale('xx'), 'fr');
     assert.equal(normalizeLocale('xx'), 'fr');
   });
 
@@ -215,6 +233,7 @@ describe('cohérence fr/en', () => {
     const REQUIRED_EN_KEYS = [
       'generic.error',
       'generic.adminOnly',
+      'language.success',
       'language.successEn',
       'language.successFr',
       'findScrim.success',
@@ -371,11 +390,11 @@ describe('/language command', () => {
     assert.ok(opt.required, 'L\'option doit être obligatoire');
   });
 
-  it('les choix sont fr et en', () => {
+  it('les choix sont les 7 locales', () => {
     const data = language.data.toJSON();
     const opt = data.options?.[0];
     const values = opt?.choices?.map((c) => c.value);
-    assert.deepEqual(values, ['fr', 'en']);
+    assert.deepEqual(values, ['fr', 'en', 'es', 'de', 'it', 'pl', 'pt']);
   });
 
   it('un non-admin reçoit une erreur (test 8)', async () => {

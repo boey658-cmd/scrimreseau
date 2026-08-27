@@ -19,25 +19,24 @@ import {
   EmbedBuilder,
   MessageFlags,
 } from 'discord.js';
-import { MSG_BOT_DEV_UNCONFIGURED, resolveBotDevId } from '../utils/botDevConfig.js';
+import {
+  getGuildLocale,
+  intlLocaleForBotLocale,
+  t,
+} from '../i18n/index.js';
+import {
+  botDevUnconfiguredMessage,
+  resolveBotDevId,
+} from '../utils/botDevConfig.js';
 import { logger } from '../utils/logger.js';
 
-// ---------------------------------------------------------------------------
-// Constantes
-// ---------------------------------------------------------------------------
-
-const MSG_DENIED = `❌ Non autorisé.`;
 const PAGE_SIZE = 10;
-const PANEL_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const PANEL_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** Sessions de pagination actives, clé : userId. */
 const activePanels = new Map();
 
 const mkId = (uid, action) => `devgl:${uid}:${action}`;
-
-// ---------------------------------------------------------------------------
-// Construction de la liste de guildes (tri, display)
-// ---------------------------------------------------------------------------
 
 /**
  * Retourne les guildes du cache triées par nom (insensible à la casse).
@@ -59,23 +58,32 @@ export function getSortedGuilds(client) {
  *
  * @param {import('discord.js').Guild} guild
  * @param {number} idx Numéro affiché (1-indexed)
+ * @param {string} [locale]
  * @returns {string}
  */
-export function formatGuildEntry(guild, idx) {
+export function formatGuildEntry(guild, idx, locale = 'fr') {
   if (!guild.available) {
-    return [`**${idx}. ⚠️ Serveur temporairement indisponible**`, `ID : \`${guild.id}\``].join('\n');
+    return [
+      t(locale, 'dev.serversUnavailable', { idx }),
+      t(locale, 'dev.serversEntryMeta', {
+        id: guild.id,
+        members: '—',
+        joined: '—',
+      }),
+    ].join('\n');
   }
 
-  const name = guild.name ?? '*(nom inconnu)*';
+  const name = guild.name ?? t(locale, 'dev.serversUnknownName');
+  const intl = intlLocaleForBotLocale(locale);
 
   const members =
     typeof guild.memberCount === 'number'
-      ? guild.memberCount.toLocaleString('fr-FR')
-      : 'Inconnus';
+      ? guild.memberCount.toLocaleString(intl)
+      : t(locale, 'dev.serversUnknownMembers');
 
-  let joinedStr = `Date inconnue`;
+  let joinedStr = t(locale, 'dev.serversUnknownDate');
   if (guild.joinedAt instanceof Date && !Number.isNaN(guild.joinedAt.getTime())) {
-    joinedStr = guild.joinedAt.toLocaleDateString('fr-FR', {
+    joinedStr = guild.joinedAt.toLocaleDateString(intl, {
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
@@ -84,40 +92,45 @@ export function formatGuildEntry(guild, idx) {
 
   return [
     `**${idx}. ${name}**`,
-    `ID : \`${guild.id}\``,
-    `Membres : ${members}`,
-    `Bot ajouté le : ${joinedStr}`,
+    t(locale, 'dev.serversEntryMeta', {
+      id: guild.id,
+      members,
+      joined: joinedStr,
+    }),
   ].join('\n');
 }
-
-// ---------------------------------------------------------------------------
-// Constructeurs embed + composants
-// ---------------------------------------------------------------------------
 
 /**
  * @param {import('discord.js').Guild[]} guilds Liste triée complète
  * @param {number} page Index de page (0-indexed)
  * @param {number} pageCount Nombre total de pages
+ * @param {string} [locale]
  * @returns {EmbedBuilder}
  */
-export function buildGuildListEmbed(guilds, page, pageCount) {
+export function buildGuildListEmbed(guilds, page, pageCount, locale = 'fr') {
   const total = guilds.length;
 
   let description;
   if (total === 0) {
-    description = `Le bot n'est actuellement présent sur aucun serveur.`;
+    description = t(locale, 'dev.serversEmpty');
   } else {
     const start = page * PAGE_SIZE;
     const pageGuilds = guilds.slice(start, start + PAGE_SIZE);
-    description = pageGuilds.map((g, i) => formatGuildEntry(g, start + i + 1)).join('\n\n');
+    description = pageGuilds
+      .map((g, i) => formatGuildEntry(g, start + i + 1, locale))
+      .join('\n\n');
   }
 
   return new EmbedBuilder()
-    .setTitle(`🌐 Serveurs du bot`)
+    .setTitle(t(locale, 'dev.serversTitle'))
     .setDescription(description)
     .setColor(0x5865f2)
     .setFooter({
-      text: `Serveurs actuels du bot : ${total} · Page ${page + 1}/${pageCount}`,
+      text: t(locale, 'dev.serversFooter', {
+        total,
+        page: page + 1,
+        pageCount,
+      }),
     });
 }
 
@@ -125,9 +138,10 @@ export function buildGuildListEmbed(guilds, page, pageCount) {
  * @param {string} uid
  * @param {number} page
  * @param {number} pageCount
+ * @param {string} [locale]
  * @returns {ActionRowBuilder[]}
  */
-export function buildGuildListComponents(uid, page, pageCount) {
+export function buildGuildListComponents(uid, page, pageCount, locale = 'fr') {
   const prevDisabled = page === 0;
   const nextDisabled = page >= pageCount - 1;
 
@@ -137,12 +151,12 @@ export function buildGuildListComponents(uid, page, pageCount) {
     buttons.push(
       new ButtonBuilder()
         .setCustomId(mkId(uid, 'prev'))
-        .setLabel('← Précédent')
+        .setLabel(t(locale, 'dev.btnPrev'))
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(prevDisabled),
       new ButtonBuilder()
         .setCustomId(mkId(uid, 'next'))
-        .setLabel('Suivant →')
+        .setLabel(t(locale, 'dev.btnNext'))
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(nextDisabled),
     );
@@ -151,65 +165,59 @@ export function buildGuildListComponents(uid, page, pageCount) {
   buttons.push(
     new ButtonBuilder()
       .setCustomId(mkId(uid, 'close'))
-      .setLabel('✖ Fermer')
+      .setLabel(t(locale, 'dev.btnClose'))
       .setStyle(ButtonStyle.Secondary),
   );
 
   return [new ActionRowBuilder().addComponents(...buttons)];
 }
 
-// ---------------------------------------------------------------------------
-// Handler principal
-// ---------------------------------------------------------------------------
-
 /**
  * @param {import('discord.js').ChatInputCommandInteraction} interaction
  */
 export async function executeScrimDevGuildListCore(interaction) {
+  const locale = getGuildLocale(interaction.guildId, null);
+  const denied = t(locale, 'dev.denied');
   const devGuildId = process.env.DEV_GUILD_ID?.trim() ?? '';
 
-  // Vérification 1 : doit être dans la guilde de développement
   if (!interaction.inGuild()) {
-    await interaction.reply({ content: MSG_DENIED, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: denied, flags: MessageFlags.Ephemeral });
     return;
   }
   if (!devGuildId || interaction.guildId !== devGuildId) {
-    await interaction.reply({ content: MSG_DENIED, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: denied, flags: MessageFlags.Ephemeral });
     return;
   }
 
-  // Vérification 2 : doit être le développeur du bot (fail-closed)
   const dev = resolveBotDevId();
   if (!dev.ok) {
-    logger.error(`scrim-dev serveurs — ${MSG_BOT_DEV_UNCONFIGURED}`, { reason: dev.reason });
+    logger.error(`scrim-dev serveurs — BOT_DEV_ID absent`, { reason: dev.reason });
     await interaction.reply({
-      content: `❌ Cette commande est indisponible : BOT_DEV_ID non configuré.`,
+      content: botDevUnconfiguredMessage(locale),
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
   if (interaction.user.id !== dev.devId) {
-    await interaction.reply({ content: MSG_DENIED, flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: denied, flags: MessageFlags.Ephemeral });
     return;
   }
 
   const uid = interaction.user.id;
 
-  // Ferme une session déjà ouverte par ce développeur
   const existing = activePanels.get(uid);
   if (existing) existing.stop('replaced');
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  // Source : cache client Discord — aucun accès base de données
   const guilds = getSortedGuilds(interaction.client);
   const total = guilds.length;
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
   let currentPage = 0;
 
   const message = await interaction.editReply({
-    embeds: [buildGuildListEmbed(guilds, currentPage, pageCount)],
-    components: buildGuildListComponents(uid, currentPage, pageCount),
+    embeds: [buildGuildListEmbed(guilds, currentPage, pageCount, locale)],
+    components: buildGuildListComponents(uid, currentPage, pageCount, locale),
   });
 
   const collector = message.createMessageComponentCollector({
@@ -225,7 +233,11 @@ export async function executeScrimDevGuildListCore(interaction) {
     if (action === 'close') {
       collector.stop('closed');
       try {
-        await i.update({ content: `✅ Panneau fermé.`, embeds: [], components: [] });
+        await i.update({
+          content: t(locale, 'dev.panelClosed'),
+          embeds: [],
+          components: [],
+        });
       } catch {
         /* ignore */
       }
@@ -240,8 +252,8 @@ export async function executeScrimDevGuildListCore(interaction) {
 
     try {
       await i.update({
-        embeds: [buildGuildListEmbed(guilds, currentPage, pageCount)],
-        components: buildGuildListComponents(uid, currentPage, pageCount),
+        embeds: [buildGuildListEmbed(guilds, currentPage, pageCount, locale)],
+        components: buildGuildListComponents(uid, currentPage, pageCount, locale),
       });
     } catch (err) {
       logger.error('scrim-dev serveurs — mise à jour pagination', {
@@ -254,7 +266,11 @@ export async function executeScrimDevGuildListCore(interaction) {
     activePanels.delete(uid);
     if (reason !== 'replaced' && reason !== 'closed') {
       try {
-        await interaction.editReply({ content: `⏰ Session expirée.`, embeds: [], components: [] });
+        await interaction.editReply({
+          content: t(locale, 'dev.panelExpired'),
+          embeds: [],
+          components: [],
+        });
       } catch {
         /* ignore */
       }

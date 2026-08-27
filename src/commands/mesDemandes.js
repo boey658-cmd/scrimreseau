@@ -13,9 +13,10 @@ import { SCRIM_TIMEZONE } from '../utils/scrimScheduledAt.js';
 import { interactReply } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
 import { getGuildLocale, t } from '../i18n/index.js';
-
-const MSG_EMPTY =
-  'ℹ️ Tu n’as actuellement aucune recherche de scrim active.';
+import {
+  applyDescriptionLocalizations,
+  slashMeta,
+} from '../i18n/slashLocalizations.js';
 
 // FOOTER_HINT → t(locale)
 
@@ -47,9 +48,10 @@ function formatCreatedParis(ms, locale = 'fr') {
 }
 
 export const mesDemandes = {
-  data: new SlashCommandBuilder()
-    .setName('my-scrims')
-    .setDescription('Show your active scrim searches.'),
+  data: applyDescriptionLocalizations(
+    new SlashCommandBuilder().setName('my-scrims'),
+    slashMeta.myScrims.description,
+  ),
 
   /**
    * @param {import('discord.js').ChatInputCommandInteraction} interaction

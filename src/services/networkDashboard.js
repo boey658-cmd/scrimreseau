@@ -15,6 +15,7 @@ import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { AttachmentBuilder, EmbedBuilder } from 'discord.js';
+import { getGuildLocale, intlLocaleForBotLocale, t } from '../i18n/index.js';
 import { fetchBuffer } from '../utils/fetchBuffer.js';
 import { logger } from '../utils/logger.js';
 
@@ -358,9 +359,10 @@ function drawPartnerNode(ctx, img, initial, cx, cy, r, ff = 'sans-serif') {
  * Génère l'image dashboard — vue "carte du réseau".
  * @param {import('discord.js').Client} client
  * @param {ReturnType<collectStats>} stats
+ * @param {string} [locale]
  * @returns {Promise<Buffer | null>} null si la génération échoue
  */
-async function generateDashboardImage(client, stats) {
+async function generateDashboardImage(client, stats, locale = 'fr') {
   let createCanvas, loadImage, GlobalFonts;
   try {
     ({ createCanvas, loadImage, GlobalFonts } = await import('@napi-rs/canvas'));
@@ -551,8 +553,9 @@ async function generateDashboardImage(client, stats) {
     // ═══════════════════════════════════════════════════════════════════
 
     const now = new Date();
-    const dateStr = now.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-    const timeStr = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    const intl = intlLocaleForBotLocale(locale);
+    const dateStr = now.toLocaleDateString(intl, { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const timeStr = now.toLocaleTimeString(intl, { hour: '2-digit', minute: '2-digit' });
 
     // Reset strict du contexte avant tout rendu texte
     ctx.save();
@@ -572,7 +575,7 @@ async function generateDashboardImage(client, stats) {
 
     ctx.fillStyle = 'rgba(255,255,255,0.60)';
     ctx.font = `16px ${FF}`;
-    ctx.fillText('Le réseau ScrimRéseau', CANVAS_W / 2, 78);
+    ctx.fillText(t(locale, 'networkDashboard.canvasSubtitle'), CANVAS_W / 2, 78);
 
     // Séparateur dégradé centré
     {
@@ -606,12 +609,16 @@ async function generateDashboardImage(client, stats) {
 
     ctx.fillStyle = '#ffffff';
     ctx.font = `bold 15px ${FF}`;
-    ctx.fillText('SERVEURS PARTENAIRES', CANVAS_W / 2, 602);
+    ctx.fillText(t(locale, 'networkDashboard.canvasPartnersLabel'), CANVAS_W / 2, 602);
 
     // ── Footer ──────────────────────────────────────────────────────────
     ctx.fillStyle = 'rgba(255,255,255,0.45)';
     ctx.font = `13px ${FF}`;
-    ctx.fillText(`Mise à jour le ${dateStr} à ${timeStr}`, CANVAS_W / 2, CANVAS_H - 12);
+    ctx.fillText(
+      t(locale, 'networkDashboard.footerUpdated', { date: dateStr, time: timeStr }),
+      CANVAS_W / 2,
+      CANVAS_H - 12,
+    );
 
     ctx.restore();
 
@@ -631,18 +638,24 @@ async function generateDashboardImage(client, stats) {
 
 /**
  * @param {ReturnType<collectStats>} stats
+ * @param {string} [locale]
  * @returns {EmbedBuilder}
  */
-function buildFallbackEmbed(stats) {
+function buildFallbackEmbed(stats, locale = 'fr') {
   const now = new Date();
+  const intl = intlLocaleForBotLocale(locale);
+  const dateStr = now.toLocaleDateString(intl);
+  const timeStr = now.toLocaleTimeString(intl, { hour: '2-digit', minute: '2-digit' });
   return new EmbedBuilder()
-    .setTitle('🌐 ScrimRéseau — Tableau de bord')
+    .setTitle(t(locale, 'networkDashboard.embedTitle'))
     .setColor(0x5865f2)
     .addFields(
-      { name: '🏆 Serveurs partenaires', value: String(stats.partnerCount), inline: true },
-      { name: '🌍 Discord total', value: String(stats.totalGuilds), inline: true },
+      { name: t(locale, 'networkDashboard.fieldPartners'), value: String(stats.partnerCount), inline: true },
+      { name: t(locale, 'networkDashboard.fieldDiscordTotal'), value: String(stats.totalGuilds), inline: true },
     )
-    .setFooter({ text: `Mise à jour le ${now.toLocaleDateString('fr-FR')} à ${now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}` })
+    .setFooter({
+      text: t(locale, 'networkDashboard.footerUpdated', { date: dateStr, time: timeStr }),
+    })
     .setTimestamp(now);
 }
 
@@ -653,11 +666,12 @@ function buildFallbackEmbed(stats) {
 /**
  * @param {import('discord.js').Client} client
  * @param {ReturnType<import('../database/db.js')['prepareStatements']>} stmts
+ * @param {string} [locale]
  * @returns {Promise<{ content: string, files: AttachmentBuilder[], embeds: EmbedBuilder[] }>}
  */
-async function buildDashboardPayload(client, stmts) {
+async function buildDashboardPayload(client, stmts, locale = 'fr') {
   const stats = collectStats(client, stmts);
-  const imgBuffer = await generateDashboardImage(client, stats);
+  const imgBuffer = await generateDashboardImage(client, stats, locale);
 
   if (imgBuffer) {
     return {
@@ -670,7 +684,7 @@ async function buildDashboardPayload(client, stmts) {
   return {
     content: '',
     files: [],
-    embeds: [buildFallbackEmbed(stats)],
+    embeds: [buildFallbackEmbed(stats, locale)],
   };
 }
 
@@ -713,7 +727,8 @@ async function syncOneDashboard(client, stmts, row) {
     return;
   }
 
-  const payload = await buildDashboardPayload(client, stmts);
+  const locale = getGuildLocale(guild_id, stmts);
+  const payload = await buildDashboardPayload(client, stmts, locale);
   const nowIso = new Date().toISOString();
 
   // Tentative d'édition du message existant
@@ -827,6 +842,11 @@ export function scheduleNetworkDashboardUpdate(client, stmts) {
   }, DEBOUNCE_MS);
 }
 
+/** @returns {boolean} true si un update dashboard est planifié (debounce actif). */
+export function isNetworkDashboardUpdateScheduled() {
+  return debounceTimer != null;
+}
+
 /**
  * Crée ou édite le dashboard dans un salon spécifique via une commande.
  * Enregistre la configuration en DB.
@@ -868,7 +888,8 @@ export async function createOrUpdateNetworkDashboardMessage(client, channel, use
       channel_id: channelId,
       message: err instanceof Error ? err.message : String(err),
     });
-    return { ok: false, error: 'Erreur base de données lors de la configuration.' };
+    const locale = getGuildLocale(guildId, stmts);
+    return { ok: false, error: t(locale, 'dev.dashboardDbConfigError') };
   }
 
   await syncOneDashboard(client, stmts, {

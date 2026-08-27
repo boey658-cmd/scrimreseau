@@ -1,4 +1,5 @@
 import { MessageFlags } from 'discord.js';
+import { getGuildLocale, t } from '../i18n/index.js';
 import { getDiscordEditRetryJobHealthSnapshot } from '../services/discordEditRetryJob.js';
 import { getDiscordTaskQueueHealthSnapshot } from '../services/discordTaskQueue.js';
 import { getScrimExpirationJobHealthSnapshot } from '../services/scrimExpirationJob.js';
@@ -7,8 +8,10 @@ import { getProcessHealthSnapshot } from '../utils/processHealth.js';
 import { interactReply } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
 
-const MSG_DENIED = '❌ Non autorisé.';
-
+/**
+ * Rapport technique owner-only : corps volontairement laissé en FR (métriques / libellés ops).
+ * Seul le refus d’accès passe par i18n.
+ */
 /**
  * @param {number} totalSec
  */
@@ -32,20 +35,22 @@ function formatDurationSeconds(totalSec) {
  * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']> }} ctx
  */
 export async function executeScrimDevHealthCore(interaction, ctx) {
+  const locale = getGuildLocale(interaction.guildId, ctx.stmts);
+  const denied = t(locale, 'dev.denied');
   const devGuildId = process.env.DEV_GUILD_ID?.trim() ?? '';
 
   if (!interaction.inGuild()) {
-    await interactReply(interaction, { content: MSG_DENIED, flags: MessageFlags.Ephemeral });
+    await interactReply(interaction, { content: denied, flags: MessageFlags.Ephemeral });
     return;
   }
   if (!devGuildId || interaction.guildId !== devGuildId) {
-    await interactReply(interaction, { content: MSG_DENIED, flags: MessageFlags.Ephemeral });
+    await interactReply(interaction, { content: denied, flags: MessageFlags.Ephemeral });
     return;
   }
 
   const dev = resolveBotDevId();
   if (!dev.ok || interaction.user.id !== dev.devId) {
-    await interactReply(interaction, { content: MSG_DENIED, flags: MessageFlags.Ephemeral });
+    await interactReply(interaction, { content: denied, flags: MessageFlags.Ephemeral });
     return;
   }
 

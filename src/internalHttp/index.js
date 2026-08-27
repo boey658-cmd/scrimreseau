@@ -1,7 +1,8 @@
 /**
- * Serveur HTTP interne GET-only (Web2B) — localhost uniquement.
+ * Serveur HTTP interne (Web2B+ GET, Web5B PATCH config) — localhost uniquement.
  */
 
+import { prepareStatements } from '../database/db.js';
 import { logger } from '../utils/logger.js';
 import { parseInternalHttpConfig, isInternalHttpEnabled } from './config.js';
 import {
@@ -20,6 +21,7 @@ let activeListener = null;
  * @param {{
  *   client?: import('discord.js').Client | null,
  *   db: import('better-sqlite3').Database,
+ *   stmts?: ReturnType<import('../database/db.js')['prepareStatements']>,
  *   config?: ReturnType<typeof parseInternalHttpConfig>,
  * }} deps
  * @returns {Promise<boolean>} true si démarré
@@ -34,9 +36,12 @@ export async function startInternalHttpServer(deps) {
     return false;
   }
 
+  const stmts = deps.stmts ?? prepareStatements(deps.db);
+
   const { server, listener, host, port } = createInternalHttpServer({
     client: deps.client,
     db: deps.db,
+    stmts,
     config,
   });
 
@@ -99,4 +104,17 @@ export function getInternalHttpServerForTests() {
 export { parseInternalHttpConfig, isInternalHttpEnabled } from './config.js';
 export { parseGuildIdParam, GUILD_ID_PATTERN } from './guildId.js';
 export { fetchGuildOverview } from './overviewQueries.js';
+export { fetchGuildConfig } from './configQueries.js';
+export { fetchNetworkOverview } from './networkQueries.js';
 export { verifyInternalHttpToken, extractBearerToken } from './auth.js';
+export {
+  parseConfigPatchBody,
+  handleGuildConfigPatch,
+  ConfigWriteError,
+} from './configPatch.js';
+export {
+  parseInstallationStatusBody,
+  resolveInstallationStatus,
+  handleInstallationStatus,
+  INSTALLATION_STATUS_MAX_GUILD_IDS,
+} from './installationStatus.js';

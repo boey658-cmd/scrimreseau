@@ -19,18 +19,27 @@ import {
 } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
 import { getGuildLocale, t } from '../i18n/index.js';
+import {
+  applyDescriptionLocalizations,
+  applyOptionLocalizations,
+  slashMeta,
+} from '../i18n/slashLocalizations.js';
+
+const meta = slashMeta.reportSpam;
 
 export const spammer = {
-  data: new SlashCommandBuilder()
-    .setName('report-spam')
-    .setDescription('Report a user for excessive scrim search spam.')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addUserOption((opt) =>
-      opt
-        .setName('user')
-        .setDescription('Select the user to report.')
-        .setRequired(true),
-    ),
+  data: applyDescriptionLocalizations(
+    new SlashCommandBuilder()
+      .setName('report-spam')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addUserOption((opt) =>
+        applyOptionLocalizations(
+          opt.setName('user').setRequired(true),
+          meta.options.user,
+        ),
+      ),
+    meta.description,
+  ),
 
   /**
    * @param {import('discord.js').ChatInputCommandInteraction} interaction

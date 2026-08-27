@@ -1,4 +1,10 @@
 import { ChannelType, MessageFlags, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
+import { getGuildLocale, t } from '../i18n/index.js';
+import {
+  applyDescriptionLocalizations,
+  applyOptionLocalizations,
+  slashMeta,
+} from '../i18n/slashLocalizations.js';
 import { createOrUpdateNetworkDashboardMessage } from '../services/networkDashboard.js';
 import {
   interactDeferReply,
@@ -6,15 +12,6 @@ import {
   interactReply,
 } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
-
-const MSG_NOT_OWNER =
-  '❌ Cette commande est réservée au propriétaire de ScrimRéseau.';
-const MSG_NEED_GUILD =
-  '❌ Cette commande doit être utilisée sur un serveur.';
-const MSG_INVALID_CHANNEL =
-  '❌ Le salon sélectionné doit être un salon texte ou une annonce.';
-const MSG_ERROR =
-  '❌ Une erreur est survenue lors de la création du dashboard. Réessayez plus tard.';
 
 /**
  * Vérifie que l'auteur de l'interaction est le propriétaire déclaré dans l'env.
@@ -26,16 +23,18 @@ function isOwner(userId) {
   return Boolean(ownerId) && userId === ownerId;
 }
 
-const data = new SlashCommandBuilder()
-  .setName('dashboard-reseau')
-  .setDescription('Initialise ou met à jour le dashboard réseau ScrimRéseau dans un salon')
-  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-  .addChannelOption((opt) =>
-    opt
-      .setName('salon')
-      .setDescription('Salon texte où poster le dashboard')
-      .setRequired(true),
-  );
+const data = applyDescriptionLocalizations(
+  new SlashCommandBuilder()
+    .setName('dashboard-reseau')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addChannelOption((opt) =>
+      applyOptionLocalizations(
+        opt.setName('salon').setRequired(true),
+        slashMeta.dashboardReseau.options.salon,
+      ),
+    ),
+  slashMeta.dashboardReseau.description,
+);
 
 export const dashboardReseau = {
   data,
@@ -45,10 +44,11 @@ export const dashboardReseau = {
    * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']> }} ctx
    */
   async execute(interaction, ctx) {
-    // Garde owner
+    const locale = getGuildLocale(interaction.guildId, ctx.stmts);
+
     if (!isOwner(interaction.user.id)) {
       await interactReply(interaction, {
-        content: MSG_NOT_OWNER,
+        content: t(locale, 'dev.dashboardNotOwner'),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -56,7 +56,7 @@ export const dashboardReseau = {
 
     if (!interaction.inGuild() || !interaction.guild) {
       await interactReply(interaction, {
-        content: MSG_NEED_GUILD,
+        content: t(locale, 'dev.dashboardNeedGuild'),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -70,11 +70,12 @@ export const dashboardReseau = {
       channel.type !== ChannelType.GuildText
       && channel.type !== ChannelType.GuildAnnouncement
     ) {
-      await interactEditReply(interaction, { content: MSG_INVALID_CHANNEL });
+      await interactEditReply(interaction, {
+        content: t(locale, 'dev.dashboardInvalidChannel'),
+      });
       return;
     }
 
-    // Résoudre le channel complet (l'option peut retourner un partial)
     let resolvedChannel;
     try {
       resolvedChannel = interaction.guild.channels.cache.get(channel.id)
@@ -84,7 +85,9 @@ export const dashboardReseau = {
     }
 
     if (!resolvedChannel?.isTextBased()) {
-      await interactEditReply(interaction, { content: MSG_INVALID_CHANNEL });
+      await interactEditReply(interaction, {
+        content: t(locale, 'dev.dashboardInvalidChannel'),
+      });
       return;
     }
 
@@ -104,12 +107,16 @@ export const dashboardReseau = {
     );
 
     if (!result.ok) {
-      await interactEditReply(interaction, { content: result.error ?? MSG_ERROR });
+      await interactEditReply(interaction, {
+        content: result.error ?? t(locale, 'dev.dashboardError'),
+      });
       return;
     }
 
     await interactEditReply(interaction, {
-      content: `✅ Dashboard réseau configuré dans <#${channel.id}>. Il sera automatiquement mis à jour.`,
+      content: t(locale, 'dev.dashboardConfigured', {
+        channel: `<#${channel.id}>`,
+      }),
     });
   },
 };

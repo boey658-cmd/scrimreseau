@@ -1,30 +1,42 @@
 import { MessageFlags, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
 import { getGuildLocale, t } from '../i18n/index.js';
+import {
+  applyDescriptionLocalizations,
+  applyOptionLocalizations,
+  slashMeta,
+} from '../i18n/slashLocalizations.js';
 import { interactReply } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
 import { validateDiscordInviteUrl } from '../utils/validation.js';
 
+const meta = slashMeta.structureLink;
+
 export const structureLien = {
-  data: new SlashCommandBuilder()
-    .setName('structure-link')
-    .setDescription('Manage the Discord link associated with a structure.')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addSubcommand((sub) =>
-      sub
-        .setName('set')
-        .setDescription('Set the Discord invite link associated with your structure.')
-        .addStringOption((opt) =>
-          opt
-            .setName('lien')
-            .setDescription('Discord invite link (e.g. https://discord.gg/xxxx).')
-            .setRequired(true),
+  data: applyDescriptionLocalizations(
+    new SlashCommandBuilder()
+      .setName('structure-link')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addSubcommand((sub) =>
+        applyDescriptionLocalizations(
+          sub
+            .setName('set')
+            .addStringOption((opt) =>
+              applyOptionLocalizations(
+                opt.setName('lien').setRequired(true),
+                meta.options.lien,
+              ),
+            ),
+          meta.subSet.description,
         ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName('remove')
-        .setDescription('Remove the Discord invite link associated with your structure.'),
-    ),
+      )
+      .addSubcommand((sub) =>
+        applyDescriptionLocalizations(
+          sub.setName('remove'),
+          meta.subRemove.description,
+        ),
+      ),
+    meta.description,
+  ),
 
   /**
    * @param {import('discord.js').ChatInputCommandInteraction} interaction

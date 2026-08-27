@@ -1,23 +1,22 @@
 import { EmbedBuilder, MessageFlags } from 'discord.js';
+import { getGuildLocale, t } from '../i18n/index.js';
 import { resolveBotDevId } from '../utils/botDevConfig.js';
 import { interactReply } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
 
-const MSG_DENIED = '❌ Non autorisé.';
-const MSG_EMPTY = 'Aucun serveur n’a configuré de salon de réception.';
-const UNKNOWN_GUILD_LABEL = 'serveur inconnu / bot absent du cache';
 const DISPLAY_LIMIT = 20;
 const EMBED_DESCRIPTION_MAX = 4096;
 
 /**
  * @param {import('discord.js').Client} client
  * @param {string} guildId
+ * @param {string} locale
  * @returns {string}
  */
-function resolveGuildDisplayName(client, guildId) {
+function resolveGuildDisplayName(client, guildId, locale) {
   const guild = client.guilds.cache.get(guildId);
   if (guild?.name) return guild.name;
-  return UNKNOWN_GUILD_LABEL;
+  return t(locale, 'dev.receptionUnknownGuild');
 }
 
 /**
@@ -27,21 +26,20 @@ function resolveGuildDisplayName(client, guildId) {
  *   game_key: string,
  * }} row
  * @param {import('discord.js').Client} client
+ * @param {string} locale
  * @returns {string}
  */
-function formatReceptionListEntry(row, client) {
+function formatReceptionListEntry(row, client, locale) {
   const guildId = String(row.guild_id);
   const channelId = String(row.channel_id);
   const gameKey = String(row.game_key);
-  const name = resolveGuildDisplayName(client, guildId);
-  const title =
-    name === UNKNOWN_GUILD_LABEL ? `**${UNKNOWN_GUILD_LABEL}**` : `**${name}**`;
+  const name = resolveGuildDisplayName(client, guildId, locale);
+  const unknown = t(locale, 'dev.receptionUnknownGuild');
+  const title = name === unknown ? `**${unknown}**` : `**${name}**`;
 
   return [
     title,
-    `ID serveur: \`${guildId}\``,
-    `Salon: <#${channelId}> (\`${channelId}\`)`,
-    `Jeu: \`${gameKey}\``,
+    t(locale, 'dev.receptionEntryMeta', { guildId, channelId, gameKey }),
   ].join('\n');
 }
 
@@ -50,20 +48,22 @@ function formatReceptionListEntry(row, client) {
  * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']> }} ctx
  */
 export async function executeScrimDevReceptionListCore(interaction, ctx) {
+  const locale = getGuildLocale(interaction.guildId, ctx.stmts);
+  const denied = t(locale, 'dev.denied');
   const devGuildId = process.env.DEV_GUILD_ID?.trim() ?? '';
 
   if (!interaction.inGuild()) {
-    await interactReply(interaction, { content: MSG_DENIED, flags: MessageFlags.Ephemeral });
+    await interactReply(interaction, { content: denied, flags: MessageFlags.Ephemeral });
     return;
   }
   if (!devGuildId || interaction.guildId !== devGuildId) {
-    await interactReply(interaction, { content: MSG_DENIED, flags: MessageFlags.Ephemeral });
+    await interactReply(interaction, { content: denied, flags: MessageFlags.Ephemeral });
     return;
   }
 
   const dev = resolveBotDevId();
   if (!dev.ok || interaction.user.id !== dev.devId) {
-    await interactReply(interaction, { content: MSG_DENIED, flags: MessageFlags.Ephemeral });
+    await interactReply(interaction, { content: denied, flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -74,7 +74,7 @@ export async function executeScrimDevReceptionListCore(interaction, ctx) {
 
     if (total === 0) {
       await interactReply(interaction, {
-        content: MSG_EMPTY,
+        content: t(locale, 'dev.receptionListEmpty'),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -82,25 +82,26 @@ export async function executeScrimDevReceptionListCore(interaction, ctx) {
 
     const rows = ctx.stmts.listGuildGameChannelsRecent.all(DISPLAY_LIMIT);
     const blocks = rows.map((row) =>
-      formatReceptionListEntry(row, interaction.client),
+      formatReceptionListEntry(row, interaction.client, locale),
     );
 
     let description = blocks.join('\n\n');
     const overflow = total > DISPLAY_LIMIT ? total - DISPLAY_LIMIT : 0;
     if (overflow > 0) {
-      description += `\n\n_+ ${overflow} autre${overflow > 1 ? 's' : ''}._`;
+      description += `\n\n${t(locale, 'dev.receptionOverflow', { count: overflow })}`;
     }
 
     if (description.length > EMBED_DESCRIPTION_MAX) {
       description = `${description.slice(0, EMBED_DESCRIPTION_MAX - 1)}…`;
     }
 
+    const shown = Math.min(total, DISPLAY_LIMIT);
     const embed = new EmbedBuilder()
-      .setTitle('Salons de réception scrim configurés')
+      .setTitle(t(locale, 'dev.receptionListTitle'))
       .setDescription(description)
       .setColor(0x5865f2)
       .setFooter({
-        text: `${Math.min(total, DISPLAY_LIMIT)} affiché${total > 1 ? 's' : ''} sur ${total} · tri created_at DESC`,
+        text: t(locale, 'dev.receptionFooter', { shown, total }),
       });
 
     await interactReply(interaction, {
@@ -119,7 +120,7 @@ export async function executeScrimDevReceptionListCore(interaction, ctx) {
       stack: err instanceof Error ? err.stack : undefined,
     });
     await interactReply(interaction, {
-      content: '❌ Impossible de charger la liste pour le moment.',
+      content: t(locale, 'dev.receptionListLoadError'),
       flags: MessageFlags.Ephemeral,
     });
   }

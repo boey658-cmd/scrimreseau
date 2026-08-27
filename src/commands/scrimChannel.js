@@ -9,11 +9,16 @@
  */
 
 import { MessageFlags, SlashCommandBuilder } from 'discord.js';
+import { getGuildLocale, t } from '../i18n/index.js';
+import {
+  applyDescriptionLocalizations,
+  slashMeta,
+} from '../i18n/slashLocalizations.js';
 import { scheduleNetworkDashboardUpdate } from '../services/networkDashboard.js';
 import { removeScrimReceptionDestination } from '../services/scrimDestinationCleanup.js';
 import {
-  MSG_BOT_DEV_FORBIDDEN,
-  MSG_BOT_DEV_UNCONFIGURED,
+  botDevForbiddenMessage,
+  botDevUnconfiguredMessage,
   resolveBotDevId,
 } from '../utils/botDevConfig.js';
 import { interactReply } from '../utils/interactionDiscord.js';
@@ -21,8 +26,6 @@ import { logger } from '../utils/logger.js';
 
 /** Snowflake Discord : 17–22 chiffres (aligné sur botDevConfig). */
 const SNOWFLAKE_RE = /^\d{17,22}$/;
-
-const MSG_DENIED = '❌ Cette commande est réservée au développeur du bot.';
 
 /**
  * @param {string} raw
@@ -34,63 +37,65 @@ export function parseDiscordSnowflakeId(raw) {
   return s;
 }
 
-const data = new SlashCommandBuilder()
-  .setName('scrim-channel')
-  .setDescription('Dev only — remove a scrim reception destination by guild/channel ID')
-  .addSubcommand((sub) =>
-    sub
-      .setName('remove')
-      .setDescription('Remove a reception channel registration (works if the channel was deleted)')
-      .addStringOption((opt) =>
-        opt
-          .setName('guild_id')
-          .setDescription('Discord guild snowflake of the destination server')
-          .setRequired(true),
-      )
-      .addStringOption((opt) =>
-        opt
-          .setName('channel_id')
-          .setDescription('Discord channel snowflake to remove from configuration')
-          .setRequired(true),
-      ),
-  );
+const data = applyDescriptionLocalizations(
+  new SlashCommandBuilder()
+    .setName('scrim-channel')
+    .addSubcommand((sub) =>
+      sub
+        .setName('remove')
+        .setDescription('Remove a reception channel registration (works if the channel was deleted)')
+        .addStringOption((opt) =>
+          opt
+            .setName('guild_id')
+            .setDescription('Discord guild snowflake of the destination server')
+            .setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('channel_id')
+            .setDescription('Discord channel snowflake to remove from configuration')
+            .setRequired(true),
+        ),
+    ),
+  slashMeta.scrimChannel.description,
+);
 
 /**
  * @param {import('discord.js').ChatInputCommandInteraction} interaction
  * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']> }} ctx
  */
 async function execute(interaction, ctx) {
+  const locale = getGuildLocale(interaction.guildId, ctx.stmts);
+  const denied = t(locale, 'dev.forbidden');
   const devGuildId = process.env.DEV_GUILD_ID?.trim() ?? '';
 
-  // 1) Guilde de développement uniquement (fail-closed)
   if (!interaction.inGuild()) {
     await interactReply(interaction, {
-      content: MSG_DENIED,
+      content: denied,
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
   if (!devGuildId || interaction.guildId !== devGuildId) {
     await interactReply(interaction, {
-      content: MSG_DENIED,
+      content: denied,
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
-  // 2) Identité développeur (BOT_DEV_ID) — jamais Administrator
   const dev = resolveBotDevId();
   if (!dev.ok) {
     logger.warn('scrim-channel — BOT_DEV_ID absent ou invalide', { reason: dev.reason });
     await interactReply(interaction, {
-      content: MSG_BOT_DEV_UNCONFIGURED,
+      content: botDevUnconfiguredMessage(locale),
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
   if (interaction.user.id !== dev.devId) {
     await interactReply(interaction, {
-      content: MSG_BOT_DEV_FORBIDDEN,
+      content: botDevForbiddenMessage(locale),
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -99,7 +104,7 @@ async function execute(interaction, ctx) {
   const sub = interaction.options.getSubcommand(true);
   if (sub !== 'remove') {
     await interactReply(interaction, {
-      content: '❌ Sous-commande inconnue.',
+      content: t(locale, 'dev.unknownSubcommand'),
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -109,14 +114,12 @@ async function execute(interaction, ctx) {
   const channelId = parseDiscordSnowflakeId(interaction.options.getString('channel_id', true));
   if (!guildId || !channelId) {
     await interactReply(interaction, {
-      content:
-        '❌ `guild_id` / `channel_id` invalides. Indique des snowflakes Discord (17–22 chiffres).',
+      content: t(locale, 'dev.scrimChannelInvalidIds'),
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
-  // Lookup DB uniquement — aucun fetch Discord du salon
   let existing = null;
   try {
     existing = ctx.stmts.getGuildGameChannelByChannelId.get(guildId, channelId) ?? null;
@@ -127,7 +130,7 @@ async function execute(interaction, ctx) {
       message: err instanceof Error ? err.message : String(err),
     });
     await interactReply(interaction, {
-      content: '❌ Erreur lors de la lecture de la base.',
+      content: t(locale, 'dev.dbReadError'),
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -135,17 +138,15 @@ async function execute(interaction, ctx) {
 
   if (!existing) {
     await interactReply(interaction, {
-      content:
-        `ℹ️ Aucune destination scrim pour guild \`${guildId}\` / channel \`${channelId}\`.`,
+      content: t(locale, 'dev.scrimChannelNone', { guildId, channelId }),
       flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
-  // Sécurité relationnelle : l’entrée lue doit correspondre exactement au couple fourni
   if (String(existing.guild_id) !== guildId || String(existing.channel_id) !== channelId) {
     await interactReply(interaction, {
-      content: '❌ Incohérence DB : la destination ne correspond pas aux IDs fournis.',
+      content: t(locale, 'dev.scrimChannelInconsistency'),
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -160,8 +161,7 @@ async function execute(interaction, ctx) {
 
   if (!removed) {
     await interactReply(interaction, {
-      content:
-        `ℹ️ Aucune destination scrim pour guild \`${guildId}\` / channel \`${channelId}\`.`,
+      content: t(locale, 'dev.scrimChannelNone', { guildId, channelId }),
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -176,11 +176,7 @@ async function execute(interaction, ctx) {
   });
 
   await interactReply(interaction, {
-    content:
-      `✅ Destination retirée.\n` +
-      `• guild_id : \`${guildId}\`\n` +
-      `• channel_id : \`${channelId}\`\n` +
-      `Les prochaines diffusions n’utiliseront plus ce salon.`,
+    content: t(locale, 'dev.scrimChannelRemoved', { guildId, channelId }),
     flags: MessageFlags.Ephemeral,
   });
 }

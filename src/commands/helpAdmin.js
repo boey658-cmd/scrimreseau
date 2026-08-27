@@ -6,16 +6,22 @@ import {
 } from 'discord.js';
 import { getEmbedColorForGame } from '../config/gameEmbedColors.js';
 import { getGuildLocale, t } from '../i18n/index.js';
+import {
+  applyDescriptionLocalizations,
+  slashMeta,
+} from '../i18n/slashLocalizations.js';
 import { assertGuildAdministrator } from '../utils/guildAdministratorGuard.js';
 import { interactReply } from '../utils/interactionDiscord.js';
 
 const EMBED_COLOR = getEmbedColorForGame('');
 
 export const helpAdmin = {
-  data: new SlashCommandBuilder()
-    .setName('helpadmin-scrim')
-    .setDescription('Show ScrimRéseau administration help.')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+  data: applyDescriptionLocalizations(
+    new SlashCommandBuilder()
+      .setName('helpadmin-scrim')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    slashMeta.helpAdminScrim.description,
+  ),
 
   /**
    * @param {import('discord.js').ChatInputCommandInteraction} interaction

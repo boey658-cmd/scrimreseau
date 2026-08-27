@@ -19,11 +19,9 @@ export const SCRIM_EMBED_COLOR_CLOSED_EXPIRED = 0x4f545c;
 /** Ancienne annonce réseau remplacée par un repost (gris foncé — pas « trouvé »). */
 export const SCRIM_EMBED_COLOR_SUPERSEDED = 0x4f545c;
 
-const SCRIM_STATUS_LINE_ACTIVE = '🟢 Recherche en cours';
-const SCRIM_STATUS_LINE_CLOSED_MANUAL = '🔴 Scrim trouvé — indisponible';
-const SCRIM_STATUS_LINE_CLOSED_EXPIRED = '⚫ Scrim expiré — indisponible';
-const SCRIM_STATUS_LINE_SUPERSEDED =
-  '🔴 Ancienne annonce — une nouvelle annonce a été repostée';
+// Status lines FR historiques volontairement SUPPRIMÉES (BOT-I18N-C) :
+// elles étaient passées à buildScrimEmbedWithStatus mais jamais rendues (_statusLine).
+// Ne pas les réintroduire sans affichage réel dans l'embed.
 
 // ---------------------------------------------------------------------------
 // Emojis custom rangs + OP.GG
@@ -363,18 +361,19 @@ export function parseFearlessFromTags(tagsStr) {
 
 /**
  * @param {string | null | undefined} fearless
+ * @param {string} [locale]
  * @returns {string | null} ligne description ou null si absent (legacy) / valeur inconnue
  */
-export function formatFearlessLineForEmbed(fearless) {
+export function formatFearlessLineForEmbed(fearless, locale = 'fr') {
   if (fearless == null) return null;
   if (fearless === FEARLESS_VALUE_OUI) {
-    return `${FEARLESS_LINE_PREFIX} Fearless : Oui`;
+    return `${FEARLESS_LINE_PREFIX} ${t(locale, 'embed.fearlessOui')}`;
   }
   if (fearless === FEARLESS_VALUE_NON) {
-    return `${FEARLESS_LINE_PREFIX} Fearless : Non`;
+    return `${FEARLESS_LINE_PREFIX} ${t(locale, 'embed.fearlessNon')}`;
   }
   if (fearless === FEARLESS_VALUE_NIMPORTE) {
-    return `${FEARLESS_LINE_PREFIX} Fearless : N'importe`;
+    return `${FEARLESS_LINE_PREFIX} ${t(locale, 'embed.fearlessNimporte')}`;
   }
   return null;
 }
@@ -583,11 +582,11 @@ function buildScrimEmbedDescription(payload, options = {}, locale = 'fr') {
 /**
  * @param {ScrimEmbedPayload} payload
  * @param {number} color
- * @param {string} statusLine
  * @param {{ includeContactHints?: boolean }} [options]
+ * @param {string} [locale]
  * @returns {EmbedBuilder}
  */
-function buildScrimEmbedWithStatus(payload, color, _statusLine, options = {}, locale = 'fr') {
+function buildScrimEmbedWithStatus(payload, color, options = {}, locale = 'fr') {
   return new EmbedBuilder()
     .setColor(color)
     .setDescription(buildScrimEmbedDescription(payload, options, locale));
@@ -596,6 +595,7 @@ function buildScrimEmbedWithStatus(payload, color, _statusLine, options = {}, lo
 /**
  * Édition Discord : vague réseau remplacée par un repost (scrim toujours actif en DB).
  * @param {Record<string, unknown>} dbRow ligne `scrim_posts`
+ * @param {string} [locale]
  * @returns {{ content: null, embeds: EmbedBuilder[], components: [] }}
  */
 export function buildScrimSupersededMessageEditOptions(dbRow, locale = 'fr') {
@@ -606,7 +606,6 @@ export function buildScrimSupersededMessageEditOptions(dbRow, locale = 'fr') {
       buildScrimEmbedWithStatus(
         payload,
         SCRIM_EMBED_COLOR_SUPERSEDED,
-        SCRIM_STATUS_LINE_SUPERSEDED,
         {},
         locale,
       ),
@@ -619,6 +618,7 @@ export function buildScrimSupersededMessageEditOptions(dbRow, locale = 'fr') {
  * Édition Discord après fermeture : embed coloré + statut (conserve les infos utiles).
  * @param {'closed_manual' | 'closed_expired'} status
  * @param {Record<string, unknown>} dbRow ligne `scrim_posts` après fermeture
+ * @param {string} [locale]
  * @returns {{ content: null, embeds: EmbedBuilder[], components: [] }}
  */
 export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr') {
@@ -631,7 +631,6 @@ export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr')
         buildScrimEmbedWithStatus(
           payload,
           SCRIM_EMBED_COLOR_CLOSED_MANUAL,
-          SCRIM_STATUS_LINE_CLOSED_MANUAL,
           {},
           locale,
         ),
@@ -647,7 +646,6 @@ export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr')
         buildScrimEmbedWithStatus(
           payload,
           SCRIM_EMBED_COLOR_CLOSED_EXPIRED,
-          SCRIM_STATUS_LINE_CLOSED_EXPIRED,
           {},
           locale,
         ),
@@ -660,13 +658,13 @@ export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr')
 
 /**
  * @param {ScrimEmbedPayload} payload
+ * @param {string} [locale]
  * @returns {EmbedBuilder}
  */
 export function buildScrimEmbed(payload, locale = 'fr') {
   return buildScrimEmbedWithStatus(
     payload,
     SCRIM_EMBED_COLOR_ACTIVE,
-    SCRIM_STATUS_LINE_ACTIVE,
     { includeContactHints: true },
     locale,
   );

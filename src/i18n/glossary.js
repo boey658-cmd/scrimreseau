@@ -1,0 +1,98 @@
+/**
+ * BOT-I18N-E — glossaire terminologique interne (pas de runtime).
+ * Référence produit pour ES/DE/IT/PL/PT — éviter les variations incohérentes.
+ *
+ * Discord slash : textes `pt` (pt-PT) servis sous locale API `pt-BR`
+ * car Discord n’expose pas `pt-PT`.
+ */
+
+export const I18N_GLOSSARY = Object.freeze({
+  note: {
+    ptDiscordConstraint:
+      'Contenu pt-PT uniquement ; payload Discord slash utilise Locale.PortugueseBR (pt-BR).',
+  },
+  shared: Object.freeze({
+    scrim: 'scrim (conservé partout — terme gaming)',
+    fearless: 'Fearless (mode draft — non traduit)',
+    elo: 'Elo / LP (conservé)',
+    brand: 'ScrimRéseau',
+  }),
+  es: Object.freeze({
+    server: 'servidor',
+    channel: 'canal',
+    role: 'rol',
+    structure: 'estructura',
+    network: 'red',
+    search: 'búsqueda',
+    publish: 'publicar / difundir',
+    moderation: 'moderación',
+    report: 'denuncia / reportar',
+    config: 'configuración',
+    close: 'cerrar',
+    expire: 'caducar',
+    repost: 'republicar',
+  }),
+  de: Object.freeze({
+    server: 'Server',
+    channel: 'Kanal',
+    role: 'Rolle',
+    structure: 'Struktur / Organisation (partenaire)',
+    network: 'Netzwerk',
+    search: 'Suche / Scrim-Suche',
+    publish: 'veröffentlichen',
+    moderation: 'Moderation',
+    report: 'melden / Meldung',
+    config: 'Konfiguration',
+    close: 'schließen',
+    expire: 'ablaufen',
+    repost: 'erneut posten',
+  }),
+  it: Object.freeze({
+    server: 'server',
+    channel: 'canale',
+    role: 'ruolo',
+    structure: 'struttura',
+    network: 'rete',
+    search: 'ricerca',
+    publish: 'pubblicare',
+    moderation: 'moderazione',
+    report: 'segnalazione',
+    config: 'configurazione',
+    close: 'chiudere',
+    expire: 'scadere',
+    repost: 'ripubblicare',
+  }),
+  pl: Object.freeze({
+    server: 'serwer',
+    channel: 'kanał',
+    role: 'rola',
+    structure: 'struktura',
+    network: 'sieć',
+    search: 'wyszukiwanie / poszukiwanie',
+    publish: 'opublikować',
+    moderation: 'moderacja',
+    report: 'zgłoszenie',
+    config: 'konfiguracja',
+    close: 'zamknąć',
+    expire: 'wygasnąć',
+    repost: 'opublikować ponownie',
+  }),
+  pt: Object.freeze({
+    dialect: 'pt-PT (européen) — jamais pt-BR',
+    user: 'utilizador (pas usuário)',
+    server: 'servidor',
+    channel: 'canal',
+    role: 'cargo (Discord) / função si contexte générique',
+    structure: 'estrutura',
+    network: 'rede',
+    search: 'pesquisa / procura',
+    publish: 'publicar / difundir',
+    moderation: 'moderação',
+    report: 'denúncia',
+    config: 'configuração',
+    close: 'fechar',
+    expire: 'expirar',
+    repost: 'republicar',
+    address: 'tu / tens / podes (pas você)',
+  }),
+});

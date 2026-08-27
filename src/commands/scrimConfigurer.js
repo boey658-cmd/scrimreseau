@@ -43,6 +43,10 @@ import {
 } from '../utils/guildScrimReceptionGate.js';
 import { logger } from '../utils/logger.js';
 import { getGuildLocale, createTranslator, t } from '../i18n/index.js';
+import {
+  applyDescriptionLocalizations,
+  slashMeta,
+} from '../i18n/slashLocalizations.js';
 
 // ---------------------------------------------------------------------------
 // Constantes
@@ -496,17 +500,27 @@ async function handleComponent(i, guild, guildId, ctx, uid, collector, T = (k) =
     return i.update({ embeds: [buildSalonsEmbed(config, guild, statusMsg, T)], components: buildSalonsComponents(uid, T) });
   }
 
-  // ── Salon des commandes — set ────────────────────────────────────────
+  // ── Salon des commandes — set (fetch live si hors cache) ─────────────
   if (action === 'chan_cmd') {
     const channelId = i.values[0];
-    const cachedCh = guild.channels.cache.get(channelId);
+    await i.deferUpdate();
+    let channel = guild.channels.cache.get(channelId) ?? null;
+    if (!channel) {
+      channel = await guild.channels.fetch(channelId).catch(() => null);
+    }
+    if (!channel) {
+      const config = readConfig(guildId, ctx.stmts);
+      return i.editReply({
+        embeds: [buildSalonsEmbed(config, guild, T('scrimConfig.chanAnnNotFound'), T)],
+        components: buildSalonsComponents(uid, T),
+      });
+    }
     if (
-      cachedCh
-      && cachedCh.type !== ChannelType.GuildText
-      && cachedCh.type !== ChannelType.GuildAnnouncement
+      channel.type !== ChannelType.GuildText
+      && channel.type !== ChannelType.GuildAnnouncement
     ) {
       const config = readConfig(guildId, ctx.stmts);
-      return i.update({
+      return i.editReply({
         embeds: [buildSalonsEmbed(config, guild, T('scrimConfig.chanCmdWrongType'), T)],
         components: buildSalonsComponents(uid, T),
       });
@@ -514,7 +528,7 @@ async function handleComponent(i, guild, guildId, ctx, uid, collector, T = (k) =
     ctx.stmts.upsertScrimUsageChannel.run({ guild_id: guildId, channel_id: channelId });
     logger.event('scrimConfigurer.command_channel.set', { guild_id: guildId, channel_id: channelId, user_id: i.user.id });
     const config = readConfig(guildId, ctx.stmts);
-    return i.update({
+    return i.editReply({
       embeds: [buildSalonsEmbed(config, guild, T('scrimConfig.chanCmdSet', { channel: `<#${channelId}>` }), T)],
       components: buildSalonsComponents(uid, T),
     });
@@ -646,10 +660,12 @@ async function handleComponent(i, guild, guildId, ctx, uid, collector, T = (k) =
 export { handleComponent as _handleComponentForTest };
 
 export const scrimConfigurer = {
-  data: new SlashCommandBuilder()
-    .setName('scrim-config')
-    .setDescription('Configure ScrimRéseau for this server.')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+  data: applyDescriptionLocalizations(
+    new SlashCommandBuilder()
+      .setName('scrim-config')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    slashMeta.scrimConfig.description,
+  ),
 
   /**
    * @param {import('discord.js').ChatInputCommandInteraction} interaction

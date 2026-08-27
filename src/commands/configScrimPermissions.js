@@ -1,4 +1,6 @@
 import { MessageFlags } from 'discord.js';
+import { fr } from '../i18n/fr.js';
+import { getGuildLocale, t } from '../i18n/index.js';
 import {
   interactDeferReply,
   interactEditReply,
@@ -6,37 +8,22 @@ import {
 } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
 
-const MSG_OK_PREFIX = '✅ Configuration mise à jour.';
-const MSG_OK_SUFFIX =
-  '⚠️ Cette configuration s’applique uniquement à ce serveur.';
-
-const MSG_NEED_GUILD =
-  '❌ Cette commande doit être utilisée sur un serveur.';
-
-const MSG_ROLES_MODE_NEED_ROLES =
-  '❌ Tu dois sélectionner au moins un rôle.';
-
-const MSG_ROLE_NOT_IN_GUILD =
-  '❌ Un ou plusieurs rôles n’appartiennent pas à ce serveur.';
-
-const MSG_DB_ERROR =
-  '❌ Impossible d’enregistrer la configuration. Réessayez plus tard.';
-
 export const SCRIM_ALLOWED_ROLES_MAX = 5;
 
-export const MSG_MAX_ROLES =
-  'Vous ne pouvez pas configurer plus de 5 rôles autorisés.';
-
-export const MSG_ROLE_ALREADY_ALLOWED = 'Ce rôle est déjà autorisé.';
+/** @deprecated Prefer t(locale, 'permissions.maxRoles') */
+export const MSG_MAX_ROLES = fr['permissions.maxRoles'];
+/** @deprecated Prefer t(locale, 'permissions.roleAlreadyAllowed') */
+export const MSG_ROLE_ALREADY_ALLOWED = fr['permissions.roleAlreadyAllowed'];
 
 /**
  * @param {string[]} roleIds
+ * @param {string} locale
  * @returns {string}
  */
-function formatRoleIdsAllowlist(roleIds) {
+function formatRoleIdsAllowlist(roleIds, locale) {
   if (!roleIds.length) return '';
   const lines = roleIds.map((id) => `- <@&${id}>`);
-  return `\n\nRôles autorisés :\n${lines.join('\n')}`;
+  return `\n\n${t(locale, 'permissions.allowedRolesHeader')}\n${lines.join('\n')}`;
 }
 
 /**
@@ -88,6 +75,28 @@ export function transactionSetEveryoneMode(ctx, guildId) {
 }
 
 /**
+ * Remplace les rôles autorisés + mode roles (transaction sync courte).
+ * Aucun await réseau à l'intérieur.
+ *
+ * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']>, db: import('better-sqlite3').Database }} ctx
+ * @param {string} guildId
+ * @param {string[]} roleIds
+ */
+export function transactionReplaceScrimAllowedRoles(ctx, guildId, roleIds) {
+  const trx = ctx.db.transaction(() => {
+    ctx.stmts.deleteScrimAllowedRoles.run(guildId);
+    for (const roleId of roleIds) {
+      ctx.stmts.insertScrimAllowedRole.run(guildId, roleId);
+    }
+    ctx.stmts.upsertScrimPermissionMode.run({
+      guild_id: guildId,
+      mode: 'roles',
+    });
+  });
+  trx();
+}
+
+/**
  * Retire la restriction par rôles : retour au défaut everyone.
  * @param {import('discord.js').ChatInputCommandInteraction} interaction
  * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']>, db: import('better-sqlite3').Database }} ctx
@@ -96,10 +105,11 @@ export async function executeConfigScrimPermissionsRemoveCore(
   interaction,
   ctx,
 ) {
+  const locale = getGuildLocale(interaction.guildId, ctx.stmts);
   try {
     if (!interaction.inGuild() || !interaction.guild) {
       await interactReply(interaction, {
-        content: MSG_NEED_GUILD,
+        content: t(locale, 'generic.guildOnly'),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -117,7 +127,7 @@ export async function executeConfigScrimPermissionsRemoveCore(
         message: err instanceof Error ? err.message : String(err),
         stack: err instanceof Error ? err.stack : undefined,
       });
-      await interactEditReply(interaction, { content: MSG_DB_ERROR });
+      await interactEditReply(interaction, { content: t(locale, 'permissions.dbError') });
       return;
     }
 
@@ -125,10 +135,10 @@ export async function executeConfigScrimPermissionsRemoveCore(
       guild_id: guildId,
       mode: 'everyone',
       user_id: interaction.user.id,
-      via: 'remove',
     });
+
     await interactEditReply(interaction, {
-      content: `${MSG_OK_PREFIX}\n\n${MSG_OK_SUFFIX}`,
+      content: `${t(locale, 'permissions.okPrefix')}\n\n${t(locale, 'permissions.okSuffix')}`,
     });
   } catch (err) {
     logger.error('config-scrim-permissions — remove execute', {
@@ -136,18 +146,17 @@ export async function executeConfigScrimPermissionsRemoveCore(
       stack: err instanceof Error ? err.stack : undefined,
     });
     try {
-      if (interaction.deferred) {
-        await interactEditReply(interaction, { content: MSG_DB_ERROR });
-      } else if (!interaction.replied) {
+      if (interaction.deferred || interaction.replied) {
+        await interactEditReply(interaction, { content: t(locale, 'permissions.dbError') });
+      } else {
         await interactReply(interaction, {
-          content: MSG_DB_ERROR,
+          content: t(locale, 'permissions.dbError'),
           flags: MessageFlags.Ephemeral,
         });
       }
     } catch (replyErr) {
       logger.error('config-scrim-permissions — remove réponse impossible', {
-        message:
-          replyErr instanceof Error ? replyErr.message : String(replyErr),
+        message: replyErr instanceof Error ? replyErr.message : String(replyErr),
       });
     }
   }
@@ -158,10 +167,11 @@ export async function executeConfigScrimPermissionsRemoveCore(
  * @param {{ stmts: ReturnType<import('../database/db.js')['prepareStatements']>, db: import('better-sqlite3').Database }} ctx
  */
 export async function executeConfigScrimPermissionsCore(interaction, ctx) {
+  const locale = getGuildLocale(interaction.guildId, ctx.stmts);
   try {
     if (!interaction.inGuild() || !interaction.guild) {
       await interactReply(interaction, {
-        content: MSG_NEED_GUILD,
+        content: t(locale, 'generic.guildOnly'),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -171,6 +181,7 @@ export async function executeConfigScrimPermissionsCore(interaction, ctx) {
 
     const guildId = interaction.guildId;
     const mode = interaction.options.getString('mode', true);
+    const role = interaction.options.getRole('roles');
 
     if (mode === 'everyone') {
       try {
@@ -181,61 +192,60 @@ export async function executeConfigScrimPermissionsCore(interaction, ctx) {
           message: err instanceof Error ? err.message : String(err),
           stack: err instanceof Error ? err.stack : undefined,
         });
-        await interactEditReply(interaction, { content: MSG_DB_ERROR });
+        await interactEditReply(interaction, { content: t(locale, 'permissions.dbError') });
         return;
       }
-
       logger.info('config-scrim-permissions', {
         guild_id: guildId,
         mode: 'everyone',
         user_id: interaction.user.id,
       });
       await interactEditReply(interaction, {
-        content: `${MSG_OK_PREFIX}\n\n${MSG_OK_SUFFIX}`,
+        content: `${t(locale, 'permissions.okPrefix')}\n\n${t(locale, 'permissions.okSuffix')}`,
       });
       return;
     }
 
-    const role = interaction.options.getRole('roles');
     if (!role) {
-      await interactEditReply(interaction, { content: MSG_ROLES_MODE_NEED_ROLES });
+      await interactEditReply(interaction, {
+        content: t(locale, 'permissions.rolesModeNeedRoles'),
+      });
       return;
     }
 
-    const gid = interaction.guild.id;
-    if (role.guild.id !== gid) {
-      await interactEditReply(interaction, { content: MSG_ROLE_NOT_IN_GUILD });
+    if (role.guild?.id !== guildId) {
+      await interactEditReply(interaction, {
+        content: t(locale, 'permissions.roleNotInGuild'),
+      });
       return;
     }
 
-    let existingRows;
+    /** @type {string[]} */
+    let existingRoleIds;
     try {
-      existingRows = ctx.stmts.listScrimAllowedRoles.all(guildId);
+      existingRoleIds = ctx.stmts
+        .listScrimAllowedRoles.all(guildId)
+        .map((r) => String(r.role_id));
     } catch (err) {
       logger.error('config-scrim-permissions — lecture rôles existants', {
         guild_id: guildId,
         message: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
       });
-      await interactEditReply(interaction, { content: MSG_DB_ERROR });
+      await interactEditReply(interaction, { content: t(locale, 'permissions.dbError') });
       return;
     }
 
-    const existingIds = existingRows.map((r) => r.role_id);
-    const validation = validateScrimAllowedRoleAppend(existingIds, role.id);
-    if (!validation.ok) {
-      const content =
-        validation.reason === 'duplicate'
-          ? MSG_ROLE_ALREADY_ALLOWED
-          : MSG_MAX_ROLES;
+    const check = validateScrimAllowedRoleAppend(existingRoleIds, role.id);
+    if (!check.ok) {
+      const msg = check.reason === 'duplicate'
+        ? t(locale, 'permissions.roleAlreadyAllowed')
+        : t(locale, 'permissions.maxRoles');
       logger.info('config-scrim-permissions — refus ajout rôle', {
         guild_id: guildId,
+        reason: check.reason,
         role_id: role.id,
-        reason: validation.reason,
-        existing_count: existingIds.length,
-        user_id: interaction.user.id,
       });
-      await interactEditReply(interaction, { content });
+      await interactEditReply(interaction, { content: msg });
       return;
     }
 
@@ -247,22 +257,22 @@ export async function executeConfigScrimPermissionsCore(interaction, ctx) {
         message: err instanceof Error ? err.message : String(err),
         stack: err instanceof Error ? err.stack : undefined,
       });
-      await interactEditReply(interaction, { content: MSG_DB_ERROR });
+      await interactEditReply(interaction, { content: t(locale, 'permissions.dbError') });
       return;
     }
 
+    /** @type {string[]} */
     let allRoleIds;
     try {
-      allRoleIds = ctx.stmts.listScrimAllowedRoles
-        .all(guildId)
-        .map((r) => r.role_id);
+      allRoleIds = ctx.stmts
+        .listScrimAllowedRoles.all(guildId)
+        .map((r) => String(r.role_id));
     } catch (err) {
       logger.error('config-scrim-permissions — lecture rôles après ajout', {
         guild_id: guildId,
         message: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
       });
-      await interactEditReply(interaction, { content: MSG_DB_ERROR });
+      await interactEditReply(interaction, { content: t(locale, 'permissions.dbError') });
       return;
     }
 
@@ -270,11 +280,11 @@ export async function executeConfigScrimPermissionsCore(interaction, ctx) {
       guild_id: guildId,
       mode: 'roles',
       role_count: allRoleIds.length,
-      added_role_id: role.id,
       user_id: interaction.user.id,
     });
+
     await interactEditReply(interaction, {
-      content: `${MSG_OK_PREFIX}${formatRoleIdsAllowlist(allRoleIds)}\n\n${MSG_OK_SUFFIX}`,
+      content: `${t(locale, 'permissions.okPrefix')}${formatRoleIdsAllowlist(allRoleIds, locale)}\n\n${t(locale, 'permissions.okSuffix')}`,
     });
   } catch (err) {
     logger.error('config-scrim-permissions — execute', {
@@ -282,18 +292,17 @@ export async function executeConfigScrimPermissionsCore(interaction, ctx) {
       stack: err instanceof Error ? err.stack : undefined,
     });
     try {
-      if (interaction.deferred) {
-        await interactEditReply(interaction, { content: MSG_DB_ERROR });
-      } else if (!interaction.replied) {
+      if (interaction.deferred || interaction.replied) {
+        await interactEditReply(interaction, { content: t(locale, 'permissions.dbError') });
+      } else {
         await interactReply(interaction, {
-          content: MSG_DB_ERROR,
+          content: t(locale, 'permissions.dbError'),
           flags: MessageFlags.Ephemeral,
         });
       }
     } catch (replyErr) {
       logger.error('config-scrim-permissions — impossible de répondre', {
-        message:
-          replyErr instanceof Error ? replyErr.message : String(replyErr),
+        message: replyErr instanceof Error ? replyErr.message : String(replyErr),
       });
     }
   }

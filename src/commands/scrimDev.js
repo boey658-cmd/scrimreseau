@@ -1,4 +1,9 @@
 import { MessageFlags, SlashCommandBuilder } from 'discord.js';
+import { getGuildLocale, t } from '../i18n/index.js';
+import {
+  applyDescriptionLocalizations,
+  slashMeta,
+} from '../i18n/slashLocalizations.js';
 import { interactReply } from '../utils/interactionDiscord.js';
 import { executeBlacklistCore } from './blacklist.js';
 import { executeScrimDevGuildAccessCore } from './scrimDevGuildAccess.js';
@@ -7,17 +12,14 @@ import { executeScrimDevHealthCore } from './scrimDevHealth.js';
 import { executeScrimDevReceptionListCore } from './scrimDevReceptionList.js';
 import { executeUnblacklistCore } from './unblacklist.js';
 
-const MSG_DURATION_REQUISE =
-  '❌ Indique une **durée** pour ajouter à la blacklist.';
-
-const data = new SlashCommandBuilder()
-  .setName('scrim-dev')
-  .setDescription('Outils de modération globale du bot')
-  .addSubcommand((sub) =>
-    sub
-      .setName('health')
-      .setDescription('État de santé du bot (dev uniquement)'),
-  )
+const data = applyDescriptionLocalizations(
+  new SlashCommandBuilder()
+    .setName('scrim-dev')
+    .addSubcommand((sub) =>
+      sub
+        .setName('health')
+        .setDescription('État de santé du bot (dev uniquement)'),
+    )
   .addSubcommand((sub) =>
     sub
       .setName('reception-list')
@@ -117,7 +119,9 @@ const data = new SlashCommandBuilder()
               .setRequired(false),
           ),
       ),
-  );
+  ),
+  slashMeta.scrimDev.description,
+);
 
 export const scrimDev = {
   data,
@@ -147,8 +151,9 @@ export const scrimDev = {
       if (action === 'add') {
         const duration = interaction.options.getString('duration');
         if (!duration?.trim()) {
+          const locale = getGuildLocale(interaction.guildId, ctx.stmts);
           await interactReply(interaction, {
-            content: MSG_DURATION_REQUISE,
+            content: t(locale, 'dev.blacklistNeedDuration'),
             flags: MessageFlags.Ephemeral,
           });
           return;

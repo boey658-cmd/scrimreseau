@@ -694,16 +694,57 @@ function migratePlayerSearchInit(db) {
  * Aucune ligne créée automatiquement pour les guildes existantes (fallback = français).
  * @param {import('better-sqlite3').Database} db
  */
+const GUILD_LANGUAGES_CHECK_7 =
+  "language IN ('fr','en','es','de','it','pl','pt')";
+
 function migrateGuildLanguages(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS guild_languages (
       guild_id TEXT PRIMARY KEY NOT NULL,
-      language TEXT NOT NULL CHECK(language IN ('fr', 'en'))
+      language TEXT NOT NULL CHECK(language IN ('fr','en','es','de','it','pl','pt'))
     )
   `);
   logger.info('Migration SQLite', {
     change: 'guild_languages',
     action: 'CREATE_TABLE_IF_NOT_EXISTS',
+  });
+}
+
+/**
+ * Élargit le CHECK guild_languages fr/en → 7 locales (SQLite : rebuild table).
+ * Idempotent : no-op si le schéma contient déjà le CHECK 7 locales.
+ * Préserve toutes les rows existantes. Aucun await réseau.
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateGuildLanguagesExpandLocales(db) {
+  const row = db
+    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'guild_languages'`)
+    .get();
+  const sql = typeof row?.sql === 'string' ? row.sql : '';
+  if (!sql) {
+    migrateGuildLanguages(db);
+    return;
+  }
+  if (sql.includes("'es'") && sql.includes("'pt'") && sql.includes("'de'")) {
+    return;
+  }
+
+  const run = db.transaction(() => {
+    db.exec(`
+      CREATE TABLE guild_languages_new (
+        guild_id TEXT PRIMARY KEY NOT NULL,
+        language TEXT NOT NULL CHECK(${GUILD_LANGUAGES_CHECK_7})
+      );
+      INSERT INTO guild_languages_new (guild_id, language)
+        SELECT guild_id, language FROM guild_languages;
+      DROP TABLE guild_languages;
+      ALTER TABLE guild_languages_new RENAME TO guild_languages;
+    `);
+  });
+  run();
+  logger.info('Migration SQLite', {
+    change: 'guild_languages',
+    action: 'EXPAND_CHECK_7_LOCALES',
   });
 }
 
@@ -902,6 +943,7 @@ export function getDb() {
   migrateStructureDiscordLinks(dbInstance);
   migratePlayerSearchInit(dbInstance);
   migrateGuildLanguages(dbInstance);
+  migrateGuildLanguagesExpandLocales(dbInstance);
   migrateScrimLifecycleOperations(dbInstance);
   migrateDiscordEditRetryLifecycleOperationId(dbInstance);
   migrateScrimLifecycleOperationsPhase3c(dbInstance);

@@ -1,11 +1,12 @@
 /**
- * /language — Configure la langue du bot pour ce serveur (fr ou en).
+ * /language — Configure la langue du bot pour ce serveur (7 locales).
  *
  * Règles :
  *  - Réservé aux administrateurs du serveur.
  *  - Utilisable même si le serveur n'a pas reçu la validation de réception scrim.
  *  - Réponse éphémère.
  *  - Confirmation dans la nouvelle langue.
+ *  - Ne jamais utiliser interaction.locale pour les réponses bot.
  */
 
 import {
@@ -13,25 +14,44 @@ import {
   PermissionFlagsBits,
   SlashCommandBuilder,
 } from 'discord.js';
-import { getGuildLocale, normalizeLocale, t } from '../i18n/index.js';
+import {
+  ENABLED_GUILD_LOCALES,
+  getGuildLocale,
+  normalizeEnabledGuildLocale,
+  t,
+} from '../i18n/index.js';
+import {
+  applyDescriptionLocalizations,
+  applyOptionLocalizations,
+  localizedChoice,
+  slashMeta,
+} from '../i18n/slashLocalizations.js';
 import { interactReply } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
 
+const meta = slashMeta.language;
+
 export const language = {
-  data: new SlashCommandBuilder()
-    .setName('language')
-    .setDescription('Set the ScrimRéseau language for this server.')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addStringOption((opt) =>
-      opt
-        .setName('language')
-        .setDescription('Select the language used by the bot on this server.')
-        .setRequired(true)
-        .addChoices(
-          { name: 'Français', value: 'fr' },
-          { name: 'English', value: 'en' },
+  data: applyDescriptionLocalizations(
+    new SlashCommandBuilder()
+      .setName('language')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addStringOption((opt) =>
+        applyOptionLocalizations(
+          opt.setName('language').setRequired(true).addChoices(
+            localizedChoice('fr', meta.choices.fr),
+            localizedChoice('en', meta.choices.en),
+            localizedChoice('es', meta.choices.es),
+            localizedChoice('de', meta.choices.de),
+            localizedChoice('it', meta.choices.it),
+            localizedChoice('pl', meta.choices.pl),
+            localizedChoice('pt', meta.choices.pt),
+          ),
+          meta.options.language,
         ),
-    ),
+      ),
+    meta.description,
+  ),
 
   /**
    * @param {import('discord.js').ChatInputCommandInteraction} interaction
@@ -61,7 +81,18 @@ export const language = {
     }
 
     const rawLang = interaction.options.getString('language', true);
-    const newLocale = normalizeLocale(rawLang);
+    if (
+      typeof rawLang !== 'string' ||
+      !ENABLED_GUILD_LOCALES.includes(/** @type {any} */ (rawLang))
+    ) {
+      const locale = getGuildLocale(guildId, ctx.stmts);
+      await interactReply(interaction, {
+        content: t(locale, 'language.invalidChoice'),
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    const newLocale = normalizeEnabledGuildLocale(rawLang);
 
     // ── Sauvegarde ───────────────────────────────────────────────────────
     try {
@@ -88,9 +119,8 @@ export const language = {
     });
 
     // ── Confirmation dans la NOUVELLE langue ────────────────────────────
-    const confirmKey = newLocale === 'en' ? 'language.successEn' : 'language.successFr';
     await interactReply(interaction, {
-      content: t(newLocale, confirmKey),
+      content: t(newLocale, 'language.success'),
       flags: MessageFlags.Ephemeral,
     });
   },

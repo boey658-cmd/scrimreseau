@@ -1,17 +1,28 @@
 import http from 'node:http';
 import { extractBearerToken, verifyInternalHttpToken } from './auth.js';
 import { INTERNAL_HTTP_HOST, isInternalHttpEnabled, parseInternalHttpConfig } from './config.js';
+import {
+  handleGuildConfigPatch,
+  isConfigWriteError,
+  readJsonBodyBounded,
+} from './configPatch.js';
+import { fetchGuildConfig } from './configQueries.js';
 import { parseGuildIdParam } from './guildId.js';
+import { handleInstallationStatus } from './installationStatus.js';
+import { fetchNetworkOverview } from './networkQueries.js';
 import { fetchGuildOverview, isSqliteBusyError } from './overviewQueries.js';
 
 const OVERVIEW_ROUTE = /^\/internal\/guilds\/([^/]+)\/overview\/?$/;
+const CONFIG_ROUTE = /^\/internal\/guilds\/([^/]+)\/config\/?$/;
+const NETWORK_OVERVIEW_ROUTE = /^\/internal\/network\/overview\/?$/;
+const INSTALLATION_STATUS_ROUTE = /^\/internal\/guilds\/installation-status\/?$/;
 
 /**
  * @param {{
- *   client?: { guilds?: { cache?: { has: (id: string) => boolean } } } | null,
+ *   client?: import('discord.js').Client | null,
  *   db: import('better-sqlite3').Database,
+ *   stmts?: ReturnType<import('../database/db.js')['prepareStatements']>,
  *   config?: ReturnType<typeof parseInternalHttpConfig>,
- *   now?: () => number,
  * }} deps
  */
 export function createInternalHttpRequestListener(deps) {
@@ -28,6 +39,18 @@ export function createInternalHttpRequestListener(deps) {
    * @param {import('node:http').ServerResponse} res
    */
   function listener(req, res) {
+    void handleRequest(req, res).catch(() => {
+      if (!res.headersSent) {
+        sendJson(res, 500, { error: 'INTERNAL_ERROR' });
+      }
+    });
+  }
+
+  /**
+   * @param {import('node:http').IncomingMessage} req
+   * @param {import('node:http').ServerResponse} res
+   */
+  async function handleRequest(req, res) {
     if (!acceptingRequests) {
       sendJson(res, 503, { error: 'service_unavailable' });
       return;
@@ -36,7 +59,42 @@ export function createInternalHttpRequestListener(deps) {
     const method = req.method ?? 'GET';
     const pathname = normalizePath(req.url);
 
-    if (method !== 'GET') {
+    const token = extractBearerToken(req.headers.authorization);
+    if (!token || !verifyInternalHttpToken(token, config.token)) {
+      // Auth avant 405 pour ne pas fuiter l'existence de routes sans bearer
+      // (sauf qu'on veut 401 même pour PATCH sans token)
+      sendJson(res, 401, { error: 'unauthorized' });
+      return;
+    }
+
+    if (method === 'GET') {
+      if (INSTALLATION_STATUS_ROUTE.test(pathname)) {
+        sendJson(res, 405, { error: 'method_not_allowed' });
+        return;
+      }
+      if (NETWORK_OVERVIEW_ROUTE.test(pathname)) {
+        handleNetworkOverview(deps, res);
+        return;
+      }
+      const overviewMatch = OVERVIEW_ROUTE.exec(pathname);
+      if (overviewMatch) {
+        handleOverview(deps, res, overviewMatch[1]);
+        return;
+      }
+      const configMatch = CONFIG_ROUTE.exec(pathname);
+      if (configMatch) {
+        handleConfigGet(deps, res, configMatch[1]);
+        return;
+      }
+      sendJson(res, 404, { error: 'not_found' });
+      return;
+    }
+
+    if (method === 'POST') {
+      if (INSTALLATION_STATUS_ROUTE.test(pathname)) {
+        await handleInstallationStatusPost(deps, req, res);
+        return;
+      }
       if (matchesKnownInternalRoute(pathname)) {
         sendJson(res, 405, { error: 'method_not_allowed' });
         return;
@@ -45,43 +103,25 @@ export function createInternalHttpRequestListener(deps) {
       return;
     }
 
-    const token = extractBearerToken(req.headers.authorization);
-    if (!token || !verifyInternalHttpToken(token, config.token)) {
-      sendJson(res, 401, { error: 'unauthorized' });
-      return;
-    }
-
-    const overviewMatch = OVERVIEW_ROUTE.exec(pathname);
-    if (!overviewMatch) {
-      sendJson(res, 404, { error: 'not_found' });
-      return;
-    }
-
-    const guildId = parseGuildIdParam(decodeURIComponent(overviewMatch[1]));
-    if (!guildId) {
-      sendJson(res, 400, { error: 'invalid_guild_id' });
-      return;
-    }
-
-    try {
-      const stats = fetchGuildOverview(deps.db, guildId);
-      const bot_installed = Boolean(deps.client?.guilds?.cache?.has(guildId));
-
-      sendJson(res, 200, {
-        guild_id: guildId,
-        bot_installed,
-        configured: stats.configured,
-        published_count: stats.published_count,
-        closed_count: stats.closed_count,
-        recent: stats.recent,
-      });
-    } catch (err) {
-      if (isSqliteBusyError(err)) {
-        sendJson(res, 503, { error: 'service_unavailable' });
+    if (method === 'PATCH') {
+      const configMatch = CONFIG_ROUTE.exec(pathname);
+      if (!configMatch) {
+        if (matchesKnownInternalRoute(pathname)) {
+          sendJson(res, 405, { error: 'method_not_allowed' });
+          return;
+        }
+        sendJson(res, 404, { error: 'not_found' });
         return;
       }
-      sendJson(res, 500, { error: 'internal_error' });
+      await handleConfigPatch(deps, req, res, configMatch[1]);
+      return;
     }
+
+    if (matchesKnownInternalRoute(pathname)) {
+      sendJson(res, 405, { error: 'method_not_allowed' });
+      return;
+    }
+    sendJson(res, 404, { error: 'not_found' });
   }
 
   listener.stopAccepting = () => {
@@ -89,6 +129,147 @@ export function createInternalHttpRequestListener(deps) {
   };
 
   return listener;
+}
+
+/**
+ * @param {{
+ *   client?: import('discord.js').Client | null,
+ *   db: import('better-sqlite3').Database,
+ *   stmts?: ReturnType<import('../database/db.js')['prepareStatements']>,
+ * }} deps
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @param {string} rawGuildId
+ */
+async function handleConfigPatch(deps, req, res, rawGuildId) {
+  const guildId = parseGuildIdParam(decodeURIComponent(rawGuildId));
+  if (!guildId) {
+    sendJson(res, 400, { error: 'VALIDATION_ERROR' });
+    return;
+  }
+
+  try {
+    const body = await readJsonBodyBounded(req);
+    const result = await handleGuildConfigPatch({
+      client: /** @type {import('discord.js').Client} */ (deps.client),
+      db: deps.db,
+      stmts: deps.stmts,
+      guildId,
+      body,
+    });
+    sendJson(res, 200, result.config);
+  } catch (err) {
+    if (isConfigWriteError(err)) {
+      sendJson(res, err.status, { error: err.code });
+      return;
+    }
+    if (isSqliteBusyError(err)) {
+      sendJson(res, 503, { error: 'BOT_BUSY' });
+      return;
+    }
+    sendJson(res, 500, { error: 'INTERNAL_ERROR' });
+  }
+}
+
+/**
+ * @param {{
+ *   client?: { guilds?: { cache?: { has: (id: string) => boolean } } } | null,
+ * }} deps
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ */
+async function handleInstallationStatusPost(deps, req, res) {
+  try {
+    const body = await readJsonBodyBounded(req);
+    const payload = handleInstallationStatus({
+      client: deps.client,
+      body,
+    });
+    sendJson(res, 200, payload);
+  } catch (err) {
+    if (isConfigWriteError(err)) {
+      sendJson(res, err.status, { error: err.code });
+      return;
+    }
+    sendJson(res, 500, { error: 'INTERNAL_ERROR' });
+  }
+}
+
+/**
+ * @param {{
+ *   client?: { guilds?: { cache?: { has: (id: string) => boolean } } } | null,
+ *   db: import('better-sqlite3').Database,
+ * }} deps
+ * @param {import('node:http').ServerResponse} res
+ * @param {string} rawGuildId
+ */
+function handleOverview(deps, res, rawGuildId) {
+  const guildId = parseGuildIdParam(decodeURIComponent(rawGuildId));
+  if (!guildId) {
+    sendJson(res, 400, { error: 'invalid_guild_id' });
+    return;
+  }
+
+  try {
+    const stats = fetchGuildOverview(deps.db, guildId);
+    const bot_installed = Boolean(deps.client?.guilds?.cache?.has(guildId));
+
+    sendJson(res, 200, {
+      guild_id: guildId,
+      bot_installed,
+      configured: stats.configured,
+      published_count: stats.published_count,
+      closed_count: stats.closed_count,
+      recent: stats.recent,
+    });
+  } catch (err) {
+    if (isSqliteBusyError(err)) {
+      sendJson(res, 503, { error: 'service_unavailable' });
+      return;
+    }
+    sendJson(res, 500, { error: 'internal_error' });
+  }
+}
+
+/**
+ * @param {{ db: import('better-sqlite3').Database }} deps
+ * @param {import('node:http').ServerResponse} res
+ */
+function handleNetworkOverview(deps, res) {
+  try {
+    const payload = fetchNetworkOverview(deps.db);
+    sendJson(res, 200, payload);
+  } catch (err) {
+    if (isSqliteBusyError(err)) {
+      sendJson(res, 503, { error: 'service_unavailable' });
+      return;
+    }
+    sendJson(res, 500, { error: 'internal_error' });
+  }
+}
+
+/**
+ * @param {{ db: import('better-sqlite3').Database }} deps
+ * @param {import('node:http').ServerResponse} res
+ * @param {string} rawGuildId
+ */
+function handleConfigGet(deps, res, rawGuildId) {
+  const guildId = parseGuildIdParam(decodeURIComponent(rawGuildId));
+  if (!guildId) {
+    sendJson(res, 400, { error: 'invalid_guild_id' });
+    return;
+  }
+
+  try {
+    const payload = fetchGuildConfig(deps.db, guildId);
+    sendJson(res, 200, payload);
+  } catch (err) {
+    if (isSqliteBusyError(err)) {
+      sendJson(res, 503, { error: 'service_unavailable' });
+      return;
+    }
+    sendJson(res, 500, { error: 'internal_error' });
+  }
 }
 
 /**
@@ -112,7 +293,12 @@ function normalizePath(rawUrl) {
  * @returns {boolean}
  */
 function matchesKnownInternalRoute(pathname) {
-  return OVERVIEW_ROUTE.test(pathname);
+  return (
+    OVERVIEW_ROUTE.test(pathname)
+    || CONFIG_ROUTE.test(pathname)
+    || NETWORK_OVERVIEW_ROUTE.test(pathname)
+    || INSTALLATION_STATUS_ROUTE.test(pathname)
+  );
 }
 
 /**
@@ -132,8 +318,9 @@ function sendJson(res, status, body) {
 
 /**
  * @param {{
- *   client?: { guilds?: { cache?: { has: (id: string) => boolean } } } | null,
+ *   client?: import('discord.js').Client | null,
  *   db: import('better-sqlite3').Database,
+ *   stmts?: ReturnType<import('../database/db.js')['prepareStatements']>,
  *   config?: ReturnType<typeof parseInternalHttpConfig>,
  *   port?: number,
  *   host?: string,

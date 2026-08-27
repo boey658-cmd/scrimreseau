@@ -3,35 +3,49 @@ import {
   SlashCommandBuilder,
 } from 'discord.js';
 import { getGuildLocale } from '../i18n/index.js';
+import {
+  applyDescriptionLocalizations,
+  applyOptionLocalizations,
+  localizedChoice,
+  slashMeta,
+} from '../i18n/slashLocalizations.js';
 import { assertGuildAdministrator } from '../utils/guildAdministratorGuard.js';
 import { executeBlockScrimUserCore } from './blockScrimUser.js';
 import { executeUnblockScrimUserCore } from './unblockScrimUser.js';
 
-const data = new SlashCommandBuilder()
-  .setName('scrim-moderation')
-  .setDescription('Manage blocked scrim users for this server.')
-  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-  .addSubcommand((sub) =>
-    sub
-      .setName('user')
-      .setDescription("Block or unblock a user's scrim announcements on this server.")
-      .addStringOption((opt) =>
-        opt
-          .setName('action')
-          .setDescription('Action to perform.')
-          .setRequired(true)
-          .addChoices(
-            { name: 'Block', value: 'block' },
-            { name: 'Unblock', value: 'unblock' },
+const meta = slashMeta.scrimModeration;
+
+const data = applyDescriptionLocalizations(
+  new SlashCommandBuilder()
+    .setName('scrim-moderation')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addSubcommand((sub) =>
+      applyDescriptionLocalizations(
+        sub
+          .setName('user')
+          .addStringOption((opt) =>
+            applyOptionLocalizations(
+              opt
+                .setName('action')
+                .setRequired(true)
+                .addChoices(
+                  localizedChoice('block', meta.choices.block),
+                  localizedChoice('unblock', meta.choices.unblock),
+                ),
+              meta.options.action,
+            ),
+          )
+          .addUserOption((opt) =>
+            applyOptionLocalizations(
+              opt.setName('utilisateur').setRequired(true),
+              meta.options.utilisateur,
+            ),
           ),
-      )
-      .addUserOption((opt) =>
-        opt
-          .setName('utilisateur')
-          .setDescription('Select the user to moderate.')
-          .setRequired(true),
+        meta.subUser.description,
       ),
-  );
+    ),
+  meta.description,
+);
 
 export const scrimModeration = {
   data,
