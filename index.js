@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { startBot } from './src/bot.js';
-import { closeDb } from './src/database/db.js';
+import { closeDb, getDb } from './src/database/db.js';
+import { startInternalHttpServer, stopInternalHttpServer } from './src/internalHttp/index.js';
 import { stopDailyDevReportJob } from './src/services/dailyDevReportJob.js';
 import { stopDiscordEditRetryJob } from './src/services/discordEditRetryJob.js';
 import { stopScrimLifecycleDispatcher } from './src/services/scrimLifecycleDispatcher.js';
@@ -102,6 +103,11 @@ const gracefulShutdown = createGracefulShutdown({
       phase: 'discord_task_queue_stop',
       stop: () => stopDiscordTaskQueue(),
     },
+    {
+      name: 'arrêt serveur HTTP interne',
+      phase: 'internal_http_stop',
+      stop: () => stopInternalHttpServer(),
+    },
   ],
   getClient: () => clientRef,
   closeDb,
@@ -151,12 +157,19 @@ registerSignalHandlers();
 try {
   const { client } = await startBot();
   clientRef = client;
+  const db = getDb();
+  await startInternalHttpServer({ client, db });
 } catch (err) {
   try {
     logger.error('Échec du démarrage du bot', {
       message: err instanceof Error ? err.message : String(err),
       stack: err instanceof Error ? err.stack : undefined,
     });
+  } catch {
+    /* ignore */
+  }
+  try {
+    await stopInternalHttpServer();
   } catch {
     /* ignore */
   }
