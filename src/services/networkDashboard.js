@@ -18,6 +18,11 @@ import { AttachmentBuilder, EmbedBuilder } from 'discord.js';
 import { getGuildLocale, intlLocaleForBotLocale, t } from '../i18n/index.js';
 import { fetchBuffer } from '../utils/fetchBuffer.js';
 import { logger } from '../utils/logger.js';
+import {
+  MAX_VISIBLE_PARTNERS,
+  advanceRotationOffset,
+  selectVisiblePartnerIds,
+} from './networkDashboardRotation.js';
 
 const _dir = dirname(fileURLToPath(import.meta.url));
 /** Chemin absolu vers le logo ScrimRéseau (assets/logo-scrim.png). */
@@ -34,7 +39,6 @@ const FONT_FAMILY = 'Inter';
 const DEBOUNCE_MS = 30_000;
 const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1 h
 const ICON_FETCH_TIMEOUT_MS = 5_000;
-const MAX_ICONS = 60;
 const CANVAS_W = 1200;
 const CANVAS_H = 675;
 
@@ -60,13 +64,13 @@ let _fontReady = false;
  * @param {ReturnType<import('../database/db.js')['prepareStatements']>} stmts
  */
 function collectStats(client, stmts) {
-  /** @type {Set<string>} */
-  const partnerGuildIds = new Set();
+  /** @type {string[]} */
+  const partnerIds = [];
 
   try {
     const rows = stmts.listDistinctPartnerGuildIds.all();
     for (const r of rows) {
-      partnerGuildIds.add(/** @type {string} */ (r.guild_id));
+      partnerIds.push(/** @type {string} */ (r.guild_id));
     }
   } catch (err) {
     logger.warn('networkDashboard: erreur lecture partner guilds', {
@@ -75,10 +79,57 @@ function collectStats(client, stmts) {
   }
 
   return {
-    partnerGuildIds,
-    partnerCount: partnerGuildIds.size,
+    partnerIds,
+    partnerCount: partnerIds.length,
     totalGuilds: client.guilds.cache.size,
   };
+}
+
+/**
+ * Label fallback pour un nœud sans icône (1–2 caractères du nom).
+ * @param {string | null | undefined} name
+ * @returns {string}
+ */
+function partnerLabel(name) {
+  const s = String(name ?? '').trim();
+  if (!s) return '?';
+  return s.slice(0, 2).toUpperCase();
+}
+
+/**
+ * Lit le curseur de rotation (0 si absent / erreur).
+ * @param {ReturnType<import('../database/db.js')['prepareStatements']>} stmts
+ * @returns {number}
+ */
+function readPartnerRotationOffset(stmts) {
+  try {
+    const row = stmts.getNetworkDashboardPartnerOffset.get();
+    const n = row ? Number(row.partner_rotation_offset) : 0;
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+  } catch (err) {
+    logger.warn('networkDashboard: lecture offset rotation impossible', {
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return 0;
+  }
+}
+
+/**
+ * Persiste le curseur après un cycle réussi.
+ * @param {ReturnType<import('../database/db.js')['prepareStatements']>} stmts
+ * @param {number} offset
+ */
+function writePartnerRotationOffset(stmts, offset) {
+  try {
+    stmts.setNetworkDashboardPartnerOffset.run({
+      partner_rotation_offset: offset,
+      updated_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    logger.warn('networkDashboard: écriture offset rotation impossible', {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -115,21 +166,18 @@ async function loadLogoImage(loadImageFn) {
 }
 
 /**
- * Calcule les positions en orbite autour du centre.
- * ≤ 24 icônes → un anneau. 25-60 → deux anneaux.
+ * Calcule les positions sur un seul anneau autour du centre.
  * L'offset angulaire évite les alignements purement verticaux
  * (ex. 2 partenaires → gauche/droite, pas haut/bas).
  *
  * @param {number} count
  * @param {number} centerX
  * @param {number} centerY
- * @param {boolean} [hasOverflow]
  * @returns {{ x: number, y: number, r: number }[]}
  */
-function computeOrbitPositions(count, centerX, centerY, hasOverflow = false) {
-  const totalSlots = hasOverflow ? count + 1 : count;
+function computeOrbitPositions(count, centerX, centerY) {
   const positions = [];
-  if (totalSlots === 0) return positions;
+  if (count <= 0) return positions;
 
   /**
    * Renvoie l'angle de départ pour un anneau de n slots.
@@ -138,37 +186,16 @@ function computeOrbitPositions(count, centerX, centerY, hasOverflow = false) {
    */
   const startAngle = (n) => -Math.PI / 2 + (n % 2 === 0 ? Math.PI / n : 0);
 
-  if (count <= 24) {
-    const orbitR = 200; // D : icônes légèrement plus éloignées pour accommoder la taille accrue
-    const iconR = 25;   // D : légèrement plus grand (dia 50 px)
-    const sa = startAngle(totalSlots);
-    for (let i = 0; i < totalSlots; i++) {
-      const angle = sa + (i / totalSlots) * Math.PI * 2;
-      positions.push({
-        x: centerX + orbitR * Math.cos(angle),
-        y: centerY + orbitR * Math.sin(angle),
-        r: iconR,
-      });
-    }
-  } else {
-    // Double anneau : interne 20 max, externe le reste
-    const innerCount = Math.min(20, count);
-    const outerTotal = totalSlots - innerCount;
-    const rInner = 128;
-    const rOuter = 200;
-    const innerIconR = 20;
-    const outerIconR = 20;
-
-    const saInner = startAngle(innerCount);
-    for (let i = 0; i < innerCount; i++) {
-      const angle = saInner + (i / innerCount) * Math.PI * 2;
-      positions.push({ x: centerX + rInner * Math.cos(angle), y: centerY + rInner * Math.sin(angle), r: innerIconR });
-    }
-    const saOuter = startAngle(outerTotal);
-    for (let i = 0; i < outerTotal; i++) {
-      const angle = saOuter + (i / outerTotal) * Math.PI * 2;
-      positions.push({ x: centerX + rOuter * Math.cos(angle), y: centerY + rOuter * Math.sin(angle), r: outerIconR });
-    }
+  const orbitR = 210;
+  const iconR = 28;
+  const sa = startAngle(count);
+  for (let i = 0; i < count; i++) {
+    const angle = sa + (i / count) * Math.PI * 2;
+    positions.push({
+      x: centerX + orbitR * Math.cos(angle),
+      y: centerY + orbitR * Math.sin(angle),
+      r: iconR,
+    });
   }
   return positions;
 }
@@ -307,16 +334,15 @@ function drawCentralNode(ctx, x, y, logo = null, ff = 'sans-serif') {
 }
 
 /**
- * Dessine un nœud partenaire avec glow visible et contour lumineux.
  * @param {import('@napi-rs/canvas').SKRSContext2D} ctx
  * @param {import('@napi-rs/canvas').Image | null} img
- * @param {string} initial
+ * @param {string} label
  * @param {number} cx
  * @param {number} cy
  * @param {number} r
  * @param {string} [ff] Famille de fonte pour les initiales fallback
  */
-function drawPartnerNode(ctx, img, initial, cx, cy, r, ff = 'sans-serif') {
+function drawPartnerNode(ctx, img, label, cx, cy, r, ff = 'sans-serif') {
   // Glow autour du nœud
   const glow = ctx.createRadialGradient(cx, cy, r * 0.5, cx, cy, r * 2.8);
   glow.addColorStop(0, 'rgba(88,101,242,0.20)');
@@ -337,10 +363,12 @@ function drawPartnerNode(ctx, img, initial, cx, cy, r, ff = 'sans-serif') {
     ctx.fillStyle = '#1e2260';
     ctx.fill();
     ctx.fillStyle = '#ffffff';
-    ctx.font = `bold ${Math.round(r * 0.85)}px ${ff}`;
+    const text = String(label || '?');
+    const fontSize = text.length > 1 ? Math.round(r * 0.7) : Math.round(r * 0.85);
+    ctx.font = `bold ${fontSize}px ${ff}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(initial.toUpperCase(), cx, cy + 1);
+    ctx.fillText(text, cx, cy + 1);
   }
   ctx.restore();
 
@@ -358,7 +386,11 @@ function drawPartnerNode(ctx, img, initial, cx, cy, r, ff = 'sans-serif') {
 /**
  * Génère l'image dashboard — vue "carte du réseau".
  * @param {import('discord.js').Client} client
- * @param {ReturnType<collectStats>} stats
+ * @param {{
+ *   partnerCount: number,
+ *   totalGuilds?: number,
+ *   visiblePartnerIds: string[],
+ * }} stats
  * @param {string} [locale]
  * @returns {Promise<Buffer | null>} null si la génération échoue
  */
@@ -453,11 +485,10 @@ async function generateDashboardImage(client, stats, locale = 'fr') {
     }
 
     // ── Carte réseau ─────────────────────────────────────────────────────
-    // Données partenaires — même source que stats.partnerCount
-    const allPartnerIds = [...stats.partnerGuildIds];
-    const totalPartner = allPartnerIds.length;
-    const toShowIds = allPartnerIds.slice(0, MAX_ICONS);
-    const overflow = totalPartner - toShowIds.length;
+    // Logos visibles uniquement (≤ MAX_VISIBLE_PARTNERS) ; compteur = total réel.
+    const toShowIds = Array.isArray(stats.visiblePartnerIds)
+      ? stats.visiblePartnerIds
+      : [];
     const count = toShowIds.length;
 
     const toShowEntries = toShowIds.map((id) => ({
@@ -465,10 +496,9 @@ async function generateDashboardImage(client, stats, locale = 'fr') {
       id,
     }));
 
-    const hasOverflow = overflow > 0;
-    const positions = computeOrbitPositions(count, CX, CY, hasOverflow);
+    const positions = computeOrbitPositions(count, CX, CY);
 
-    // Téléchargement parallèle des icônes
+    // Téléchargement parallèle — uniquement les icônes réellement affichées
     const iconBuffers = await Promise.allSettled(
       toShowEntries.map(async ({ guild }) => {
         if (!guild) return null;
@@ -479,8 +509,7 @@ async function generateDashboardImage(client, stats, locale = 'fr') {
     );
 
     // ── Lignes de connexion (double passe : glow + ligne) ────────────────
-    const allConnectedSlots = count + (hasOverflow && positions[count] ? 1 : 0);
-    for (let i = 0; i < allConnectedSlots; i++) {
+    for (let i = 0; i < count; i++) {
       if (!positions[i]) continue;
       const { x: px, y: py } = positions[i];
 
@@ -521,30 +550,8 @@ async function generateDashboardImage(client, stats, locale = 'fr') {
       if (bufResult.status === 'fulfilled' && bufResult.value) {
         try { img = await loadImage(bufResult.value); } catch { /* fallback */ }
       }
-      const initial = guild ? (guild.name ?? '?').charAt(0) : '?';
-      drawPartnerNode(ctx, img, initial, x, y, iconR, FF);
-    }
-
-    // Nœud overflow "+X"
-    if (hasOverflow && positions[count]) {
-      const { x: ox, y: oy, r: or_ } = positions[count];
-      const gf = ctx.createRadialGradient(ox, oy, 0, ox, oy, or_);
-      gf.addColorStop(0, 'rgba(100,80,220,0.80)');
-      gf.addColorStop(1, 'rgba(60,40,140,0.60)');
-      ctx.fillStyle = gf;
-      ctx.beginPath();
-      ctx.arc(ox, oy, or_, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(ox, oy, or_, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.fillStyle = '#ffffff';
-      ctx.font = `bold ${Math.max(10, or_ - 4)}px ${FF}`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(`+${overflow}`, ox, oy);
+      const label = partnerLabel(guild?.name);
+      drawPartnerNode(ctx, img, label, x, y, iconR, FF);
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -667,11 +674,27 @@ function buildFallbackEmbed(stats, locale = 'fr') {
  * @param {import('discord.js').Client} client
  * @param {ReturnType<import('../database/db.js')['prepareStatements']>} stmts
  * @param {string} [locale]
+ * @param {{
+ *   stats?: ReturnType<collectStats>,
+ *   visiblePartnerIds?: string[],
+ * }} [render]
  * @returns {Promise<{ content: string, files: AttachmentBuilder[], embeds: EmbedBuilder[] }>}
  */
-async function buildDashboardPayload(client, stmts, locale = 'fr') {
-  const stats = collectStats(client, stmts);
-  const imgBuffer = await generateDashboardImage(client, stats, locale);
+async function buildDashboardPayload(client, stmts, locale = 'fr', render = {}) {
+  const stats = render.stats ?? collectStats(client, stmts);
+  const visiblePartnerIds = Array.isArray(render.visiblePartnerIds)
+    ? render.visiblePartnerIds
+    : selectVisiblePartnerIds(stats.partnerIds, 0, MAX_VISIBLE_PARTNERS);
+
+  const imgBuffer = await generateDashboardImage(
+    client,
+    {
+      partnerCount: stats.partnerCount,
+      totalGuilds: stats.totalGuilds,
+      visiblePartnerIds,
+    },
+    locale,
+  );
 
   if (imgBuffer) {
     return {
@@ -698,9 +721,13 @@ async function buildDashboardPayload(client, stmts, locale = 'fr') {
  * @param {import('discord.js').Client} client
  * @param {ReturnType<import('../database/db.js')['prepareStatements']>} stmts
  * @param {{ guild_id: string, channel_id: string, message_id: string | null }} row
- * @returns {Promise<void>}
+ * @param {{
+ *   stats?: ReturnType<collectStats>,
+ *   visiblePartnerIds?: string[],
+ * }} [render]
+ * @returns {Promise<boolean>} true si le message a été édité ou créé avec succès
  */
-async function syncOneDashboard(client, stmts, row) {
+async function syncOneDashboard(client, stmts, row, render = {}) {
   const { guild_id, channel_id, message_id } = row;
 
   let guild;
@@ -712,7 +739,7 @@ async function syncOneDashboard(client, stmts, row) {
 
   if (!guild) {
     logger.warn('networkDashboard: guilde introuvable — dashboard ignoré', { guild_id });
-    return;
+    return false;
   }
 
   let channel;
@@ -724,11 +751,11 @@ async function syncOneDashboard(client, stmts, row) {
 
   if (!channel?.isTextBased()) {
     logger.warn('networkDashboard: salon introuvable ou non texte — dashboard ignoré', { guild_id, channel_id });
-    return;
+    return false;
   }
 
   const locale = getGuildLocale(guild_id, stmts);
-  const payload = await buildDashboardPayload(client, stmts, locale);
+  const payload = await buildDashboardPayload(client, stmts, locale, render);
   const nowIso = new Date().toISOString();
 
   // Tentative d'édition du message existant
@@ -750,7 +777,7 @@ async function syncOneDashboard(client, stmts, row) {
           channel_id,
         });
         logger.info('networkDashboard: message édité', { guild_id, channel_id, message_id });
-        return;
+        return true;
       } catch (err) {
         logger.warn('networkDashboard: édition impossible — recréation', {
           guild_id,
@@ -772,12 +799,14 @@ async function syncOneDashboard(client, stmts, row) {
       channel_id,
     });
     logger.info('networkDashboard: nouveau message créé', { guild_id, channel_id, message_id: sent.id });
+    return true;
   } catch (err) {
     logger.error(`networkDashboard: impossible d'envoyer le message`, {
       guild_id,
       channel_id,
       message: err instanceof Error ? err.message : String(err),
     });
+    return false;
   }
 }
 
@@ -811,12 +840,39 @@ export async function updateNetworkDashboard(client, stmts) {
 
     if (rows.length === 0) return;
 
+    const stats = collectStats(client, stmts);
+    const offset = readPartnerRotationOffset(stmts);
+    const visiblePartnerIds = selectVisiblePartnerIds(
+      stats.partnerIds,
+      offset,
+      MAX_VISIBLE_PARTNERS,
+    );
+
+    logger.info('networkDashboard: rotation', {
+      total: stats.partnerCount,
+      offset,
+      visible: visiblePartnerIds.length,
+    });
+
+    const render = { stats, visiblePartnerIds };
+    let successCount = 0;
+
     for (const row of rows) {
-      await syncOneDashboard(client, stmts, {
+      const ok = await syncOneDashboard(client, stmts, {
         guild_id: String(row.guild_id),
         channel_id: String(row.channel_id),
         message_id: row.message_id ? String(row.message_id) : null,
-      });
+      }, render);
+      if (ok) successCount += 1;
+    }
+
+    if (successCount > 0 && stats.partnerCount > 0) {
+      const nextOffset = advanceRotationOffset(
+        offset,
+        stats.partnerCount,
+        MAX_VISIBLE_PARTNERS,
+      );
+      writePartnerRotationOffset(stmts, nextOffset);
     }
   } finally {
     isUpdating = false;
@@ -892,11 +948,19 @@ export async function createOrUpdateNetworkDashboardMessage(client, channel, use
     return { ok: false, error: t(locale, 'dev.dashboardDbConfigError') };
   }
 
+  const stats = collectStats(client, stmts);
+  const offset = readPartnerRotationOffset(stmts);
+  const visiblePartnerIds = selectVisiblePartnerIds(
+    stats.partnerIds,
+    offset,
+    MAX_VISIBLE_PARTNERS,
+  );
+
   await syncOneDashboard(client, stmts, {
     guild_id: guildId,
     channel_id: channelId,
     message_id: existingMessageId,
-  });
+  }, { stats, visiblePartnerIds });
 
   logger.event('networkDashboard: dashboard configuré', {
     guild_id: guildId,

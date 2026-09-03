@@ -918,6 +918,25 @@ function migrateScrimLifecycleOperationsPhase3f(db) {
   `);
 }
 
+/**
+ * Curseur round-robin des logos partenaires du dashboard réseau (singleton).
+ * Idempotent : CREATE IF NOT EXISTS + INSERT OR IGNORE de la ligne id=1.
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateNetworkDashboardRotation(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS network_dashboard_rotation (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      partner_rotation_offset INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    );
+  `);
+  db.prepare(`
+    INSERT OR IGNORE INTO network_dashboard_rotation (id, partner_rotation_offset, updated_at)
+    VALUES (1, 0, ?)
+  `).run(new Date().toISOString());
+}
+
 export function getDb() {
   if (dbInstance) return dbInstance;
   const dbPath = resolveDbPath();
@@ -950,6 +969,7 @@ export function getDb() {
   migrateScrimLifecycleOperationsPhase3d(dbInstance);
   migrateScrimRepostCycles(dbInstance);
   migrateScrimLifecycleOperationsPhase3f(dbInstance);
+  migrateNetworkDashboardRotation(dbInstance);
   logger.info(
     'SQLite initialisée : mode WAL, busy_timeout=5000 ms. Une seule instance writer attendue sur ce fichier.',
     { path: dbPath, busy_timeout_ms: 5000, journal_mode: 'WAL' },
@@ -1764,6 +1784,19 @@ export function prepareStatements(db) {
     /** Dashboard réseau : suppression d'un dashboard configuré. */
     deleteNetworkDashboard: db.prepare(`
       DELETE FROM network_dashboard_config WHERE guild_id = ? AND channel_id = ?
+    `),
+
+    /** Dashboard réseau : curseur round-robin des logos partenaires (singleton id=1). */
+    getNetworkDashboardPartnerOffset: db.prepare(`
+      SELECT partner_rotation_offset FROM network_dashboard_rotation WHERE id = 1
+    `),
+    /** Dashboard réseau : persiste le curseur après un cycle de refresh réussi. */
+    setNetworkDashboardPartnerOffset: db.prepare(`
+      INSERT INTO network_dashboard_rotation (id, partner_rotation_offset, updated_at)
+      VALUES (1, @partner_rotation_offset, @updated_at)
+      ON CONFLICT(id) DO UPDATE SET
+        partner_rotation_offset = excluded.partner_rotation_offset,
+        updated_at = excluded.updated_at
     `),
 
     /** Langue configurée pour une guilde (null/undefined si absente → fallback 'fr'). */
