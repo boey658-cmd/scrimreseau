@@ -106,6 +106,7 @@ export { parseGuildIdParam, GUILD_ID_PATTERN } from './guildId.js';
 export { fetchGuildOverview } from './overviewQueries.js';
 export { fetchGuildConfig } from './configQueries.js';
 export { fetchNetworkOverview } from './networkQueries.js';
+export { fetchNetworkPartners } from './networkPartnersQueries.js';
 export { verifyInternalHttpToken, extractBearerToken } from './auth.js';
 export {
   parseConfigPatchBody,

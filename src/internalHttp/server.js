@@ -10,11 +10,13 @@ import { fetchGuildConfig } from './configQueries.js';
 import { parseGuildIdParam } from './guildId.js';
 import { handleInstallationStatus } from './installationStatus.js';
 import { fetchNetworkOverview } from './networkQueries.js';
+import { fetchNetworkPartners } from './networkPartnersQueries.js';
 import { fetchGuildOverview, isSqliteBusyError } from './overviewQueries.js';
 
 const OVERVIEW_ROUTE = /^\/internal\/guilds\/([^/]+)\/overview\/?$/;
 const CONFIG_ROUTE = /^\/internal\/guilds\/([^/]+)\/config\/?$/;
 const NETWORK_OVERVIEW_ROUTE = /^\/internal\/network\/overview\/?$/;
+const NETWORK_PARTNERS_ROUTE = /^\/internal\/network\/partners\/?$/;
 const INSTALLATION_STATUS_ROUTE = /^\/internal\/guilds\/installation-status\/?$/;
 
 /**
@@ -74,6 +76,10 @@ export function createInternalHttpRequestListener(deps) {
       }
       if (NETWORK_OVERVIEW_ROUTE.test(pathname)) {
         handleNetworkOverview(deps, res);
+        return;
+      }
+      if (NETWORK_PARTNERS_ROUTE.test(pathname)) {
+        handleNetworkPartners(deps, res);
         return;
       }
       const overviewMatch = OVERVIEW_ROUTE.exec(pathname);
@@ -249,6 +255,26 @@ function handleNetworkOverview(deps, res) {
 }
 
 /**
+ * @param {{
+ *   client?: import('discord.js').Client | null,
+ *   db: import('better-sqlite3').Database,
+ * }} deps
+ * @param {import('node:http').ServerResponse} res
+ */
+function handleNetworkPartners(deps, res) {
+  try {
+    const payload = fetchNetworkPartners(deps.db, deps.client);
+    sendJson(res, 200, payload);
+  } catch (err) {
+    if (isSqliteBusyError(err)) {
+      sendJson(res, 503, { error: 'service_unavailable' });
+      return;
+    }
+    sendJson(res, 500, { error: 'internal_error' });
+  }
+}
+
+/**
  * @param {{ db: import('better-sqlite3').Database }} deps
  * @param {import('node:http').ServerResponse} res
  * @param {string} rawGuildId
@@ -297,6 +323,7 @@ function matchesKnownInternalRoute(pathname) {
     OVERVIEW_ROUTE.test(pathname)
     || CONFIG_ROUTE.test(pathname)
     || NETWORK_OVERVIEW_ROUTE.test(pathname)
+    || NETWORK_PARTNERS_ROUTE.test(pathname)
     || INSTALLATION_STATUS_ROUTE.test(pathname)
   );
 }

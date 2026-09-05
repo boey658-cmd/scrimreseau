@@ -937,6 +937,22 @@ function migrateNetworkDashboardRotation(db) {
   `).run(new Date().toISOString());
 }
 
+/**
+ * Guilds partenaires masquées de la page publique /network uniquement.
+ * N’affecte ni guild_game_channels ni le dashboard Discord.
+ * Idempotent : CREATE TABLE IF NOT EXISTS.
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateNetworkPublicExclusions(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS network_public_exclusions (
+      guild_id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL,
+      reason TEXT
+    );
+  `);
+}
+
 export function getDb() {
   if (dbInstance) return dbInstance;
   const dbPath = resolveDbPath();
@@ -970,6 +986,7 @@ export function getDb() {
   migrateScrimRepostCycles(dbInstance);
   migrateScrimLifecycleOperationsPhase3f(dbInstance);
   migrateNetworkDashboardRotation(dbInstance);
+  migrateNetworkPublicExclusions(dbInstance);
   logger.info(
     'SQLite initialisée : mode WAL, busy_timeout=5000 ms. Une seule instance writer attendue sur ce fichier.',
     { path: dbPath, busy_timeout_ms: 5000, journal_mode: 'WAL' },
@@ -1797,6 +1814,26 @@ export function prepareStatements(db) {
       ON CONFLICT(id) DO UPDATE SET
         partner_rotation_offset = excluded.partner_rotation_offset,
         updated_at = excluded.updated_at
+    `),
+
+    /** Page publique /network : liste des guild_id exclus du site. */
+    listNetworkPublicExclusions: db.prepare(`
+      SELECT guild_id, created_at, reason FROM network_public_exclusions ORDER BY guild_id
+    `),
+    /** Page publique /network : teste si une guild est exclue du site. */
+    getNetworkPublicExclusion: db.prepare(`
+      SELECT guild_id FROM network_public_exclusions WHERE guild_id = ? LIMIT 1
+    `),
+    /** Page publique /network : ajoute une exclusion (tests / ops). */
+    upsertNetworkPublicExclusion: db.prepare(`
+      INSERT INTO network_public_exclusions (guild_id, created_at, reason)
+      VALUES (@guild_id, @created_at, @reason)
+      ON CONFLICT(guild_id) DO UPDATE SET
+        reason = excluded.reason
+    `),
+    /** Page publique /network : retire une exclusion. */
+    deleteNetworkPublicExclusion: db.prepare(`
+      DELETE FROM network_public_exclusions WHERE guild_id = ?
     `),
 
     /** Langue configurée pour une guilde (null/undefined si absente → fallback 'fr'). */
