@@ -212,9 +212,11 @@ export const en = {
 
   // ── Embed scrim ──────────────────────────────────────────────────────
   'embed.joinServerButton': '🔗 Join the ScrimRéseau server',
-  'embed.contactHint1': '⚠️ If the contact mention above is not clickable',
-  'embed.contactHint2': '👉 Join the ScrimRéseau server using the button below',
-  'embed.contactHint3': '👉 This usually makes the mention clickable',
+  'embed.contactHint1': '⚠️ If the contact mention isn\'t clickable 👉 Join ScrimRéseau below, then find the scrim there.',
+  'embed.contactHint2': '⚠️ If the contact mention isn\'t clickable 👉 Join ScrimRéseau below, then find the scrim there.',
+  'embed.contactHint3': '⚠️ If the contact mention isn\'t clickable 👉 Join ScrimRéseau below, then find the scrim there.',
+  'embed.officialContactContent': '👤 Contact: {mention}',
+  'embed.officialSiteButton': '🌐 ScrimRéseau Website',
   'embed.fearlessOui': 'Fearless: Yes',
   'embed.fearlessNon': 'Fearless: No',
   'embed.fearlessNimporte': 'Fearless: Any',

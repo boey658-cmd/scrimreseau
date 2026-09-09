@@ -19,6 +19,16 @@ export function getScrimReseauPublicGuildIdFromEnv() {
 }
 
 /**
+ * True si `guildId` est le serveur public ScrimRéseau (env), jamais via le nom.
+ * @param {string | null | undefined} guildId
+ * @returns {boolean}
+ */
+export function isScrimReseauPublicGuildId(guildId) {
+  const publicId = getScrimReseauPublicGuildIdFromEnv();
+  return Boolean(publicId && guildId === publicId);
+}
+
+/**
  * Lien affiché dans le message de refus — même source que le bouton
  * « Rejoindre le serveur ScrimRéseau » (`SCRIM_COMMUNITY_SERVER_URL`).
  * @returns {string}

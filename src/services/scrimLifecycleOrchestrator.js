@@ -9,6 +9,7 @@ import { runTransientDiscord } from './discordApiGuard.js';
 import { classifyDiscordEditError } from './discordRetryPolicy.js';
 import { getGuildLocale } from '../i18n/index.js';
 import { isPersistentBroadcastEnabled } from '../utils/persistentBroadcastFlag.js';
+import { isScrimReseauPublicGuildId } from '../utils/scrimPublicGuildGate.js';
 import { invalidateIncompatibleEditRetriesForScrimPost } from './scrimLifecycleEditCoalescing.js';
 import { isScrimLifecycleTargetStatusCurrent } from './scrimLifecycleTargetStatus.js';
 import {
@@ -140,6 +141,15 @@ function resolveGuildLocale(stmts, guildId) {
 }
 
 /**
+ * Options d’embed pour close/supersede selon la destination.
+ * @param {string} guildId
+ * @returns {{ includeContactInEmbed: boolean }}
+ */
+function closedEmbedContactOptionsForGuild(guildId) {
+  return { includeContactInEmbed: !isScrimReseauPublicGuildId(guildId) };
+}
+
+/**
  * @param {ReturnType<import('../database/db.js')['prepareStatements']>} stmts
  * @param {Record<string, unknown>} dbRow
  * @param {ScrimLifecycleEventType} eventType
@@ -148,13 +158,15 @@ function resolveGuildLocale(stmts, guildId) {
  */
 function buildOrchestratedEditPayloadJson(stmts, dbRow, eventType, messageRow) {
   const locale = resolveGuildLocale(stmts, messageRow.guild_id);
+  const contactOpts = closedEmbedContactOptionsForGuild(messageRow.guild_id);
   const editOptions =
     eventType === 'superseded_repost'
-      ? buildScrimSupersededMessageEditOptions(dbRow, locale)
+      ? buildScrimSupersededMessageEditOptions(dbRow, locale, contactOpts)
       : buildScrimClosedMessageEditOptions(
           /** @type {'closed_manual' | 'closed_expired'} */ (eventType),
           dbRow,
           locale,
+          contactOpts,
         );
   return serializeScrimEditPayload(editOptions);
 }
@@ -805,6 +817,7 @@ export async function executeOrchestratedLifecycleOperation(client, stmts, opRow
           /** @type {'closed_manual' | 'closed_expired'} */ (opRow.target_status),
           dbRow,
           locale,
+          closedEmbedContactOptionsForGuild(guildId),
         ),
       );
       ensureCloseFallbackEditOperation(stmts, {
@@ -832,7 +845,7 @@ export async function executeOrchestratedLifecycleOperation(client, stmts, opRow
         ? payload.embeds.map((e) => EmbedBuilder.from(e))
         : [],
     };
-    if (payload.content !== null && payload.content !== undefined) {
+    if (Object.prototype.hasOwnProperty.call(payload, 'content')) {
       editOptions.content = payload.content;
     }
     if (Array.isArray(payload.components)) {
@@ -843,13 +856,15 @@ export async function executeOrchestratedLifecycleOperation(client, stmts, opRow
   } else {
     const dbRow = stmts.getScrimPostById.get(scrimPostDbId);
     const locale = resolveGuildLocale(stmts, guildId);
+    const contactOpts = closedEmbedContactOptionsForGuild(guildId);
     editOptions =
       opRow.target_status === 'superseded_repost'
-        ? buildScrimSupersededMessageEditOptions(dbRow, locale)
+        ? buildScrimSupersededMessageEditOptions(dbRow, locale, contactOpts)
         : buildScrimClosedMessageEditOptions(
             /** @type {'closed_manual' | 'closed_expired'} */ (opRow.target_status),
             dbRow,
             locale,
+            contactOpts,
           );
   }
 

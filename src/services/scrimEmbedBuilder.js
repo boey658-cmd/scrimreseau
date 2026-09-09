@@ -398,13 +398,9 @@ function buildScrimContactDescriptionLines(contactUserId, contactUsername) {
   return [`👤 <@${contactUserId}>`];
 }
 
-/** Explication courte sous le contact (bouton lien sous le message). */
+/** Explication courte sous le contact (une ligne compacte — partenaires uniquement). */
 function getScrimContactButtonHintLines(locale = 'fr') {
-  return [
-    t(locale, 'embed.contactHint1'),
-    t(locale, 'embed.contactHint2'),
-    t(locale, 'embed.contactHint3'),
-  ];
+  return [t(locale, 'embed.contactHint1')];
 }
 
 /**
@@ -433,13 +429,24 @@ export function getScrimCommunityServerUrlFromEnv() {
   return parseScrimCommunityServerUrl(process.env.SCRIM_COMMUNITY_SERVER_URL);
 }
 
+/** URL fixe du site public ScrimRéseau (bouton officiel uniquement). */
+export const SCRIM_OFFICIAL_SITE_URL = 'https://scrimreseau.com';
+
 /**
- * Boutons de diffusion scrim : lien serveur ScrimRéseau + bouton OP.GG optionnel.
+ * Boutons de diffusion scrim : invite ScrimRéseau / site officiel / OP.GG selon options.
  * @param {string | null | undefined} [multiOpggUrl] URL Multi OP.GG (si présente, bouton ajouté)
+ * @param {string} [locale]
+ * @param {{ includeCommunityInviteButton?: boolean, includeOfficialSiteButton?: boolean }} [options]
+ *   - `includeCommunityInviteButton` défaut true (partenaires)
+ *   - `includeOfficialSiteButton` défaut false (officiel uniquement)
  * @returns {import('discord.js').ActionRowBuilder<import('discord.js').ButtonBuilder>[]}
  */
-export function buildScrimCommunityServerActionRows(multiOpggUrl, locale = 'fr') {
-  const communityUrl = getScrimCommunityServerUrlFromEnv();
+export function buildScrimCommunityServerActionRows(multiOpggUrl, locale = 'fr', options = {}) {
+  const includeCommunityInviteButton = options.includeCommunityInviteButton !== false;
+  const includeOfficialSiteButton = options.includeOfficialSiteButton === true;
+  const communityUrl = includeCommunityInviteButton
+    ? getScrimCommunityServerUrlFromEnv()
+    : null;
 
   /** @type {import('discord.js').ButtonBuilder[]} */
   const buttons = [];
@@ -450,6 +457,15 @@ export function buildScrimCommunityServerActionRows(multiOpggUrl, locale = 'fr')
         .setLabel(t(locale, 'embed.joinServerButton'))
         .setStyle(ButtonStyle.Link)
         .setURL(communityUrl),
+    );
+  }
+
+  if (includeOfficialSiteButton) {
+    buttons.push(
+      new ButtonBuilder()
+        .setLabel(t(locale, 'embed.officialSiteButton'))
+        .setStyle(ButtonStyle.Link)
+        .setURL(SCRIM_OFFICIAL_SITE_URL),
     );
   }
 
@@ -524,8 +540,7 @@ function resolveScrimDisplaySchedule(payload, locale = 'fr') {
 
 /**
  * @param {ScrimEmbedPayload} payload
- * @param {string} statusLine
- * @param {{ includeContactHints?: boolean }} [options]
+ * @param {{ includeContactHints?: boolean, includeContactInEmbed?: boolean }} [options]
  * @returns {string}
  */
 function buildScrimEmbedDescription(payload, options = {}, locale = 'fr') {
@@ -551,14 +566,18 @@ function buildScrimEmbedDescription(payload, options = {}, locale = 'fr') {
   const rankText = formatRankWithPrecision(localizedRank, payload.eloPrecision ?? null, locale);
   const line3 = `${rankEmoji} ${rankText}`;
 
-  // ── Ligne 4 : contact ───────────────────────────────────────────────
-  const contactLine = buildScrimContactDescriptionLines(
-    payload.contactUserId,
-    payload.contactDisplayName ?? null,
-  )[0] ?? '';
-
   /** @type {string[]} */
-  const lines = [line1, line2, line3, contactLine];
+  const lines = [line1, line2, line3];
+
+  // ── Ligne 4 : contact (partenaires uniquement ; officiel → content hors embed) ──
+  const includeContactInEmbed = options.includeContactInEmbed !== false;
+  if (includeContactInEmbed) {
+    const contactLine = buildScrimContactDescriptionLines(
+      payload.contactUserId,
+      payload.contactDisplayName ?? null,
+    )[0] ?? '';
+    lines.push(contactLine);
+  }
 
   // ── Ligne 5 (optionnelle) : structure (avec lien cliquable si disponible) ──
   if (payload.structureNameSnapshot) {
@@ -580,9 +599,35 @@ function buildScrimEmbedDescription(payload, options = {}, locale = 'fr') {
 }
 
 /**
+ * Content hors embed pour le serveur officiel ScrimRéseau (annonce active).
+ * @param {string | null | undefined} contactUserId
+ * @param {string} [locale]
+ * @returns {string | null}
+ */
+export function buildScrimOfficialContactContent(contactUserId, locale = 'fr') {
+  const id = typeof contactUserId === 'string' ? contactUserId.trim() : '';
+  if (!id) return null;
+  return t(locale, 'embed.officialContactContent', { mention: `<@${id}>` });
+}
+
+/**
+ * Mentions autorisées pour le content officiel (`👤 Contact : <@id>`).
+ * `users: []` + `parse: []` : aucune mention réellement parsée (pas de ping / highlight).
+ * Couplé à `MessageFlags.SuppressNotifications` au send pour supprimer push/desktop.
+ * @param {string} [_contactUserId] snowflake (conservé pour signature stable ; non listé dans users)
+ * @returns {{ parse: [], users: [], roles: [] }}
+ */
+export function buildScrimOfficialAllowedMentions(_contactUserId) {
+  return {
+    parse: /** @type {[]} */ ([]),
+    users: /** @type {[]} */ ([]),
+    roles: /** @type {[]} */ ([]),
+  };
+}
+/**
  * @param {ScrimEmbedPayload} payload
  * @param {number} color
- * @param {{ includeContactHints?: boolean }} [options]
+ * @param {{ includeContactHints?: boolean, includeContactInEmbed?: boolean }} [options]
  * @param {string} [locale]
  * @returns {EmbedBuilder}
  */
@@ -596,17 +641,19 @@ function buildScrimEmbedWithStatus(payload, color, options = {}, locale = 'fr') 
  * Édition Discord : vague réseau remplacée par un repost (scrim toujours actif en DB).
  * @param {Record<string, unknown>} dbRow ligne `scrim_posts`
  * @param {string} [locale]
+ * @param {{ includeContactInEmbed?: boolean }} [options]
  * @returns {{ content: null, embeds: EmbedBuilder[], components: [] }}
  */
-export function buildScrimSupersededMessageEditOptions(dbRow, locale = 'fr') {
+export function buildScrimSupersededMessageEditOptions(dbRow, locale = 'fr', options = {}) {
   const payload = scrimDbRowToEmbedPayload(dbRow);
+  const includeContactInEmbed = options.includeContactInEmbed !== false;
   return {
     content: null,
     embeds: [
       buildScrimEmbedWithStatus(
         payload,
         SCRIM_EMBED_COLOR_SUPERSEDED,
-        {},
+        { includeContactInEmbed },
         locale,
       ),
     ],
@@ -619,10 +666,12 @@ export function buildScrimSupersededMessageEditOptions(dbRow, locale = 'fr') {
  * @param {'closed_manual' | 'closed_expired'} status
  * @param {Record<string, unknown>} dbRow ligne `scrim_posts` après fermeture
  * @param {string} [locale]
+ * @param {{ includeContactInEmbed?: boolean }} [options]
  * @returns {{ content: null, embeds: EmbedBuilder[], components: [] }}
  */
-export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr') {
+export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr', options = {}) {
   const payload = scrimDbRowToEmbedPayload(dbRow);
+  const includeContactInEmbed = options.includeContactInEmbed !== false;
 
   if (status === 'closed_manual') {
     return {
@@ -631,7 +680,7 @@ export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr')
         buildScrimEmbedWithStatus(
           payload,
           SCRIM_EMBED_COLOR_CLOSED_MANUAL,
-          {},
+          { includeContactInEmbed },
           locale,
         ),
       ],
@@ -646,7 +695,7 @@ export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr')
         buildScrimEmbedWithStatus(
           payload,
           SCRIM_EMBED_COLOR_CLOSED_EXPIRED,
-          {},
+          { includeContactInEmbed },
           locale,
         ),
       ],
@@ -659,13 +708,17 @@ export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr')
 /**
  * @param {ScrimEmbedPayload} payload
  * @param {string} [locale]
+ * @param {{ includeContactHints?: boolean, includeContactInEmbed?: boolean }} [options]
  * @returns {EmbedBuilder}
  */
-export function buildScrimEmbed(payload, locale = 'fr') {
+export function buildScrimEmbed(payload, locale = 'fr', options = {}) {
   return buildScrimEmbedWithStatus(
     payload,
     SCRIM_EMBED_COLOR_ACTIVE,
-    { includeContactHints: true },
+    {
+      includeContactInEmbed: options.includeContactInEmbed !== false,
+      includeContactHints: options.includeContactHints !== false,
+    },
     locale,
   );
 }

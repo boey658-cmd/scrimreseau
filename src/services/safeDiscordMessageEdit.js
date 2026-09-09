@@ -25,7 +25,8 @@ const DISCORD_UNKNOWN_MESSAGE = RESTJSONErrorCodes.UnknownMessage;
 
 /**
  * Sérialise une édition scrim pour la file SQLite (retry mono-instance).
- * v2 : content + embeds JSON ; legacy en base = JSON d’un seul embed (sans clé `v`).
+ * v2 : embeds JSON ; `content` omis si non fourni, string pour set, null pour clear.
+ * legacy en base = JSON d’un seul embed (sans clé `v`).
  *
  * @param {{
  *   content?: string | null,
@@ -38,9 +39,11 @@ export function serializeScrimEditPayload(editOptions) {
   /** @type {Record<string, unknown>} */
   const o = {
     v: 2,
-    content: editOptions.content ?? null,
     embeds: embeds.map((e) => e.toJSON()),
   };
+  if (Object.prototype.hasOwnProperty.call(editOptions, 'content')) {
+    o.content = editOptions.content;
+  }
   if (Array.isArray(editOptions.components)) {
     o.components = editOptions.components.map((row) =>
       row && typeof row.toJSON === 'function' ? row.toJSON() : row,
@@ -365,7 +368,7 @@ export async function applyScrimEmbedEditFromPayload(message, payloadJson) {
       ? data.embeds.map((e) => EmbedBuilder.from(e))
       : [];
     editOptions = { embeds };
-    if (data.content !== null && data.content !== undefined) {
+    if (Object.prototype.hasOwnProperty.call(data, 'content')) {
       editOptions.content = data.content;
     }
     if (Array.isArray(data.components)) {

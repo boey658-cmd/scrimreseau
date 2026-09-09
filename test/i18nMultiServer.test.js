@@ -115,16 +115,29 @@ describe('buildScrimEmbed — locale par serveur destinataire', () => {
 // ─── Tests contact hints ─────────────────────────────────────────────────────
 
 describe('buildScrimEmbed — contact hints locale', () => {
-  it('contact hints en français', () => {
+  it('contact hints en français (une ligne compacte)', () => {
     const embed = buildScrimEmbed(BASE_PAYLOAD, 'fr');
     const desc = getDescription(embed);
-    assert.match(desc, /Si la mention du contact ci-dessus/);
+    assert.match(
+      desc,
+      /⚠️ Si la mention du contact n'est pas cliquable 👉 Rejoignez ScrimRéseau ci-dessous, puis retrouvez le scrim là-bas\./,
+    );
+    assert.equal(
+      (desc.match(/👉/g) ?? []).length,
+      1,
+      'un seul 👉 — pas de 2e/3e ligne d’aide',
+    );
   });
 
-  it('contact hints en anglais', () => {
+  it('contact hints en anglais (texte exact validé)', () => {
     const embed = buildScrimEmbed(BASE_PAYLOAD, 'en');
     const desc = getDescription(embed);
-    assert.match(desc, /If the contact mention above/);
+    assert.ok(
+      desc.includes(
+        "⚠️ If the contact mention isn't clickable 👉 Join ScrimRéseau below, then find the scrim there.",
+      ),
+    );
+    assert.equal((desc.match(/👉/g) ?? []).length, 1);
   });
 });
 
