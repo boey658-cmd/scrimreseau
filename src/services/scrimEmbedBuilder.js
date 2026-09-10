@@ -398,9 +398,13 @@ function buildScrimContactDescriptionLines(contactUserId, contactUsername) {
   return [`👤 <@${contactUserId}>`];
 }
 
-/** Explication courte sous le contact (une ligne compacte — partenaires uniquement). */
+/** Explication sous le contact (3 lignes historiques). */
 function getScrimContactButtonHintLines(locale = 'fr') {
-  return [t(locale, 'embed.contactHint1')];
+  return [
+    t(locale, 'embed.contactHint1'),
+    t(locale, 'embed.contactHint2'),
+    t(locale, 'embed.contactHint3'),
+  ];
 }
 
 /**
@@ -540,7 +544,7 @@ function resolveScrimDisplaySchedule(payload, locale = 'fr') {
 
 /**
  * @param {ScrimEmbedPayload} payload
- * @param {{ includeContactHints?: boolean, includeContactInEmbed?: boolean }} [options]
+ * @param {{ includeContactHints?: boolean }} [options]
  * @returns {string}
  */
 function buildScrimEmbedDescription(payload, options = {}, locale = 'fr') {
@@ -569,15 +573,12 @@ function buildScrimEmbedDescription(payload, options = {}, locale = 'fr') {
   /** @type {string[]} */
   const lines = [line1, line2, line3];
 
-  // ── Ligne 4 : contact (partenaires uniquement ; officiel → content hors embed) ──
-  const includeContactInEmbed = options.includeContactInEmbed !== false;
-  if (includeContactInEmbed) {
-    const contactLine = buildScrimContactDescriptionLines(
-      payload.contactUserId,
-      payload.contactDisplayName ?? null,
-    )[0] ?? '';
-    lines.push(contactLine);
-  }
+  // ── Ligne 4 : contact ──
+  const contactLine = buildScrimContactDescriptionLines(
+    payload.contactUserId,
+    payload.contactDisplayName ?? null,
+  )[0] ?? '';
+  lines.push(contactLine);
 
   // ── Ligne 5 (optionnelle) : structure (avec lien cliquable si disponible) ──
   if (payload.structureNameSnapshot) {
@@ -599,35 +600,9 @@ function buildScrimEmbedDescription(payload, options = {}, locale = 'fr') {
 }
 
 /**
- * Content hors embed pour le serveur officiel ScrimRéseau (annonce active).
- * @param {string | null | undefined} contactUserId
- * @param {string} [locale]
- * @returns {string | null}
- */
-export function buildScrimOfficialContactContent(contactUserId, locale = 'fr') {
-  const id = typeof contactUserId === 'string' ? contactUserId.trim() : '';
-  if (!id) return null;
-  return t(locale, 'embed.officialContactContent', { mention: `<@${id}>` });
-}
-
-/**
- * Mentions autorisées pour le content officiel (`👤 Contact : <@id>`).
- * `users: []` + `parse: []` : aucune mention réellement parsée (pas de ping / highlight).
- * Couplé à `MessageFlags.SuppressNotifications` au send pour supprimer push/desktop.
- * @param {string} [_contactUserId] snowflake (conservé pour signature stable ; non listé dans users)
- * @returns {{ parse: [], users: [], roles: [] }}
- */
-export function buildScrimOfficialAllowedMentions(_contactUserId) {
-  return {
-    parse: /** @type {[]} */ ([]),
-    users: /** @type {[]} */ ([]),
-    roles: /** @type {[]} */ ([]),
-  };
-}
-/**
  * @param {ScrimEmbedPayload} payload
  * @param {number} color
- * @param {{ includeContactHints?: boolean, includeContactInEmbed?: boolean }} [options]
+ * @param {{ includeContactHints?: boolean }} [options]
  * @param {string} [locale]
  * @returns {EmbedBuilder}
  */
@@ -641,19 +616,17 @@ function buildScrimEmbedWithStatus(payload, color, options = {}, locale = 'fr') 
  * Édition Discord : vague réseau remplacée par un repost (scrim toujours actif en DB).
  * @param {Record<string, unknown>} dbRow ligne `scrim_posts`
  * @param {string} [locale]
- * @param {{ includeContactInEmbed?: boolean }} [options]
  * @returns {{ content: null, embeds: EmbedBuilder[], components: [] }}
  */
-export function buildScrimSupersededMessageEditOptions(dbRow, locale = 'fr', options = {}) {
+export function buildScrimSupersededMessageEditOptions(dbRow, locale = 'fr') {
   const payload = scrimDbRowToEmbedPayload(dbRow);
-  const includeContactInEmbed = options.includeContactInEmbed !== false;
   return {
     content: null,
     embeds: [
       buildScrimEmbedWithStatus(
         payload,
         SCRIM_EMBED_COLOR_SUPERSEDED,
-        { includeContactInEmbed },
+        {},
         locale,
       ),
     ],
@@ -666,12 +639,10 @@ export function buildScrimSupersededMessageEditOptions(dbRow, locale = 'fr', opt
  * @param {'closed_manual' | 'closed_expired'} status
  * @param {Record<string, unknown>} dbRow ligne `scrim_posts` après fermeture
  * @param {string} [locale]
- * @param {{ includeContactInEmbed?: boolean }} [options]
  * @returns {{ content: null, embeds: EmbedBuilder[], components: [] }}
  */
-export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr', options = {}) {
+export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr') {
   const payload = scrimDbRowToEmbedPayload(dbRow);
-  const includeContactInEmbed = options.includeContactInEmbed !== false;
 
   if (status === 'closed_manual') {
     return {
@@ -680,7 +651,7 @@ export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr',
         buildScrimEmbedWithStatus(
           payload,
           SCRIM_EMBED_COLOR_CLOSED_MANUAL,
-          { includeContactInEmbed },
+          {},
           locale,
         ),
       ],
@@ -695,7 +666,7 @@ export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr',
         buildScrimEmbedWithStatus(
           payload,
           SCRIM_EMBED_COLOR_CLOSED_EXPIRED,
-          { includeContactInEmbed },
+          {},
           locale,
         ),
       ],
@@ -708,7 +679,7 @@ export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr',
 /**
  * @param {ScrimEmbedPayload} payload
  * @param {string} [locale]
- * @param {{ includeContactHints?: boolean, includeContactInEmbed?: boolean }} [options]
+ * @param {{ includeContactHints?: boolean }} [options]
  * @returns {EmbedBuilder}
  */
 export function buildScrimEmbed(payload, locale = 'fr', options = {}) {
@@ -716,7 +687,6 @@ export function buildScrimEmbed(payload, locale = 'fr', options = {}) {
     payload,
     SCRIM_EMBED_COLOR_ACTIVE,
     {
-      includeContactInEmbed: options.includeContactInEmbed !== false,
       includeContactHints: options.includeContactHints !== false,
     },
     locale,

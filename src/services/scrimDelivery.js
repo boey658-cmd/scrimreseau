@@ -1,11 +1,8 @@
-import { MessageFlags } from 'discord.js';
 import { RESTJSONErrorCodes } from 'discord-api-types/v10';
 import { assertBotCanPostInChannel } from './channelPermissions.js';
 import {
   buildScrimCommunityServerActionRows,
   buildScrimEmbed,
-  buildScrimOfficialAllowedMentions,
-  buildScrimOfficialContactContent,
 } from './scrimEmbedBuilder.js';
 import { getGuildLocale } from '../i18n/index.js';
 import { isScrimReseauPublicGuildId } from '../utils/scrimPublicGuildGate.js';
@@ -224,15 +221,11 @@ export async function deliverScrimToDestination({
       ? getGuildLocale(row.guild_id, stmts)
       : 'fr';
 
-    // 7. Embed (+ content officiel hors embed)
+    // 7. Embed (+ boutons : partenaire = invite ; officiel = site)
     const isOfficial = isScrimReseauPublicGuildId(row.guild_id);
-    const embed = buildScrimEmbed(
-      payload,
-      guildLocale,
-      isOfficial
-        ? { includeContactInEmbed: false, includeContactHints: false }
-        : {},
-    );
+    const embed = buildScrimEmbed(payload, guildLocale, {
+      includeContactHints: !isOfficial,
+    });
     const communityRows = buildScrimCommunityServerActionRows(
       /** @type {any} */ (payload).multiOpggUrl ?? null,
       guildLocale,
@@ -241,31 +234,9 @@ export async function deliverScrimToDestination({
         includeOfficialSiteButton: isOfficial,
       },
     );
-
-    /** @type {import('discord.js').MessageCreateOptions} */
-    let sendPayload;
-    if (isOfficial) {
-      const contactUserId =
-        typeof /** @type {any} */ (payload).contactUserId === 'string'
-          ? /** @type {any} */ (payload).contactUserId.trim()
-          : '';
-      const content = buildScrimOfficialContactContent(contactUserId, guildLocale);
-      sendPayload = {
-        embeds: [embed],
-        flags: MessageFlags.SuppressNotifications,
-      };
-      if (content && contactUserId) {
-        sendPayload.content = content;
-        sendPayload.allowedMentions = buildScrimOfficialAllowedMentions(contactUserId);
-      }
-      if (communityRows.length > 0) {
-        sendPayload.components = communityRows;
-      }
-    } else {
-      sendPayload = communityRows.length > 0
-        ? { embeds: [embed], components: communityRows }
-        : { embeds: [embed] };
-    }
+    const sendPayload = communityRows.length > 0
+      ? { embeds: [embed], components: communityRows }
+      : { embeds: [embed] };
 
     // 8. Envoi
     // Persistant direct : at-most-once applicatif (1 seul channel.send) + nonce Discord.

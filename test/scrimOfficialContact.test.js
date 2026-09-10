@@ -1,5 +1,6 @@
 /**
- * Contact officiel vs partenaires + sémantique content null dans les retries.
+ * Partenaire (hints longs + invite) vs officiel (contact embed, sans hints, bouton site).
+ * Pas de content / allowedMentions / SuppressNotifications.
  */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
@@ -14,8 +15,6 @@ import {
   buildScrimClosedMessageEditOptions,
   buildScrimCommunityServerActionRows,
   buildScrimEmbed,
-  buildScrimOfficialAllowedMentions,
-  buildScrimOfficialContactContent,
   buildScrimSupersededMessageEditOptions,
   SCRIM_OFFICIAL_SITE_URL,
 } from '../src/services/scrimEmbedBuilder.js';
@@ -24,7 +23,6 @@ import {
   serializeScrimEditPayload,
 } from '../src/services/safeDiscordMessageEdit.js';
 import { ALL_LOCALES, t } from '../src/i18n/index.js';
-import { MessageFlags } from 'discord.js';
 
 const CONTACT_ID = '555444333222111000';
 const OPGG_URL = 'https://www.op.gg/multisearch/euw?summoners=a,b';
@@ -97,98 +95,88 @@ function desc(embed) {
   return embed.toJSON().description ?? '';
 }
 
-describe('partenaire actif — contact embed + nouveaux hints', () => {
+const HINT_FR = [
+  "⚠️ Si la mention du contact ci-dessus n'est pas cliquable",
+  '👉 Rejoignez le serveur ScrimRéseau avec le bouton ci-dessous',
+  '👉 Cela permet généralement de rendre la mention cliquable',
+];
+
+const HINT_EN = [
+  '⚠️ If the contact mention above is not clickable',
+  '👉 Join the ScrimRéseau server using the button below',
+  '👉 This usually makes the mention clickable',
+];
+
+describe('partenaire actif — contact embed + hints longs historiques', () => {
   it('garde le format 👤 <@id> • username', () => {
     const d = desc(buildScrimEmbed(BASE_PAYLOAD, 'fr'));
     assert.match(d, new RegExp(`👤 <@${CONTACT_ID}> • TestPlayer`));
-    assert.doesNotMatch(d, /👤 Contact/);
+    assert.doesNotMatch(d, /👤 Contact\s*:/);
   });
 
-  it('inclut les nouveaux hints FR', () => {
+  it('inclut les 3 hints FR historiques', () => {
     const d = desc(buildScrimEmbed(BASE_PAYLOAD, 'fr'));
-    assert.ok(
-      d.includes(
-        "⚠️ Si la mention du contact n'est pas cliquable 👉 Rejoignez ScrimRéseau ci-dessous, puis retrouvez le scrim là-bas.",
-      ),
-    );
-    assert.equal((d.match(/👉/g) ?? []).length, 1);
+    for (const line of HINT_FR) assert.ok(d.includes(line), line);
+    assert.equal((d.match(/👉/g) ?? []).length, 2);
   });
 
-  it('n’expose pas de content hors embed (builder seul)', () => {
-    const embed = buildScrimEmbed(BASE_PAYLOAD, 'fr');
-    assert.ok(desc(embed).includes(`<@${CONTACT_ID}>`));
-  });
-});
-
-describe('officiel actif — options builder', () => {
-  it('retire contact et hints de l’embed', () => {
-    const d = desc(
-      buildScrimEmbed(BASE_PAYLOAD, 'fr', {
-        includeContactInEmbed: false,
-        includeContactHints: false,
-      }),
-    );
-    assert.doesNotMatch(d, new RegExp(`<@${CONTACT_ID}>`));
-    assert.doesNotMatch(d, /cliquable/);
-    assert.doesNotMatch(d, /TestPlayer/);
+  it('inclut les 3 hints EN historiques', () => {
+    const d = desc(buildScrimEmbed(BASE_PAYLOAD, 'en'));
+    for (const line of HINT_EN) assert.ok(d.includes(line), line);
+    assert.equal((d.match(/👉/g) ?? []).length, 2);
   });
 
-  it('content officiel i18n sans username', () => {
-    const content = buildScrimOfficialContactContent(CONTACT_ID, 'fr');
-    assert.equal(content, `👤 Contact : <@${CONTACT_ID}>`);
-    assert.doesNotMatch(content, /TestPlayer/);
-  });
-
-  it('anti-ping : allowedMentions parse/users/roles vides', () => {
-    const am = buildScrimOfficialAllowedMentions(CONTACT_ID);
-    assert.deepEqual(am.parse, []);
-    assert.deepEqual(am.users, []);
-    assert.deepEqual(am.roles, []);
-  });
-
-  it('SuppressNotifications flag disponible (discord.js)', () => {
-    assert.equal(MessageFlags.SuppressNotifications, 4096);
-  });
-
-  it('officialContactContent présent dans les 7 locales', () => {
+  it('hints longs + officialSiteButton dans les 7 locales', () => {
     for (const locale of ALL_LOCALES) {
-      const line = t(locale, 'embed.officialContactContent', {
-        mention: `<@${CONTACT_ID}>`,
-      });
-      assert.ok(line.includes(`<@${CONTACT_ID}>`), locale);
-      assert.doesNotMatch(line, /\[embed\.officialContactContent\]/);
+      const h1 = t(locale, 'embed.contactHint1');
+      const h2 = t(locale, 'embed.contactHint2');
+      const h3 = t(locale, 'embed.contactHint3');
+      assert.doesNotMatch(h1, /\[embed\.contactHint1\]/, locale);
+      assert.doesNotMatch(h2, /\[embed\.contactHint2\]/, locale);
+      assert.doesNotMatch(h3, /\[embed\.contactHint3\]/, locale);
+      assert.ok(h1.includes('⚠️'), locale);
+      assert.ok(h2.includes('👉'), locale);
+      assert.ok(h3.includes('👉'), locale);
+      assert.notEqual(h1, h2, locale);
+      const site = t(locale, 'embed.officialSiteButton');
+      assert.ok(site.includes('ScrimRéseau') || site.includes('ScrimReseau'), locale);
+      assert.doesNotMatch(site, /\[embed\.officialSiteButton\]/);
+      assert.match(t(locale, 'embed.officialContactContent'), /\[embed\.officialContactContent\]/);
+      const d = desc(buildScrimEmbed(BASE_PAYLOAD, locale));
+      assert.ok(d.includes(h1) && d.includes(h2) && d.includes(h3), locale);
     }
   });
 });
 
-describe('officiel inactif — close / expire / superseded', () => {
-  it('close manuel sans contact embed + content null', () => {
-    const opts = buildScrimClosedMessageEditOptions('closed_manual', BASE_DB_ROW, 'fr', {
-      includeContactInEmbed: false,
-    });
+describe('officiel actif — options builder', () => {
+  it('contact dans embed, sans hints', () => {
+    const d = desc(
+      buildScrimEmbed(BASE_PAYLOAD, 'fr', { includeContactHints: false }),
+    );
+    assert.match(d, new RegExp(`👤 <@${CONTACT_ID}> • TestPlayer`));
+    assert.doesNotMatch(d, /cliquable/);
+    assert.doesNotMatch(d, /👉/);
+  });
+});
+
+describe('lifecycle — close / expire / superseded', () => {
+  it('close manuel : content null + contact dans embed + sans hints', () => {
+    const opts = buildScrimClosedMessageEditOptions('closed_manual', BASE_DB_ROW, 'fr');
     assert.equal(opts.content, null);
     assert.deepEqual(opts.components, []);
-    assert.doesNotMatch(desc(opts.embeds[0]), new RegExp(`<@${CONTACT_ID}>`));
+    assert.match(desc(opts.embeds[0]), new RegExp(`👤 <@${CONTACT_ID}> • TestPlayer`));
+    assert.doesNotMatch(desc(opts.embeds[0]), /cliquable/);
   });
 
-  it('expire sans contact embed + content null', () => {
-    const opts = buildScrimClosedMessageEditOptions('closed_expired', BASE_DB_ROW, 'fr', {
-      includeContactInEmbed: false,
-    });
+  it('expire : content null + contact dans embed', () => {
+    const opts = buildScrimClosedMessageEditOptions('closed_expired', BASE_DB_ROW, 'fr');
     assert.equal(opts.content, null);
-    assert.doesNotMatch(desc(opts.embeds[0]), new RegExp(`<@${CONTACT_ID}>`));
+    assert.match(desc(opts.embeds[0]), new RegExp(`👤 <@${CONTACT_ID}> • TestPlayer`));
   });
 
-  it('superseded sans contact embed + content null', () => {
-    const opts = buildScrimSupersededMessageEditOptions(BASE_DB_ROW, 'fr', {
-      includeContactInEmbed: false,
-    });
+  it('superseded : content null + contact dans embed', () => {
+    const opts = buildScrimSupersededMessageEditOptions(BASE_DB_ROW, 'fr');
     assert.equal(opts.content, null);
-    assert.doesNotMatch(desc(opts.embeds[0]), new RegExp(`<@${CONTACT_ID}>`));
-  });
-
-  it('partenaire fermé conserve le contact dans l’embed', () => {
-    const opts = buildScrimClosedMessageEditOptions('closed_manual', BASE_DB_ROW, 'fr');
     assert.match(desc(opts.embeds[0]), new RegExp(`👤 <@${CONTACT_ID}> • TestPlayer`));
   });
 });
@@ -204,23 +192,16 @@ describe('serializeScrimEditPayload — sémantique content', () => {
 
   it('content string → set', () => {
     const json = serializeScrimEditPayload({
-      content: `👤 Contact : <@${CONTACT_ID}>`,
-      embeds: [
-        buildScrimEmbed(BASE_PAYLOAD, 'fr', {
-          includeContactInEmbed: false,
-          includeContactHints: false,
-        }),
-      ],
+      content: 'hello',
+      embeds: [buildScrimEmbed(BASE_PAYLOAD, 'fr')],
     });
     const data = JSON.parse(json);
-    assert.equal(data.content, `👤 Contact : <@${CONTACT_ID}>`);
+    assert.equal(data.content, 'hello');
   });
 
   it('content null → clear conservé après sérialisation', () => {
     const json = serializeScrimEditPayload(
-      buildScrimClosedMessageEditOptions('closed_manual', BASE_DB_ROW, 'fr', {
-        includeContactInEmbed: false,
-      }),
+      buildScrimClosedMessageEditOptions('closed_manual', BASE_DB_ROW, 'fr'),
     );
     const data = JSON.parse(json);
     assert.equal(Object.prototype.hasOwnProperty.call(data, 'content'), true);
@@ -230,12 +211,7 @@ describe('serializeScrimEditPayload — sémantique content', () => {
   it('replay applique content null (clear)', async () => {
     const json = serializeScrimEditPayload({
       content: null,
-      embeds: [
-        buildScrimEmbed(BASE_PAYLOAD, 'fr', {
-          includeContactInEmbed: false,
-          includeContactHints: false,
-        }),
-      ],
+      embeds: [buildScrimEmbed(BASE_PAYLOAD, 'fr', { includeContactHints: false })],
       components: [],
     });
     /** @type {Record<string, unknown>[]} */
@@ -292,7 +268,7 @@ describe('serializeScrimEditPayload — sémantique content', () => {
   });
 });
 
-describe('broadcast multi-guild — officiel vs partenaire (pas de mutation partagée)', () => {
+describe('broadcast multi-guild — officiel vs partenaire', () => {
   const GUILD_OFFICIAL = '777000000000000001';
   const GUILD_PARTNER = '777000000000000002';
   const CHAN_OFFICIAL = '888000000000000001';
@@ -309,6 +285,7 @@ describe('broadcast multi-guild — officiel vs partenaire (pas de mutation part
 
   const sentOfficial = [];
   const sentPartner = [];
+  let msgSeq = 0;
 
   function mockChannel(channelId, capture) {
     const perms = new PermissionsBitField([
@@ -322,7 +299,8 @@ describe('broadcast multi-guild — officiel vs partenaire (pas de mutation part
       permissionsFor: () => perms,
       send: async (payload) => {
         capture.push(payload);
-        return { id: `msg-${channelId}` };
+        msgSeq += 1;
+        return { id: `msg-${channelId}-${msgSeq}`, delete: async () => {} };
       },
     };
   }
@@ -348,7 +326,7 @@ describe('broadcast multi-guild — officiel vs partenaire (pas de mutation part
     prevUrl = process.env.SCRIM_COMMUNITY_SERVER_URL;
     process.env.SQLITE_PATH = path.join(tempDir, 'test.db');
     process.env.SCRIMRESEAU_PUBLIC_GUILD_ID = GUILD_OFFICIAL;
-    process.env.SCRIM_COMMUNITY_SERVER_URL = 'https://discord.gg/testhint';
+    process.env.SCRIM_COMMUNITY_SERVER_URL = JOIN_URL;
     process.env.DISCORD_TASK_QUEUE_DELAY_MS = '0';
     closeDb();
     const db = getDb();
@@ -372,7 +350,7 @@ describe('broadcast multi-guild — officiel vs partenaire (pas de mutation part
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('officiel : content + anti-ping ; partenaire : contact embed + hints ; sans invite officiel', async () => {
+  it('partenaire : contact + 3 hints + invite ; officiel : contact sans hints + site ; pas de content/flags', async () => {
     sentOfficial.length = 0;
     sentPartner.length = 0;
     const stmts = prepareStatements(getDb());
@@ -397,25 +375,21 @@ describe('broadcast multi-guild — officiel vs partenaire (pas de mutation part
       scrimPostDbId: 1,
     });
 
-    assert.equal(sentOfficial.length, 1, 'officiel doit recevoir 1 message');
-    assert.equal(sentPartner.length, 1, 'partenaire doit recevoir 1 message');
+    assert.equal(sentOfficial.length, 1);
+    assert.equal(sentPartner.length, 1);
 
     const off = sentOfficial[0];
     const part = sentPartner[0];
 
-    assert.equal(off.content, `👤 Contact : <@${CONTACT_ID}>`);
-    assert.deepEqual(off.allowedMentions?.parse, []);
-    assert.deepEqual(off.allowedMentions?.users, []);
-    assert.deepEqual(off.allowedMentions?.roles, []);
-    assert.equal(off.flags, MessageFlags.SuppressNotifications);
+    assert.equal(off.content, undefined);
+    assert.equal(off.allowedMentions, undefined);
+    assert.equal(off.flags, undefined);
     const offDesc = off.embeds[0].toJSON().description ?? '';
-    assert.doesNotMatch(offDesc, new RegExp(`<@${CONTACT_ID}>`));
+    assert.match(offDesc, new RegExp(`👤 <@${CONTACT_ID}> • TestPlayer`));
     assert.doesNotMatch(offDesc, /cliquable/);
+    assert.doesNotMatch(offDesc, /👉/);
     assert.deepEqual(buttonUrls(off), [SCRIM_OFFICIAL_SITE_URL]);
-    assert.ok(
-      buttonLabels(off).some((l) => /Site ScrimRéseau|ScrimRéseau Website/i.test(l)),
-      'officiel sans OP.GG → bouton site seul',
-    );
+    assert.ok(buttonLabels(off).some((l) => /Site ScrimRéseau|ScrimRéseau Website/i.test(l)));
     assert.ok(!buttonUrls(off).includes(JOIN_URL));
 
     assert.equal(part.content, undefined);
@@ -423,23 +397,15 @@ describe('broadcast multi-guild — officiel vs partenaire (pas de mutation part
     assert.equal(part.flags, undefined);
     const partDesc = part.embeds[0].toJSON().description ?? '';
     assert.match(partDesc, new RegExp(`👤 <@${CONTACT_ID}> • TestPlayer`));
-    assert.match(
-      partDesc,
-      /⚠️ Si la mention du contact n'est pas cliquable 👉 Rejoignez ScrimRéseau ci-dessous, puis retrouvez le scrim là-bas\./,
-    );
-    assert.equal((partDesc.match(/👉/g) ?? []).length, 1);
-    assert.ok(buttonUrls(part).includes(JOIN_URL), 'partenaire garde le bouton invite');
-    assert.ok(!buttonUrls(part).includes(SCRIM_OFFICIAL_SITE_URL), 'partenaire sans bouton site');
-    assert.ok(
-      buttonLabels(part).some((l) => /Rejoindre|Join|ScrimRéseau/i.test(l)),
-      'partenaire : label invite présent',
-    );
+    for (const line of HINT_FR) assert.ok(partDesc.includes(line), line);
+    assert.equal((partDesc.match(/👉/g) ?? []).length, 2);
+    assert.deepEqual(buttonUrls(part), [JOIN_URL]);
+    assert.ok(!buttonUrls(part).includes(SCRIM_OFFICIAL_SITE_URL));
 
     assert.equal(sharedPayload.contactUserId, CONTACT_ID);
-    assert.equal(sharedPayload.contactDisplayName, 'TestPlayer');
   });
 
-  it('officiel + OP.GG : site + OP.GG ; partenaire : invite + OP.GG (pas de site)', async () => {
+  it('officiel + OP.GG : site + OP.GG ; partenaire : invite + OP.GG', async () => {
     sentOfficial.length = 0;
     sentPartner.length = 0;
     const stmts = prepareStatements(getDb());
@@ -469,23 +435,19 @@ describe('broadcast multi-guild — officiel vs partenaire (pas de mutation part
     const off = sentOfficial[0];
     const part = sentPartner[0];
 
-    assert.equal(off.content, `👤 Contact : <@${CONTACT_ID}>`);
-    assert.equal(off.flags, MessageFlags.SuppressNotifications);
-    assert.deepEqual(off.allowedMentions?.users, []);
+    assert.equal(off.content, undefined);
+    assert.equal(off.flags, undefined);
     assert.deepEqual(buttonUrls(off), [SCRIM_OFFICIAL_SITE_URL, OPGG_URL]);
     assert.ok(buttonLabels(off).includes('Multi OP.GG'));
-    assert.ok(buttonLabels(off).some((l) => /Site ScrimRéseau|ScrimRéseau Website/i.test(l)));
     assert.ok(!buttonUrls(off).includes(JOIN_URL));
 
-    assert.ok(buttonUrls(part).includes(JOIN_URL));
-    assert.ok(buttonUrls(part).includes(OPGG_URL));
-    assert.ok(!buttonUrls(part).includes(SCRIM_OFFICIAL_SITE_URL));
+    assert.deepEqual(buttonUrls(part), [JOIN_URL, OPGG_URL]);
     assert.ok(buttonLabels(part).includes('Multi OP.GG'));
-    assert.equal(part.flags, undefined);
+    assert.ok(!buttonUrls(part).includes(SCRIM_OFFICIAL_SITE_URL));
   });
 });
 
-describe('buildScrimCommunityServerActionRows — includeCommunityInviteButton / site', () => {
+describe('buildScrimCommunityServerActionRows — invite / site / OP.GG', () => {
   const originalUrl = process.env.SCRIM_COMMUNITY_SERVER_URL;
 
   after(() => {
@@ -493,15 +455,13 @@ describe('buildScrimCommunityServerActionRows — includeCommunityInviteButton /
     else delete process.env.SCRIM_COMMUNITY_SERVER_URL;
   });
 
-  it('défaut / true → invite + OP.GG, pas de site', () => {
+  it('partenaire défaut → invite + OP.GG', () => {
     process.env.SCRIM_COMMUNITY_SERVER_URL = JOIN_URL;
     const rows = buildScrimCommunityServerActionRows(OPGG_URL, 'fr');
     assert.equal(rows.length, 1);
     const comps = rows[0].toJSON().components ?? [];
     assert.equal(comps.length, 2);
-    assert.match(comps[0].label ?? '', /Rejoindre|ScrimRéseau/);
     assert.equal(comps[0].url, JOIN_URL);
-    assert.equal(comps[1].label, 'Multi OP.GG');
     assert.equal(comps[1].url, OPGG_URL);
   });
 
@@ -514,13 +474,11 @@ describe('buildScrimCommunityServerActionRows — includeCommunityInviteButton /
     assert.equal(rows.length, 1);
     const comps = rows[0].toJSON().components ?? [];
     assert.equal(comps.length, 2);
-    assert.equal(comps[0].label, '🌐 Site ScrimRéseau');
     assert.equal(comps[0].url, SCRIM_OFFICIAL_SITE_URL);
-    assert.equal(comps[1].label, 'Multi OP.GG');
     assert.equal(comps[1].url, OPGG_URL);
   });
 
-  it('officiel sans OP.GG → site seul', () => {
+  it('officiel sans OP.GG → site seul (pas de row vide)', () => {
     process.env.SCRIM_COMMUNITY_SERVER_URL = JOIN_URL;
     const rows = buildScrimCommunityServerActionRows(null, 'fr', {
       includeCommunityInviteButton: false,
@@ -530,14 +488,5 @@ describe('buildScrimCommunityServerActionRows — includeCommunityInviteButton /
     const comps = rows[0].toJSON().components ?? [];
     assert.equal(comps.length, 1);
     assert.equal(comps[0].url, SCRIM_OFFICIAL_SITE_URL);
-  });
-
-  it('false sans site ni OP.GG → aucune row', () => {
-    process.env.SCRIM_COMMUNITY_SERVER_URL = JOIN_URL;
-    const rows = buildScrimCommunityServerActionRows(null, 'fr', {
-      includeCommunityInviteButton: false,
-      includeOfficialSiteButton: false,
-    });
-    assert.deepEqual(rows, []);
   });
 });

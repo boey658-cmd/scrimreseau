@@ -5,7 +5,6 @@ import {
 import { runTransientDiscord } from './discordApiGuard.js';
 import { syncInactiveScrimMessageByPolicy } from './scrimMessagePolicy.js';
 import { getGuildLocale, t } from '../i18n/index.js';
-import { isScrimReseauPublicGuildId } from '../utils/scrimPublicGuildGate.js';
 import {
   closeScrimPostByDbIdAndExecuteLifecycle,
   closeScrimPostByDbIdOrchestrated,
@@ -138,9 +137,7 @@ export async function updateScrimPostMessagesEmbeds(client, stmts, dbRow) {
   for (let i = 0; i < messages.length; i += 1) {
     const m = messages[i];
     const locale = stmts.getGuildLanguage ? getGuildLocale(m.guild_id, stmts) : 'fr';
-    const editOptions = buildScrimClosedMessageEditOptions(status, dbRow, locale, {
-      includeContactInEmbed: !isScrimReseauPublicGuildId(m.guild_id),
-    });
+    const editOptions = buildScrimClosedMessageEditOptions(status, dbRow, locale);
     if (i > 0) await sleep(SCRIM_EDIT_DELAY_MS);
 
     // Si le message a déjà été supprimé par la policy de suppression automatique,
