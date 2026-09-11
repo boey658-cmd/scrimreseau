@@ -3,8 +3,10 @@ import { assertBotCanPostInChannel } from './channelPermissions.js';
 import {
   buildScrimCommunityServerActionRows,
   buildScrimEmbed,
+  buildScrimOfficialContactContent,
 } from './scrimEmbedBuilder.js';
 import { getGuildLocale } from '../i18n/index.js';
+import { logger } from '../utils/logger.js';
 import { isScrimReseauPublicGuildId } from '../utils/scrimPublicGuildGate.js';
 import { classifyDiscordEditError } from './discordRetryPolicy.js';
 import { enqueueDiscordTask } from './discordTaskQueue.js';
@@ -45,6 +47,36 @@ export function buildPersistentDeliveryNonce(deliveryId) {
  */
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+/**
+ * Expérimentation locale officiel : ajoute le contact en content via edit après send.
+ * Ne lève jamais — un échec d’edit ne doit PAS transformer un send réussi en retry delivery
+ * (sinon doublon de message sur le pipeline persistant).
+ *
+ * @param {import('discord.js').Message} sentMessage
+ * @param {object} payload
+ * @param {string} guildLocale
+ * @param {{ guild_id: string, channel_id: string }} row
+ * @returns {Promise<void>}
+ */
+export async function applyOfficialContactEditAfterSend(sentMessage, payload, guildLocale, row) {
+  const contactUserId =
+    typeof /** @type {any} */ (payload).contactUserId === 'string'
+      ? /** @type {any} */ (payload).contactUserId.trim()
+      : '';
+  const content = buildScrimOfficialContactContent(contactUserId, guildLocale);
+  if (!content) return;
+  try {
+    await sentMessage.edit({ content });
+  } catch (editErr) {
+    logger.warn('scrimDelivery: edit contact officiel échoué (annonce déjà envoyée — pas de resend)', {
+      guild_id: row.guild_id,
+      channel_id: row.channel_id,
+      message_id: sentMessage?.id,
+      message: editErr instanceof Error ? editErr.message : String(editErr),
+    });
+  }
+}
 
 /**
  * Codes Discord terminaux fréquents → libellés stables pour logs / DB.
@@ -221,11 +253,15 @@ export async function deliverScrimToDestination({
       ? getGuildLocale(row.guild_id, stmts)
       : 'fr';
 
-    // 7. Embed (+ boutons : partenaire = invite ; officiel = site)
+    // 7. Embed (+ boutons : partenaire = invite ; officiel = site, sans contact embed)
     const isOfficial = isScrimReseauPublicGuildId(row.guild_id);
-    const embed = buildScrimEmbed(payload, guildLocale, {
-      includeContactHints: !isOfficial,
-    });
+    const embed = buildScrimEmbed(
+      payload,
+      guildLocale,
+      isOfficial
+        ? { includeContactInEmbed: false, includeContactHints: false }
+        : {},
+    );
     const communityRows = buildScrimCommunityServerActionRows(
       /** @type {any} */ (payload).multiOpggUrl ?? null,
       guildLocale,
@@ -242,6 +278,7 @@ export async function deliverScrimToDestination({
     // Persistant direct : at-most-once applicatif (1 seul channel.send) + nonce Discord.
     // Ambigu (timeout/5xx/réseau) → unknown_outcome, pas de retry auto.
     // Les retries REST internes discord.js réutilisent le même body (même nonce + enforceNonce).
+    // Officiel : après send réussi, edit best-effort du content contact (échec ≠ resend).
     if (sendMode === 'direct') {
       let nonce;
       try {
@@ -261,6 +298,9 @@ export async function deliverScrimToDestination({
       };
       try {
         const sent = /** @type {import('discord.js').Message} */ (await channel.send(directPayload));
+        if (isOfficial) {
+          await applyOfficialContactEditAfterSend(sent, payload, guildLocale, row);
+        }
         return { outcome: 'sent', message: sent };
       } catch (sendErr) {
         const c = classifyDiscordEditError(sendErr);
@@ -294,7 +334,13 @@ export async function deliverScrimToDestination({
     }
 
     const sent = /** @type {import('discord.js').Message} */ (await enqueueDiscordTask(
-      async () => channel.send(sendPayload),
+      async () => {
+        const msg = /** @type {import('discord.js').Message} */ (await channel.send(sendPayload));
+        if (isOfficial) {
+          await applyOfficialContactEditAfterSend(msg, payload, guildLocale, row);
+        }
+        return msg;
+      },
       { kind: 'scrim_delivery_send', guild_id: row.guild_id, channel_id: row.channel_id },
       'high',
     ));

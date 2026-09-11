@@ -1,6 +1,6 @@
 /**
- * Partenaire (hints longs + invite) vs officiel (contact embed, sans hints, bouton site).
- * Pas de content / allowedMentions / SuppressNotifications.
+ * Expérimentation locale officiel : send sans contact puis edit content.
+ * Partenaires inchangés (contact embed + hints longs + invite, aucun edit).
  */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
@@ -12,9 +12,14 @@ import {
   stopDiscordTaskQueue,
 } from '../src/services/discordTaskQueue.js';
 import {
+  applyOfficialContactEditAfterSend,
+  deliverScrimToDestination,
+} from '../src/services/scrimDelivery.js';
+import {
   buildScrimClosedMessageEditOptions,
   buildScrimCommunityServerActionRows,
   buildScrimEmbed,
+  buildScrimOfficialContactContent,
   buildScrimSupersededMessageEditOptions,
   SCRIM_OFFICIAL_SITE_URL,
 } from '../src/services/scrimEmbedBuilder.js';
@@ -101,117 +106,101 @@ const HINT_FR = [
   '👉 Cela permet généralement de rendre la mention cliquable',
 ];
 
-const HINT_EN = [
-  '⚠️ If the contact mention above is not clickable',
-  '👉 Join the ScrimRéseau server using the button below',
-  '👉 This usually makes the mention clickable',
-];
-
-describe('partenaire actif — contact embed + hints longs historiques', () => {
-  it('garde le format 👤 <@id> • username', () => {
+describe('partenaire — contact embed + hints longs (inchangé)', () => {
+  it('format contact embed + 3 hints FR', () => {
     const d = desc(buildScrimEmbed(BASE_PAYLOAD, 'fr'));
     assert.match(d, new RegExp(`👤 <@${CONTACT_ID}> • TestPlayer`));
-    assert.doesNotMatch(d, /👤 Contact\s*:/);
-  });
-
-  it('inclut les 3 hints FR historiques', () => {
-    const d = desc(buildScrimEmbed(BASE_PAYLOAD, 'fr'));
     for (const line of HINT_FR) assert.ok(d.includes(line), line);
     assert.equal((d.match(/👉/g) ?? []).length, 2);
   });
 
-  it('inclut les 3 hints EN historiques', () => {
-    const d = desc(buildScrimEmbed(BASE_PAYLOAD, 'en'));
-    for (const line of HINT_EN) assert.ok(d.includes(line), line);
-    assert.equal((d.match(/👉/g) ?? []).length, 2);
-  });
-
-  it('hints longs + officialSiteButton dans les 7 locales', () => {
+  it('hints longs + officialSiteButton + officialContactContent dans 7 locales', () => {
     for (const locale of ALL_LOCALES) {
       const h1 = t(locale, 'embed.contactHint1');
       const h2 = t(locale, 'embed.contactHint2');
       const h3 = t(locale, 'embed.contactHint3');
-      assert.doesNotMatch(h1, /\[embed\.contactHint1\]/, locale);
-      assert.doesNotMatch(h2, /\[embed\.contactHint2\]/, locale);
-      assert.doesNotMatch(h3, /\[embed\.contactHint3\]/, locale);
-      assert.ok(h1.includes('⚠️'), locale);
-      assert.ok(h2.includes('👉'), locale);
-      assert.ok(h3.includes('👉'), locale);
-      assert.notEqual(h1, h2, locale);
-      const site = t(locale, 'embed.officialSiteButton');
-      assert.ok(site.includes('ScrimRéseau') || site.includes('ScrimReseau'), locale);
-      assert.doesNotMatch(site, /\[embed\.officialSiteButton\]/);
-      assert.match(t(locale, 'embed.officialContactContent'), /\[embed\.officialContactContent\]/);
-      const d = desc(buildScrimEmbed(BASE_PAYLOAD, locale));
-      assert.ok(d.includes(h1) && d.includes(h2) && d.includes(h3), locale);
+      assert.doesNotMatch(h1, /\[embed\.contactHint1\]/);
+      assert.ok(h1.includes('⚠️') && h2.includes('👉') && h3.includes('👉'), locale);
+      assert.doesNotMatch(t(locale, 'embed.officialSiteButton'), /\[embed\.officialSiteButton\]/);
+      const contactLine = t(locale, 'embed.officialContactContent', {
+        mention: `<@${CONTACT_ID}>`,
+      });
+      assert.ok(contactLine.includes(`<@${CONTACT_ID}>`), locale);
+      assert.doesNotMatch(contactLine, /\[embed\.officialContactContent\]/);
     }
   });
 });
 
-describe('officiel actif — options builder', () => {
-  it('contact dans embed, sans hints', () => {
+describe('officiel — builder send initial (sans contact embed)', () => {
+  it('embed sans contact ni hints', () => {
     const d = desc(
-      buildScrimEmbed(BASE_PAYLOAD, 'fr', { includeContactHints: false }),
+      buildScrimEmbed(BASE_PAYLOAD, 'fr', {
+        includeContactInEmbed: false,
+        includeContactHints: false,
+      }),
     );
-    assert.match(d, new RegExp(`👤 <@${CONTACT_ID}> • TestPlayer`));
-    assert.doesNotMatch(d, /cliquable/);
-    assert.doesNotMatch(d, /👉/);
+    assert.doesNotMatch(d, new RegExp(`<@${CONTACT_ID}>`));
+    assert.doesNotMatch(d, /cliquable|👉/);
+  });
+
+  it('content officiel i18n', () => {
+    assert.equal(
+      buildScrimOfficialContactContent(CONTACT_ID, 'fr'),
+      `👤 Contact : <@${CONTACT_ID}>`,
+    );
   });
 });
 
-describe('lifecycle — close / expire / superseded', () => {
-  it('close manuel : content null + contact dans embed + sans hints', () => {
-    const opts = buildScrimClosedMessageEditOptions('closed_manual', BASE_DB_ROW, 'fr');
+describe('lifecycle officiel vs partenaire', () => {
+  it('officiel close : content null + embed sans contact', () => {
+    const opts = buildScrimClosedMessageEditOptions('closed_manual', BASE_DB_ROW, 'fr', {
+      includeContactInEmbed: false,
+    });
     assert.equal(opts.content, null);
     assert.deepEqual(opts.components, []);
-    assert.match(desc(opts.embeds[0]), new RegExp(`👤 <@${CONTACT_ID}> • TestPlayer`));
-    assert.doesNotMatch(desc(opts.embeds[0]), /cliquable/);
+    assert.doesNotMatch(desc(opts.embeds[0]), new RegExp(`<@${CONTACT_ID}>`));
   });
 
-  it('expire : content null + contact dans embed', () => {
-    const opts = buildScrimClosedMessageEditOptions('closed_expired', BASE_DB_ROW, 'fr');
-    assert.equal(opts.content, null);
-    assert.match(desc(opts.embeds[0]), new RegExp(`👤 <@${CONTACT_ID}> • TestPlayer`));
+  it('officiel expire / superseded : content null + sans contact', () => {
+    for (const opts of [
+      buildScrimClosedMessageEditOptions('closed_expired', BASE_DB_ROW, 'fr', {
+        includeContactInEmbed: false,
+      }),
+      buildScrimSupersededMessageEditOptions(BASE_DB_ROW, 'fr', {
+        includeContactInEmbed: false,
+      }),
+    ]) {
+      assert.equal(opts.content, null);
+      assert.doesNotMatch(desc(opts.embeds[0]), new RegExp(`<@${CONTACT_ID}>`));
+    }
   });
 
-  it('superseded : content null + contact dans embed', () => {
-    const opts = buildScrimSupersededMessageEditOptions(BASE_DB_ROW, 'fr');
-    assert.equal(opts.content, null);
+  it('partenaire fermé : contact reste dans embed', () => {
+    const opts = buildScrimClosedMessageEditOptions('closed_manual', BASE_DB_ROW, 'fr');
     assert.match(desc(opts.embeds[0]), new RegExp(`👤 <@${CONTACT_ID}> • TestPlayer`));
   });
 });
 
 describe('serializeScrimEditPayload — sémantique content', () => {
-  it('omission de content → clé absente', () => {
-    const json = serializeScrimEditPayload({
-      embeds: [buildScrimEmbed(BASE_PAYLOAD, 'fr')],
-    });
-    const data = JSON.parse(json);
-    assert.equal(Object.prototype.hasOwnProperty.call(data, 'content'), false);
-  });
-
-  it('content string → set', () => {
-    const json = serializeScrimEditPayload({
-      content: 'hello',
-      embeds: [buildScrimEmbed(BASE_PAYLOAD, 'fr')],
-    });
-    const data = JSON.parse(json);
-    assert.equal(data.content, 'hello');
-  });
-
-  it('content null → clear conservé après sérialisation', () => {
+  it('content null → clear conservé', () => {
     const json = serializeScrimEditPayload(
-      buildScrimClosedMessageEditOptions('closed_manual', BASE_DB_ROW, 'fr'),
+      buildScrimClosedMessageEditOptions('closed_manual', BASE_DB_ROW, 'fr', {
+        includeContactInEmbed: false,
+      }),
     );
     const data = JSON.parse(json);
-    assert.equal(Object.prototype.hasOwnProperty.call(data, 'content'), true);
     assert.equal(data.content, null);
   });
 
-  it('replay applique content null (clear)', async () => {
+  it('replay applique content null', async () => {
     const json = serializeScrimEditPayload({
       content: null,
-      embeds: [buildScrimEmbed(BASE_PAYLOAD, 'fr', { includeContactHints: false })],
+      embeds: [
+        buildScrimEmbed(BASE_PAYLOAD, 'fr', {
+          includeContactInEmbed: false,
+          includeContactHints: false,
+        }),
+      ],
       components: [],
     });
     /** @type {Record<string, unknown>[]} */
@@ -230,36 +219,7 @@ describe('serializeScrimEditPayload — sémantique content', () => {
       await applyScrimEmbedEditFromPayload(/** @type {any} */ (message), json);
       await new Promise((r) => setTimeout(r, 50));
       assert.equal(edits.length, 1);
-      assert.equal(Object.prototype.hasOwnProperty.call(edits[0], 'content'), true);
       assert.equal(edits[0].content, null);
-    } finally {
-      await stopDiscordTaskQueue();
-      if (prevDelay === undefined) delete process.env.DISCORD_TASK_QUEUE_DELAY_MS;
-      else process.env.DISCORD_TASK_QUEUE_DELAY_MS = prevDelay;
-    }
-  });
-
-  it('replay sans clé content → ne modifie pas content', async () => {
-    const json = serializeScrimEditPayload({
-      embeds: [buildScrimEmbed(BASE_PAYLOAD, 'fr')],
-    });
-    /** @type {Record<string, unknown>[]} */
-    const edits = [];
-    const message = {
-      id: 'm2',
-      channelId: 'c2',
-      edit: async (opts) => {
-        edits.push(opts);
-      },
-    };
-    const prevDelay = process.env.DISCORD_TASK_QUEUE_DELAY_MS;
-    process.env.DISCORD_TASK_QUEUE_DELAY_MS = '0';
-    startDiscordTaskQueue();
-    try {
-      await applyScrimEmbedEditFromPayload(/** @type {any} */ (message), json);
-      await new Promise((r) => setTimeout(r, 50));
-      assert.equal(edits.length, 1);
-      assert.equal(Object.prototype.hasOwnProperty.call(edits[0], 'content'), false);
     } finally {
       await stopDiscordTaskQueue();
       if (prevDelay === undefined) delete process.env.DISCORD_TASK_QUEUE_DELAY_MS;
@@ -268,7 +228,47 @@ describe('serializeScrimEditPayload — sémantique content', () => {
   });
 });
 
-describe('broadcast multi-guild — officiel vs partenaire', () => {
+describe('applyOfficialContactEditAfterSend', () => {
+  it('edit content natif sans allowedMentions / flags', async () => {
+    /** @type {Record<string, unknown>[]} */
+    const edits = [];
+    const msg = {
+      id: 'msg-edit',
+      edit: async (opts) => {
+        edits.push(opts);
+      },
+    };
+    await applyOfficialContactEditAfterSend(
+      /** @type {any} */ (msg),
+      BASE_PAYLOAD,
+      'fr',
+      { guild_id: 'g', channel_id: 'c' },
+    );
+    assert.equal(edits.length, 1);
+    assert.equal(edits[0].content, `👤 Contact : <@${CONTACT_ID}>`);
+    assert.equal(Object.prototype.hasOwnProperty.call(edits[0], 'allowedMentions'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(edits[0], 'flags'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(edits[0], 'embeds'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(edits[0], 'components'), false);
+  });
+
+  it('échec edit : ne lève pas', async () => {
+    const msg = {
+      id: 'msg-fail',
+      edit: async () => {
+        throw new Error('edit failed');
+      },
+    };
+    await applyOfficialContactEditAfterSend(
+      /** @type {any} */ (msg),
+      BASE_PAYLOAD,
+      'fr',
+      { guild_id: 'g', channel_id: 'c' },
+    );
+  });
+});
+
+describe('broadcast / delivery — officiel send+edit vs partenaire send seul', () => {
   const GUILD_OFFICIAL = '777000000000000001';
   const GUILD_PARTNER = '777000000000000002';
   const CHAN_OFFICIAL = '888000000000000001';
@@ -282,12 +282,14 @@ describe('broadcast multi-guild — officiel vs partenaire', () => {
   let prevUrl;
   let fs;
   let path;
+  let msgSeq = 0;
 
   const sentOfficial = [];
   const sentPartner = [];
-  let msgSeq = 0;
+  const editsOfficial = [];
+  const editsPartner = [];
 
-  function mockChannel(channelId, capture) {
+  function mockChannel(channelId, captureSend, captureEdit) {
     const perms = new PermissionsBitField([
       PermissionFlagsBits.ViewChannel,
       PermissionFlagsBits.SendMessages,
@@ -298,15 +300,22 @@ describe('broadcast multi-guild — officiel vs partenaire', () => {
       type: ChannelType.GuildText,
       permissionsFor: () => perms,
       send: async (payload) => {
-        capture.push(payload);
+        captureSend.push(payload);
         msgSeq += 1;
-        return { id: `msg-${channelId}-${msgSeq}`, delete: async () => {} };
+        const id = `msg-${channelId}-${msgSeq}`;
+        return {
+          id,
+          edit: async (opts) => {
+            captureEdit.push(opts);
+          },
+          delete: async () => {},
+        };
       },
     };
   }
 
-  function mockGuild(guildId, channelId, capture) {
-    const channel = mockChannel(channelId, capture);
+  function mockGuild(guildId, channelId, captureSend, captureEdit) {
+    const channel = mockChannel(channelId, captureSend, captureEdit);
     const botMember = { id: 'bot-1' };
     return {
       id: guildId,
@@ -319,7 +328,7 @@ describe('broadcast multi-guild — officiel vs partenaire', () => {
     fs = await import('node:fs');
     const os = await import('node:os');
     path = await import('node:path');
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scrim-official-contact-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scrim-official-send-edit-'));
     prevSqlite = process.env.SQLITE_PATH;
     prevPublic = process.env.SCRIMRESEAU_PUBLIC_GUILD_ID;
     prevQueueDelay = process.env.DISCORD_TASK_QUEUE_DELAY_MS;
@@ -350,13 +359,15 @@ describe('broadcast multi-guild — officiel vs partenaire', () => {
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('partenaire : contact + 3 hints + invite ; officiel : contact sans hints + site ; pas de content/flags', async () => {
+  it('officiel : send sans content + edit contact ; partenaire : send seul', async () => {
     sentOfficial.length = 0;
     sentPartner.length = 0;
+    editsOfficial.length = 0;
+    editsPartner.length = 0;
     const stmts = prepareStatements(getDb());
     const guildCache = new Map([
-      [GUILD_OFFICIAL, mockGuild(GUILD_OFFICIAL, CHAN_OFFICIAL, sentOfficial)],
-      [GUILD_PARTNER, mockGuild(GUILD_PARTNER, CHAN_PARTNER, sentPartner)],
+      [GUILD_OFFICIAL, mockGuild(GUILD_OFFICIAL, CHAN_OFFICIAL, sentOfficial, editsOfficial)],
+      [GUILD_PARTNER, mockGuild(GUILD_PARTNER, CHAN_PARTNER, sentPartner, editsPartner)],
     ]);
     const client = {
       guilds: { cache: { get: (id) => guildCache.get(id) ?? null } },
@@ -378,40 +389,41 @@ describe('broadcast multi-guild — officiel vs partenaire', () => {
     assert.equal(sentOfficial.length, 1);
     assert.equal(sentPartner.length, 1);
 
-    const off = sentOfficial[0];
-    const part = sentPartner[0];
+    const offSend = sentOfficial[0];
+    assert.equal(offSend.content, undefined);
+    assert.equal(offSend.allowedMentions, undefined);
+    assert.equal(offSend.flags, undefined);
+    const offDesc = offSend.embeds[0].toJSON().description ?? '';
+    assert.doesNotMatch(offDesc, new RegExp(`<@${CONTACT_ID}>`));
+    assert.doesNotMatch(offDesc, /👉|cliquable/);
+    assert.deepEqual(buttonUrls(offSend), [SCRIM_OFFICIAL_SITE_URL]);
+    assert.ok(!buttonUrls(offSend).includes(JOIN_URL));
 
-    assert.equal(off.content, undefined);
-    assert.equal(off.allowedMentions, undefined);
-    assert.equal(off.flags, undefined);
-    const offDesc = off.embeds[0].toJSON().description ?? '';
-    assert.match(offDesc, new RegExp(`👤 <@${CONTACT_ID}> • TestPlayer`));
-    assert.doesNotMatch(offDesc, /cliquable/);
-    assert.doesNotMatch(offDesc, /👉/);
-    assert.deepEqual(buttonUrls(off), [SCRIM_OFFICIAL_SITE_URL]);
-    assert.ok(buttonLabels(off).some((l) => /Site ScrimRéseau|ScrimRéseau Website/i.test(l)));
-    assert.ok(!buttonUrls(off).includes(JOIN_URL));
+    assert.equal(editsOfficial.length, 1, 'officiel doit éditer une fois');
+    assert.equal(editsOfficial[0].content, `👤 Contact : <@${CONTACT_ID}>`);
+    assert.equal(Object.prototype.hasOwnProperty.call(editsOfficial[0], 'allowedMentions'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(editsOfficial[0], 'flags'), false);
 
-    assert.equal(part.content, undefined);
-    assert.equal(part.allowedMentions, undefined);
-    assert.equal(part.flags, undefined);
-    const partDesc = part.embeds[0].toJSON().description ?? '';
+    const partSend = sentPartner[0];
+    assert.equal(partSend.content, undefined);
+    const partDesc = partSend.embeds[0].toJSON().description ?? '';
     assert.match(partDesc, new RegExp(`👤 <@${CONTACT_ID}> • TestPlayer`));
     for (const line of HINT_FR) assert.ok(partDesc.includes(line), line);
-    assert.equal((partDesc.match(/👉/g) ?? []).length, 2);
-    assert.deepEqual(buttonUrls(part), [JOIN_URL]);
-    assert.ok(!buttonUrls(part).includes(SCRIM_OFFICIAL_SITE_URL));
+    assert.deepEqual(buttonUrls(partSend), [JOIN_URL]);
+    assert.equal(editsPartner.length, 0, 'partenaire ne doit jamais appeler message.edit');
 
     assert.equal(sharedPayload.contactUserId, CONTACT_ID);
   });
 
-  it('officiel + OP.GG : site + OP.GG ; partenaire : invite + OP.GG', async () => {
+  it('officiel + OP.GG : site+OP.GG au send ; partenaire invite+OP.GG ; edit officiel seul', async () => {
     sentOfficial.length = 0;
     sentPartner.length = 0;
+    editsOfficial.length = 0;
+    editsPartner.length = 0;
     const stmts = prepareStatements(getDb());
     const guildCache = new Map([
-      [GUILD_OFFICIAL, mockGuild(GUILD_OFFICIAL, CHAN_OFFICIAL, sentOfficial)],
-      [GUILD_PARTNER, mockGuild(GUILD_PARTNER, CHAN_PARTNER, sentPartner)],
+      [GUILD_OFFICIAL, mockGuild(GUILD_OFFICIAL, CHAN_OFFICIAL, sentOfficial, editsOfficial)],
+      [GUILD_PARTNER, mockGuild(GUILD_PARTNER, CHAN_PARTNER, sentPartner, editsPartner)],
     ]);
     const client = {
       guilds: { cache: { get: (id) => guildCache.get(id) ?? null } },
@@ -429,25 +441,64 @@ describe('broadcast multi-guild — officiel vs partenaire', () => {
       scrimPostDbId: 2,
     });
 
-    assert.equal(sentOfficial.length, 1);
-    assert.equal(sentPartner.length, 1);
+    assert.deepEqual(buttonUrls(sentOfficial[0]), [SCRIM_OFFICIAL_SITE_URL, OPGG_URL]);
+    assert.equal(editsOfficial.length, 1);
+    assert.deepEqual(buttonUrls(sentPartner[0]), [JOIN_URL, OPGG_URL]);
+    assert.equal(editsPartner.length, 0);
+  });
 
-    const off = sentOfficial[0];
-    const part = sentPartner[0];
+  it('send réussi + edit échoué → outcome sent, un seul send (pas de doublon)', async () => {
+    const stmts = prepareStatements(getDb());
+    /** @type {unknown[]} */
+    const sends = [];
+    let editCalls = 0;
+    const perms = new PermissionsBitField([
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.SendMessages,
+      PermissionFlagsBits.EmbedLinks,
+    ]);
+    const channel = {
+      id: CHAN_OFFICIAL,
+      type: ChannelType.GuildText,
+      permissionsFor: () => perms,
+      send: async (payload) => {
+        sends.push(payload);
+        return {
+          id: `msg-fail-edit-${sends.length}`,
+          edit: async () => {
+            editCalls += 1;
+            throw new Error('edit boom');
+          },
+        };
+      },
+    };
+    const botMember = { id: 'bot-1' };
+    const guild = {
+      id: GUILD_OFFICIAL,
+      channels: { cache: new Map([[CHAN_OFFICIAL, channel]]) },
+      members: { me: botMember, fetchMe: async () => botMember },
+    };
+    const client = {
+      guilds: { cache: { get: (id) => (id === GUILD_OFFICIAL ? guild : null) } },
+    };
 
-    assert.equal(off.content, undefined);
-    assert.equal(off.flags, undefined);
-    assert.deepEqual(buttonUrls(off), [SCRIM_OFFICIAL_SITE_URL, OPGG_URL]);
-    assert.ok(buttonLabels(off).includes('Multi OP.GG'));
-    assert.ok(!buttonUrls(off).includes(JOIN_URL));
+    const result = await deliverScrimToDestination({
+      client: /** @type {any} */ (client),
+      stmts,
+      row: { guild_id: GUILD_OFFICIAL, channel_id: CHAN_OFFICIAL },
+      authorUserId: AUTHOR_ID,
+      payload: BASE_PAYLOAD,
+      delayMs: 0,
+    });
 
-    assert.deepEqual(buttonUrls(part), [JOIN_URL, OPGG_URL]);
-    assert.ok(buttonLabels(part).includes('Multi OP.GG'));
-    assert.ok(!buttonUrls(part).includes(SCRIM_OFFICIAL_SITE_URL));
+    assert.equal(result.outcome, 'sent');
+    assert.equal(sends.length, 1);
+    assert.equal(editCalls, 1);
+    assert.ok(result.message?.id);
   });
 });
 
-describe('buildScrimCommunityServerActionRows — invite / site / OP.GG', () => {
+describe('buildScrimCommunityServerActionRows — site / invite', () => {
   const originalUrl = process.env.SCRIM_COMMUNITY_SERVER_URL;
 
   after(() => {
@@ -455,38 +506,14 @@ describe('buildScrimCommunityServerActionRows — invite / site / OP.GG', () => 
     else delete process.env.SCRIM_COMMUNITY_SERVER_URL;
   });
 
-  it('partenaire défaut → invite + OP.GG', () => {
-    process.env.SCRIM_COMMUNITY_SERVER_URL = JOIN_URL;
-    const rows = buildScrimCommunityServerActionRows(OPGG_URL, 'fr');
-    assert.equal(rows.length, 1);
-    const comps = rows[0].toJSON().components ?? [];
-    assert.equal(comps.length, 2);
-    assert.equal(comps[0].url, JOIN_URL);
-    assert.equal(comps[1].url, OPGG_URL);
-  });
-
-  it('officiel + OP.GG → site + OP.GG, pas d’invite', () => {
-    process.env.SCRIM_COMMUNITY_SERVER_URL = JOIN_URL;
-    const rows = buildScrimCommunityServerActionRows(OPGG_URL, 'fr', {
-      includeCommunityInviteButton: false,
-      includeOfficialSiteButton: true,
-    });
-    assert.equal(rows.length, 1);
-    const comps = rows[0].toJSON().components ?? [];
-    assert.equal(comps.length, 2);
-    assert.equal(comps[0].url, SCRIM_OFFICIAL_SITE_URL);
-    assert.equal(comps[1].url, OPGG_URL);
-  });
-
-  it('officiel sans OP.GG → site seul (pas de row vide)', () => {
+  it('officiel sans OP.GG → site seul', () => {
     process.env.SCRIM_COMMUNITY_SERVER_URL = JOIN_URL;
     const rows = buildScrimCommunityServerActionRows(null, 'fr', {
       includeCommunityInviteButton: false,
       includeOfficialSiteButton: true,
     });
     assert.equal(rows.length, 1);
-    const comps = rows[0].toJSON().components ?? [];
-    assert.equal(comps.length, 1);
-    assert.equal(comps[0].url, SCRIM_OFFICIAL_SITE_URL);
+    assert.equal(rows[0].toJSON().components?.length, 1);
+    assert.equal(rows[0].toJSON().components?.[0].url, SCRIM_OFFICIAL_SITE_URL);
   });
 });

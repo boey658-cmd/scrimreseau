@@ -175,6 +175,7 @@ export const pl = {
   'embed.contactHint2': '👉 Dołącz do serwera ScrimRéseau za pomocą przycisku poniżej',
   'embed.contactHint3': '👉To zazwyczaj sprawia, że ​​wzmianka jest klikalna',
   'embed.officialSiteButton': '🌐 Strona ScrimRéseau',
+  'embed.officialContactContent': '👤 Kontakt: {mention}',
   'embed.fearlessOui': 'Fearless: Tak',
   'embed.fearlessNon': 'Fearless: Nie',
   'embed.fearlessNimporte': 'Fearless: Dowolny',

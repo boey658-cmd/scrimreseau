@@ -544,7 +544,7 @@ function resolveScrimDisplaySchedule(payload, locale = 'fr') {
 
 /**
  * @param {ScrimEmbedPayload} payload
- * @param {{ includeContactHints?: boolean }} [options]
+ * @param {{ includeContactHints?: boolean, includeContactInEmbed?: boolean }} [options]
  * @returns {string}
  */
 function buildScrimEmbedDescription(payload, options = {}, locale = 'fr') {
@@ -573,12 +573,15 @@ function buildScrimEmbedDescription(payload, options = {}, locale = 'fr') {
   /** @type {string[]} */
   const lines = [line1, line2, line3];
 
-  // ── Ligne 4 : contact ──
-  const contactLine = buildScrimContactDescriptionLines(
-    payload.contactUserId,
-    payload.contactDisplayName ?? null,
-  )[0] ?? '';
-  lines.push(contactLine);
+  // ── Ligne 4 : contact (sauf officiel actif → content via edit post-send) ──
+  const includeContactInEmbed = options.includeContactInEmbed !== false;
+  if (includeContactInEmbed) {
+    const contactLine = buildScrimContactDescriptionLines(
+      payload.contactUserId,
+      payload.contactDisplayName ?? null,
+    )[0] ?? '';
+    lines.push(contactLine);
+  }
 
   // ── Ligne 5 (optionnelle) : structure (avec lien cliquable si disponible) ──
   if (payload.structureNameSnapshot) {
@@ -600,9 +603,21 @@ function buildScrimEmbedDescription(payload, options = {}, locale = 'fr') {
 }
 
 /**
+ * Content hors embed pour le serveur officiel ScrimRéseau (ajouté par edit post-send — test local).
+ * @param {string | null | undefined} contactUserId
+ * @param {string} [locale]
+ * @returns {string | null}
+ */
+export function buildScrimOfficialContactContent(contactUserId, locale = 'fr') {
+  const id = typeof contactUserId === 'string' ? contactUserId.trim() : '';
+  if (!id) return null;
+  return t(locale, 'embed.officialContactContent', { mention: `<@${id}>` });
+}
+
+/**
  * @param {ScrimEmbedPayload} payload
  * @param {number} color
- * @param {{ includeContactHints?: boolean }} [options]
+ * @param {{ includeContactHints?: boolean, includeContactInEmbed?: boolean }} [options]
  * @param {string} [locale]
  * @returns {EmbedBuilder}
  */
@@ -616,17 +631,19 @@ function buildScrimEmbedWithStatus(payload, color, options = {}, locale = 'fr') 
  * Édition Discord : vague réseau remplacée par un repost (scrim toujours actif en DB).
  * @param {Record<string, unknown>} dbRow ligne `scrim_posts`
  * @param {string} [locale]
+ * @param {{ includeContactInEmbed?: boolean }} [options]
  * @returns {{ content: null, embeds: EmbedBuilder[], components: [] }}
  */
-export function buildScrimSupersededMessageEditOptions(dbRow, locale = 'fr') {
+export function buildScrimSupersededMessageEditOptions(dbRow, locale = 'fr', options = {}) {
   const payload = scrimDbRowToEmbedPayload(dbRow);
+  const includeContactInEmbed = options.includeContactInEmbed !== false;
   return {
     content: null,
     embeds: [
       buildScrimEmbedWithStatus(
         payload,
         SCRIM_EMBED_COLOR_SUPERSEDED,
-        {},
+        { includeContactInEmbed },
         locale,
       ),
     ],
@@ -639,10 +656,12 @@ export function buildScrimSupersededMessageEditOptions(dbRow, locale = 'fr') {
  * @param {'closed_manual' | 'closed_expired'} status
  * @param {Record<string, unknown>} dbRow ligne `scrim_posts` après fermeture
  * @param {string} [locale]
+ * @param {{ includeContactInEmbed?: boolean }} [options]
  * @returns {{ content: null, embeds: EmbedBuilder[], components: [] }}
  */
-export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr') {
+export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr', options = {}) {
   const payload = scrimDbRowToEmbedPayload(dbRow);
+  const includeContactInEmbed = options.includeContactInEmbed !== false;
 
   if (status === 'closed_manual') {
     return {
@@ -651,7 +670,7 @@ export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr')
         buildScrimEmbedWithStatus(
           payload,
           SCRIM_EMBED_COLOR_CLOSED_MANUAL,
-          {},
+          { includeContactInEmbed },
           locale,
         ),
       ],
@@ -666,7 +685,7 @@ export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr')
         buildScrimEmbedWithStatus(
           payload,
           SCRIM_EMBED_COLOR_CLOSED_EXPIRED,
-          {},
+          { includeContactInEmbed },
           locale,
         ),
       ],
@@ -679,7 +698,7 @@ export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr')
 /**
  * @param {ScrimEmbedPayload} payload
  * @param {string} [locale]
- * @param {{ includeContactHints?: boolean }} [options]
+ * @param {{ includeContactHints?: boolean, includeContactInEmbed?: boolean }} [options]
  * @returns {EmbedBuilder}
  */
 export function buildScrimEmbed(payload, locale = 'fr', options = {}) {
@@ -687,6 +706,7 @@ export function buildScrimEmbed(payload, locale = 'fr', options = {}) {
     payload,
     SCRIM_EMBED_COLOR_ACTIVE,
     {
+      includeContactInEmbed: options.includeContactInEmbed !== false,
       includeContactHints: options.includeContactHints !== false,
     },
     locale,

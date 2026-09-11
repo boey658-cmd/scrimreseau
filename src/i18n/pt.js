@@ -175,6 +175,7 @@ export const pt = {
   'embed.contactHint2': '👉 Entra no servidor ScrimRéseau utilizando o botão abaixo',
   'embed.contactHint3': '👉 Isto geralmente torna a menção clicável',
   'embed.officialSiteButton': '🌐 Site ScrimRéseau',
+  'embed.officialContactContent': '👤 Contacto: {mention}',
   'embed.fearlessOui': 'Fearless: Sim',
   'embed.fearlessNon': 'Fearless: Não',
   'embed.fearlessNimporte': 'Fearless: Qualquer',

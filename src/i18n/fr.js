@@ -217,6 +217,7 @@ export const fr = {
   'embed.contactHint2': '👉 Rejoignez le serveur ScrimRéseau avec le bouton ci-dessous',
   'embed.contactHint3': '👉 Cela permet généralement de rendre la mention cliquable',
   'embed.officialSiteButton': '🌐 Site ScrimRéseau',
+  'embed.officialContactContent': '👤 Contact : {mention}',
   'embed.fearlessOui': 'Fearless : Oui',
   'embed.fearlessNon': 'Fearless : Non',
   'embed.fearlessNimporte': 'Fearless : N\'importe',
