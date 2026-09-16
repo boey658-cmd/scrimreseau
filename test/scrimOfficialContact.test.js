@@ -101,26 +101,24 @@ function desc(embed) {
 }
 
 const HINT_FR = [
-  "⚠️ Si la mention du contact ci-dessus n'est pas cliquable",
-  '👉 Rejoignez le serveur ScrimRéseau avec le bouton ci-dessous',
-  '👉 Cela permet généralement de rendre la mention cliquable',
+  "Si la mention du contact ci-dessus n'est pas cliquable :",
+  '👉 Retrouvez cette annonce sur ScrimRéseau : le contact y est directement cliquable.',
 ];
 
-describe('partenaire — contact embed + hints longs (inchangé)', () => {
-  it('format contact embed + 3 hints FR', () => {
+describe('partenaire — contact embed + hints (2 lignes)', () => {
+  it('format contact embed + 2 hints FR', () => {
     const d = desc(buildScrimEmbed(BASE_PAYLOAD, 'fr'));
     assert.match(d, new RegExp(`👤 <@${CONTACT_ID}> • TestPlayer`));
     for (const line of HINT_FR) assert.ok(d.includes(line), line);
-    assert.equal((d.match(/👉/g) ?? []).length, 2);
+    assert.equal((d.match(/👉/g) ?? []).length, 1);
   });
 
-  it('hints longs + officialSiteButton + officialContactContent dans 7 locales', () => {
+  it('hints partenaires + officialSiteButton + officialContactContent dans 7 locales', () => {
     for (const locale of ALL_LOCALES) {
       const h1 = t(locale, 'embed.contactHint1');
       const h2 = t(locale, 'embed.contactHint2');
-      const h3 = t(locale, 'embed.contactHint3');
       assert.doesNotMatch(h1, /\[embed\.contactHint1\]/);
-      assert.ok(h1.includes('⚠️') && h2.includes('👉') && h3.includes('👉'), locale);
+      assert.ok(h1.length > 0 && h2.includes('👉'), locale);
       assert.doesNotMatch(t(locale, 'embed.officialSiteButton'), /\[embed\.officialSiteButton\]/);
       const contactLine = t(locale, 'embed.officialContactContent', {
         mention: `<@${CONTACT_ID}>`,

@@ -1,5 +1,4 @@
-import { ChannelType, MessageFlags, PermissionFlagsBits } from 'discord.js';
-import { UI_PRIMARY_GAME_KEY } from '../config/games.js';
+import { MessageFlags } from 'discord.js';
 import {
   LIFECYCLE_POLICY_DELETE,
   LIFECYCLE_POLICY_KEEP,
@@ -26,54 +25,6 @@ const POLICY_CONFIRM = {
   [LIFECYCLE_POLICY_DELETE]:
     '✅ Policy mise à jour : les scrims trouvés, expirés ou remplacés seront supprimés automatiquement dans ce serveur. Seules les annonces actives resteront visibles.',
 };
-
-/**
- * Vérifie si le bot a ManageMessages dans le salon de réception configuré.
- * Retourne un avertissement textuel si la permission manque, null sinon.
- *
- * @param {import('discord.js').ChatInputCommandInteraction} interaction
- * @param {{ getGuildGameChannel: import('better-sqlite3').Statement }} stmts
- * @returns {string | null}
- */
-function buildDeletePermissionWarning(interaction, stmts) {
-  const guildId = interaction.guildId;
-  if (!guildId || !interaction.guild) return null;
-
-  let channelRow;
-  try {
-    channelRow = stmts.getGuildGameChannel.get(guildId, UI_PRIMARY_GAME_KEY);
-  } catch {
-    return null;
-  }
-
-  if (!channelRow?.channel_id) return null;
-
-  const channelId = channelRow.channel_id;
-  const channel = interaction.guild.channels.cache.get(channelId);
-  if (!channel) return null;
-
-  if (
-    channel.type !== ChannelType.GuildText
-    && channel.type !== ChannelType.GuildAnnouncement
-  ) {
-    return null;
-  }
-
-  let botMember = interaction.guild.members.me;
-  if (!botMember) return null;
-
-  const perms = channel.permissionsFor(botMember);
-  if (!perms) return null;
-
-  if (!perms.has(PermissionFlagsBits.ManageMessages)) {
-    return (
-      `\n\n⚠️ Attention : le bot n'a pas la permission **Gérer les messages** dans <#${channelId}>. ` +
-      `Les messages ne pourront pas être supprimés tant que cette permission n'est pas accordée (fallback sur édition embed).`
-    );
-  }
-
-  return null;
-}
 
 /**
  * /scrim-config message-policy set
@@ -113,14 +64,7 @@ export async function executeConfigScrimMessagePolicySetCore(interaction, ctx) {
       user_id: interaction.user.id,
     });
 
-    let content = POLICY_CONFIRM[policy];
-
-    if (policy === LIFECYCLE_POLICY_DELETE) {
-      const warning = buildDeletePermissionWarning(interaction, ctx.stmts);
-      if (warning) content += warning;
-    }
-
-    await interactEditReply(interaction, { content });
+    await interactEditReply(interaction, { content: POLICY_CONFIRM[policy] });
   } catch (err) {
     logger.error('config-scrim-message-policy set — erreur', {
       guild_id: interaction.guildId,

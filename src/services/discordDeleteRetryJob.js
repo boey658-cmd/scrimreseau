@@ -180,6 +180,34 @@ export async function runDiscordDeleteRetryPass(client, stmts) {
       continue;
     }
 
+    const botUserId = client?.user?.id ?? null;
+    const authorId = msg?.author?.id ?? null;
+    if (!botUserId || !authorId || authorId !== botUserId) {
+      markScrimLifecycleOperationFailedTerminal(
+        stmts,
+        id,
+        !botUserId ? 'BOT_USER_MISSING' : 'NOT_BOT_AUTHOR',
+        !botUserId
+          ? 'Utilisateur bot introuvable'
+          : 'Auteur du message ≠ bot',
+      );
+      try {
+        logger.warn('scrimLifecycleDelete: suppression refusée — message non émis par le bot', {
+          lifecycle_operation_id: id,
+          scrim_post_db_id: row.scrim_post_db_id,
+          guild_id: row.guild_id,
+          channel_id: row.channel_id,
+          message_id: row.message_id,
+          expected_author: botUserId,
+          actual_author: authorId,
+        });
+      } catch {
+        /* ignore */
+      }
+      terminal += 1;
+      continue;
+    }
+
     try {
       await runTransientDiscord(
         () => msg.delete(),

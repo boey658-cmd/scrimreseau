@@ -115,26 +115,24 @@ describe('buildScrimEmbed — locale par serveur destinataire', () => {
 // ─── Tests contact hints ─────────────────────────────────────────────────────
 
 describe('buildScrimEmbed — contact hints locale', () => {
-  it('contact hints en français (3 lignes historiques)', () => {
+  it('contact hints en français (2 lignes)', () => {
     const embed = buildScrimEmbed(BASE_PAYLOAD, 'fr');
     const desc = getDescription(embed);
-    assert.ok(desc.includes("⚠️ Si la mention du contact ci-dessus n'est pas cliquable"));
-    assert.ok(desc.includes('👉 Rejoignez le serveur ScrimRéseau avec le bouton ci-dessous'));
-    assert.ok(desc.includes('👉 Cela permet généralement de rendre la mention cliquable'));
+    assert.ok(desc.includes("Si la mention du contact ci-dessus n'est pas cliquable"));
+    assert.ok(desc.includes('👉 Retrouvez cette annonce sur ScrimRéseau : le contact y est directement cliquable.'));
     assert.equal(
       (desc.match(/👉/g) ?? []).length,
-      2,
-      'deux lignes 👉 historiques',
+      1,
+      'une ligne 👉',
     );
   });
 
   it('contact hints en anglais (texte exact validé)', () => {
     const embed = buildScrimEmbed(BASE_PAYLOAD, 'en');
     const desc = getDescription(embed);
-    assert.ok(desc.includes('⚠️ If the contact mention above is not clickable'));
-    assert.ok(desc.includes('👉 Join the ScrimRéseau server using the button below'));
-    assert.ok(desc.includes('👉 This usually makes the mention clickable'));
-    assert.equal((desc.match(/👉/g) ?? []).length, 2);
+    assert.ok(desc.includes('If the contact mention above is not clickable'));
+    assert.ok(desc.includes('👉 Find this scrim on ScrimRéseau: the contact is directly clickable there.'));
+    assert.equal((desc.match(/👉/g) ?? []).length, 1);
   });
 });
 

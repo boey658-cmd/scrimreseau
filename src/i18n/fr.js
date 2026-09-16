@@ -213,9 +213,8 @@ export const fr = {
 
   // ── Embed scrim (broadcast / lifecycle) ─────────────────────────────
   'embed.joinServerButton': '🔗 Rejoindre le serveur ScrimRéseau',
-  'embed.contactHint1': '⚠️ Si la mention du contact ci-dessus n\'est pas cliquable',
-  'embed.contactHint2': '👉 Rejoignez le serveur ScrimRéseau avec le bouton ci-dessous',
-  'embed.contactHint3': '👉 Cela permet généralement de rendre la mention cliquable',
+  'embed.contactHint1': 'Si la mention du contact ci-dessus n\'est pas cliquable :',
+  'embed.contactHint2': '👉 Retrouvez cette annonce sur ScrimRéseau : le contact y est directement cliquable.',
   'embed.officialSiteButton': '🌐 Site ScrimRéseau',
   'embed.officialContactContent': '👤 Contact : {mention}',
   'embed.fearlessOui': 'Fearless : Oui',

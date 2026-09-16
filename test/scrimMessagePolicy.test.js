@@ -1,10 +1,12 @@
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
+import { PermissionFlagsBits, PermissionsBitField } from 'discord.js';
 import {
   LIFECYCLE_POLICY_DELETE,
   LIFECYCLE_POLICY_KEEP,
   getGuildScrimMessageLifecyclePolicy,
   syncInactiveScrimMessageByPolicy,
+  tryDeleteScrimMessage,
 } from '../src/services/scrimMessagePolicy.js';
 
 // ---------------------------------------------------------------------------
@@ -217,5 +219,116 @@ describe('comportement par défaut', () => {
   it('après reset → policy = keep (ligne absente)', () => {
     const policy = getGuildScrimMessageLifecyclePolicy(makeStmtsAbsent(), 'serveur-reset');
     assert.strictEqual(policy, 'keep');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests tryDeleteScrimMessage — suppression sans Manage Messages
+// ---------------------------------------------------------------------------
+
+describe('tryDeleteScrimMessage', () => {
+  const BOT_ID = 'bot-delete-test';
+  const MESSAGE_ROW = { guild_id: 'g1', channel_id: 'c1', message_id: 'm1' };
+
+  function makeDeleteContext(overrides = {}) {
+    let deleteCalls = 0;
+    const message = {
+      id: 'm1',
+      guildId: 'g1',
+      channelId: 'c1',
+      author: { id: overrides.authorId ?? BOT_ID },
+      delete: overrides.deleteFn ?? (async () => {
+        deleteCalls += 1;
+      }),
+    };
+    const botMember = { id: BOT_ID };
+    const channel = {
+      permissionsFor: () => new PermissionsBitField(
+        overrides.perms ?? [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.ReadMessageHistory,
+        ],
+      ),
+    };
+    const guild = {
+      members: { me: botMember, fetchMe: async () => botMember },
+    };
+    const client = { user: { id: BOT_ID } };
+    return { message, channel, guild, client, getDeleteCalls: () => deleteCalls };
+  }
+
+  it('supprime un message du bot sans Manage Messages', async () => {
+    const ctx = makeDeleteContext();
+    const deleted = await tryDeleteScrimMessage({
+      client: ctx.client,
+      stmts: {},
+      guild: ctx.guild,
+      channel: ctx.channel,
+      message: ctx.message,
+      messageRow: MESSAGE_ROW,
+      scrimPostDbId: 1,
+      eventType: 'closed_manual',
+      directExecution: true,
+    });
+    assert.strictEqual(deleted, true);
+    assert.strictEqual(ctx.getDeleteCalls(), 1);
+  });
+
+  it('refuse de supprimer un message émis par un autre utilisateur', async () => {
+    const ctx = makeDeleteContext({ authorId: 'other-user-999' });
+    const deleted = await tryDeleteScrimMessage({
+      client: ctx.client,
+      stmts: {},
+      guild: ctx.guild,
+      channel: ctx.channel,
+      message: ctx.message,
+      messageRow: MESSAGE_ROW,
+      scrimPostDbId: 2,
+      eventType: 'closed_expired',
+      directExecution: true,
+    });
+    assert.strictEqual(deleted, false);
+    assert.strictEqual(ctx.getDeleteCalls(), 0);
+  });
+
+  it('permissions manquantes (ReadMessageHistory) → false, pas de delete', async () => {
+    const ctx = makeDeleteContext({
+      perms: [PermissionFlagsBits.ViewChannel],
+    });
+    const deleted = await tryDeleteScrimMessage({
+      client: ctx.client,
+      stmts: {},
+      guild: ctx.guild,
+      channel: ctx.channel,
+      message: ctx.message,
+      messageRow: MESSAGE_ROW,
+      scrimPostDbId: 3,
+      eventType: 'closed_manual',
+      directExecution: true,
+    });
+    assert.strictEqual(deleted, false);
+    assert.strictEqual(ctx.getDeleteCalls(), 0);
+  });
+
+  it('échec delete terminal → false (fallback edit en amont)', async () => {
+    const err = new Error('Missing Access');
+    err.code = 50001;
+    const ctx = makeDeleteContext({
+      deleteFn: async () => {
+        throw err;
+      },
+    });
+    const deleted = await tryDeleteScrimMessage({
+      client: ctx.client,
+      stmts: {},
+      guild: ctx.guild,
+      channel: ctx.channel,
+      message: ctx.message,
+      messageRow: MESSAGE_ROW,
+      scrimPostDbId: 4,
+      eventType: 'closed_manual',
+      directExecution: true,
+    });
+    assert.strictEqual(deleted, false);
   });
 });

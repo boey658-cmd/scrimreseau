@@ -88,10 +88,12 @@ function buildDeleteFallbackMockClient(options = {}) {
   const deleteErr = options.deleteErr ?? Object.assign(new Error('Missing Permissions'), { code: 50013 });
   const editFn = options.editFn ?? (async () => {});
 
+  const botId = 'bot';
   const messageObj = {
     id: options.messageId ?? 'm-fb',
     guildId: options.guildId ?? 'g1',
     channelId: options.channelId ?? 'c1',
+    author: { id: botId },
     delete: async () => {
       deleteCalls += 1;
       if (deleteErr) throw deleteErr;
@@ -103,11 +105,12 @@ function buildDeleteFallbackMockClient(options = {}) {
   };
 
   const botMember = {
-    id: 'bot',
+    id: botId,
     permissions: new PermissionsBitField(PermissionFlagsBits.Administrator),
   };
 
   const client = {
+    user: { id: botId },
     guilds: {
       fetch: async () => ({
         members: { me: botMember, fetchMe: async () => botMember },

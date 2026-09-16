@@ -133,6 +133,7 @@ function buildCloseDuringSendLifecycleChannel(options = {}) {
     id: messageId,
     guildId: 'guild-001',
     channelId: 'chan-001',
+    author: { id: 'bot-scrim' },
     edit: async () => {
       lifecycle.edit += 1;
       if (options.editThrows) throw options.editThrows;
@@ -152,7 +153,6 @@ function buildCloseDuringSendLifecycleChannel(options = {}) {
       PermissionFlagsBits.SendMessages,
       PermissionFlagsBits.EmbedLinks,
       PermissionFlagsBits.ReadMessageHistory,
-      PermissionFlagsBits.ManageMessages,
     ]),
     send: async () => {
       if (options.onSend) options.onSend();
@@ -185,6 +185,7 @@ function buildMockGuild(guildId, channelMap = {}) {
 
 function buildMockClient(guildMap = {}) {
   return {
+    user: { id: 'bot-scrim' },
     guilds: {
       cache: new Map(Object.entries(guildMap)),
       fetch: async (id) => guildMap[id] ?? null,

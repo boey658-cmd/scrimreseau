@@ -347,32 +347,35 @@ describe('Phase 3A — shadow lifecycle delete', () => {
       updated_at: new Date().toISOString(),
     });
     let deleteCalls = 0;
+    const botId = 'bot';
     const message = {
       id: 'msg-del',
       guildId: 'g-del',
       channelId: 'c-del',
+      author: { id: botId },
       delete: overrides.deleteFn ?? (async () => {
         deleteCalls += 1;
       }),
     };
     const botMember = {
-      id: 'bot',
+      id: botId,
       permissions: new PermissionsBitField(PermissionFlagsBits.Administrator),
     };
     const channel = {
       permissionsFor: () => new PermissionsBitField([
         PermissionFlagsBits.ViewChannel,
         PermissionFlagsBits.ReadMessageHistory,
-        PermissionFlagsBits.ManageMessages,
       ]),
     };
     const guild = {
       members: { me: botMember, fetchMe: async () => botMember },
     };
+    const client = { user: { id: botId } };
     return {
       postId,
       db,
       stmts,
+      client,
       message,
       guild,
       channel,
@@ -384,7 +387,7 @@ describe('Phase 3A — shadow lifecycle delete', () => {
     await withTempDb(async (db, stmts) => {
       const ctx = makeDeleteContext(stmts, db);
       await syncInactiveScrimMessageByPolicy({
-        client: {},
+        client: ctx.client,
         stmts,
         messageRow: { guild_id: 'g-del', channel_id: 'c-del', message_id: 'msg-del' },
         scrimPostDbId: ctx.postId,
@@ -414,7 +417,7 @@ describe('Phase 3A — shadow lifecycle delete', () => {
       });
 
       await syncInactiveScrimMessageByPolicy({
-        client: {},
+        client: ctx.client,
         stmts,
         messageRow: { guild_id: 'g-del', channel_id: 'c-del', message_id: 'msg-del' },
         scrimPostDbId: ctx.postId,
@@ -440,15 +443,17 @@ describe('Phase 3A — shadow lifecycle delete', () => {
         updated_at: new Date().toISOString(),
       });
       let deleteCalls = 0;
+      const botId = 'bot';
       const message = {
         id: 'msg-noperm',
         guildId: 'g-noperm',
         channelId: 'c-noperm',
+        author: { id: botId },
         delete: async () => {
           deleteCalls += 1;
         },
       };
-      const botMember = { id: 'bot' };
+      const botMember = { id: botId };
       const channel = {
         permissionsFor: () => new PermissionsBitField(PermissionFlagsBits.ViewChannel),
       };
@@ -457,7 +462,7 @@ describe('Phase 3A — shadow lifecycle delete', () => {
       };
 
       await syncInactiveScrimMessageByPolicy({
-        client: {},
+        client: { user: { id: botId } },
         stmts,
         messageRow: { guild_id: 'g-noperm', channel_id: 'c-noperm', message_id: 'msg-noperm' },
         scrimPostDbId: postId,
@@ -492,7 +497,7 @@ describe('Phase 3A — shadow lifecycle delete', () => {
 
       try {
         await syncInactiveScrimMessageByPolicy({
-          client: {},
+          client: ctx.client,
           stmts,
           messageRow: { guild_id: 'g-del', channel_id: 'c-del', message_id: 'msg-del' },
           scrimPostDbId: ctx.postId,

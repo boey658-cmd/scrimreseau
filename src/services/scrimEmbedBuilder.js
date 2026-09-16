@@ -398,12 +398,11 @@ function buildScrimContactDescriptionLines(contactUserId, contactUsername) {
   return [`👤 <@${contactUserId}>`];
 }
 
-/** Explication sous le contact (3 lignes historiques). */
+/** Explication sous le contact (partenaires uniquement — 2 lignes). */
 function getScrimContactButtonHintLines(locale = 'fr') {
   return [
     t(locale, 'embed.contactHint1'),
     t(locale, 'embed.contactHint2'),
-    t(locale, 'embed.contactHint3'),
   ];
 }
 

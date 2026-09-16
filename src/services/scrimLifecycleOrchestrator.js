@@ -789,6 +789,7 @@ export async function executeOrchestratedLifecycleOperation(client, stmts, opRow
 
   if (opRow.operation_type === LIFECYCLE_OP_TYPE_DELETE) {
     const deleted = await tryDeleteScrimMessage({
+      client,
       stmts,
       guild,
       channel,

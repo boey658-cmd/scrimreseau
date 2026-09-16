@@ -47,6 +47,7 @@ export function getGuildScrimMessageLifecyclePolicy(stmts, guildId) {
  * à ceux stockés en base avant toute suppression.
  *
  * @param {{
+ *   client: import('discord.js').Client,
  *   stmts: ReturnType<import('../database/db.js')['prepareStatements']>,
  *   guild: import('discord.js').Guild,
  *   channel: import('discord.js').TextBasedChannel,
@@ -88,6 +89,7 @@ function tryCreateDeleteShadowOperation(stmts, p) {
 }
 
 async function tryDeleteScrimMessage({
+  client,
   stmts,
   guild,
   channel,
@@ -135,7 +137,34 @@ async function tryDeleteScrimMessage({
     return false;
   }
 
-  // Vérification des permissions ManageMessages
+  const botUserId = client?.user?.id ?? guild?.client?.user?.id ?? null;
+  if (!botUserId) {
+    failShadow('BOT_USER_MISSING', 'Utilisateur bot introuvable');
+    logger.warn('scrimMessagePolicy: client.user absent — suppression impossible', {
+      guild_id: messageRow.guild_id,
+      scrim_post_db_id: scrimPostDbId,
+      event_type: eventType,
+      lifecycle_operation_id: operationId,
+    });
+    return false;
+  }
+
+  const authorId = message.author?.id ?? null;
+  if (!authorId || authorId !== botUserId) {
+    failShadow('NOT_BOT_AUTHOR', 'Auteur du message ≠ bot');
+    logger.warn('scrimMessagePolicy: suppression refusée — message non émis par le bot', {
+      guild_id: messageRow.guild_id,
+      channel_id: messageRow.channel_id,
+      message_id: messageRow.message_id,
+      scrim_post_db_id: scrimPostDbId,
+      event_type: eventType,
+      expected_author: botUserId,
+      actual_author: authorId,
+      lifecycle_operation_id: operationId,
+    });
+    return false;
+  }
+
   let botMember = guild.members.me;
   if (!botMember) {
     botMember = await guild.members.fetchMe().catch(() => null);
@@ -156,12 +185,11 @@ async function tryDeleteScrimMessage({
   const need = [
     PermissionFlagsBits.ViewChannel,
     PermissionFlagsBits.ReadMessageHistory,
-    PermissionFlagsBits.ManageMessages,
   ];
   const missing = perms ? need.filter((p) => !perms.has(p)) : need;
 
   if (missing.length > 0) {
-    failShadow('MISSING_PERMISSIONS', 'ManageMessages ou permissions lecture manquantes');
+    failShadow('MISSING_PERMISSIONS', 'Permissions salon insuffisantes pour supprimer');
     logger.warn('scrimMessagePolicy: permissions manquantes — suppression impossible, fallback édition', {
       guild_id: messageRow.guild_id,
       channel_id: messageRow.channel_id,
@@ -364,6 +392,7 @@ export async function syncInactiveScrimMessageByPolicy(p) {
 
   if (policy === LIFECYCLE_POLICY_DELETE) {
     const deleted = await tryDeleteScrimMessage({
+      client,
       stmts,
       guild,
       channel,

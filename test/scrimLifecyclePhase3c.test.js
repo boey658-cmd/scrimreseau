@@ -95,33 +95,36 @@ function makeDeletePolicyContext(stmts, db, overrides = {}) {
   });
 
   let deleteCalls = 0;
+  const botId = 'bot';
   const message = {
     id: messageId,
     guildId,
     channelId,
+    author: { id: botId },
     delete: overrides.deleteFn ?? (async () => {
       deleteCalls += 1;
     }),
   };
   const botMember = {
-    id: 'bot',
+    id: botId,
     permissions: new PermissionsBitField(PermissionFlagsBits.Administrator),
   };
   const channel = {
     permissionsFor: () => new PermissionsBitField([
       PermissionFlagsBits.ViewChannel,
       PermissionFlagsBits.ReadMessageHistory,
-      PermissionFlagsBits.ManageMessages,
     ]),
   };
   const guild = {
     members: { me: botMember, fetchMe: async () => botMember },
   };
+  const client = { user: { id: botId } };
 
   return {
     postId,
     db,
     stmts,
+    client,
     message,
     guild,
     channel,
@@ -132,8 +135,13 @@ function makeDeletePolicyContext(stmts, db, overrides = {}) {
   };
 }
 
-function mockDeleteRetryClient(onDelete) {
+function mockDeleteRetryClient(onDelete, options = {}) {
+  const botId = options.botId ?? 'bot-retry';
+  const authorId = Object.prototype.hasOwnProperty.call(options, 'authorId')
+    ? options.authorId
+    : botId;
   return {
+    user: { id: botId },
     guilds: {
       fetch: async () => ({
         channels: {
@@ -142,6 +150,7 @@ function mockDeleteRetryClient(onDelete) {
             messages: {
               fetch: async () => ({
                 id: 'msg-del3c',
+                author: authorId == null ? undefined : { id: authorId },
                 delete: onDelete,
               }),
             },
@@ -184,7 +193,7 @@ describe('Phase 3C — delete success (A)', () => {
     await withTempDb(async (db, stmts) => {
       const ctx = makeDeletePolicyContext(stmts, db);
       await syncInactiveScrimMessageByPolicy({
-        client: {},
+        client: ctx.client,
         stmts,
         messageRow: {
           guild_id: ctx.guildId,
@@ -237,7 +246,7 @@ describe('Phase 3C — 10008 idempotent (B)', () => {
       });
 
       await syncInactiveScrimMessageByPolicy({
-        client: {},
+        client: ctx.client,
         stmts,
         messageRow: {
           guild_id: ctx.guildId,
@@ -278,10 +287,12 @@ describe('Phase 3C — terminal permissions (C)', () => {
         });
         let deleteCalls = 0;
         let editCalls = 0;
+        const botId = 'bot';
         const message = {
           id: 'msg-noperm3c',
           guildId: 'g-noperm3c',
           channelId: 'c-noperm3c',
+          author: { id: botId },
           delete: async () => {
             deleteCalls += 1;
           },
@@ -289,7 +300,7 @@ describe('Phase 3C — terminal permissions (C)', () => {
             editCalls += 1;
           },
         };
-        const botMember = { id: 'bot' };
+        const botMember = { id: botId };
         const channel = {
           permissionsFor: () => new PermissionsBitField(PermissionFlagsBits.ViewChannel),
         };
@@ -298,7 +309,7 @@ describe('Phase 3C — terminal permissions (C)', () => {
         };
 
         await syncInactiveScrimMessageByPolicy({
-          client: {},
+          client: { user: { id: botId } },
           stmts,
           messageRow: { guild_id: 'g-noperm3c', channel_id: 'c-noperm3c', message_id: 'msg-noperm3c' },
           scrimPostDbId: postId,
@@ -350,7 +361,7 @@ describe('Phase 3C — transient error (D)', () => {
         };
 
         await syncInactiveScrimMessageByPolicy({
-          client: {},
+          client: ctx.client,
           stmts,
           messageRow: {
             guild_id: ctx.guildId,
@@ -502,6 +513,89 @@ describe('Phase 3C — already discord_deleted_at (F)', () => {
   });
 });
 
+describe('Phase 3C — retry delete author guard', () => {
+  async function seedDueDeleteOp(stmts, db) {
+    const postId = insertScrimPost(stmts);
+    insertMessage(stmts, postId, 'g1', 'c1', 'msg-del3c');
+    const opId = createScrimLifecycleOperation(stmts, {
+      scrimPostDbId: postId,
+      guildId: 'g1',
+      channelId: 'c1',
+      messageId: 'msg-del3c',
+      operationType: LIFECYCLE_OP_TYPE_DELETE,
+      targetStatus: 'closed_manual',
+      payloadJson: null,
+    });
+    scheduleScrimLifecycleDeleteRetry(stmts, opId, 'HTTP_503', 'test');
+    db.prepare(`UPDATE scrim_lifecycle_operations SET next_attempt_at = ? WHERE id = ?`).run(
+      new Date().toISOString(),
+      opId,
+    );
+    return opId;
+  }
+
+  it('message du bot → delete exécuté, op completed', async () => {
+    await withTempDb(async (db, stmts) => {
+      const opId = await seedDueDeleteOp(stmts, db);
+      let deletes = 0;
+      const out = await runDiscordDeleteRetryPass(
+        mockDeleteRetryClient(async () => {
+          deletes += 1;
+        }),
+        stmts,
+      );
+      assert.strictEqual(deletes, 1);
+      assert.strictEqual(out.success, 1);
+      assert.strictEqual(out.terminal, 0);
+      const op = stmts.getScrimLifecycleOperationById.get(opId);
+      assert.strictEqual(op.status, 'completed');
+    });
+  });
+
+  it('message d’un autre auteur → jamais supprimé, failed_terminal', async () => {
+    await withTempDb(async (db, stmts) => {
+      const opId = await seedDueDeleteOp(stmts, db);
+      let deletes = 0;
+      const out = await runDiscordDeleteRetryPass(
+        mockDeleteRetryClient(
+          async () => {
+            deletes += 1;
+          },
+          { authorId: 'other-user-999' },
+        ),
+        stmts,
+      );
+      assert.strictEqual(deletes, 0);
+      assert.strictEqual(out.terminal, 1);
+      assert.strictEqual(out.success, 0);
+      const op = stmts.getScrimLifecycleOperationById.get(opId);
+      assert.strictEqual(op.status, 'failed_terminal');
+      assert.strictEqual(op.last_error_code, 'NOT_BOT_AUTHOR');
+    });
+  });
+
+  it('auteur absent → pas de crash, failed_terminal', async () => {
+    await withTempDb(async (db, stmts) => {
+      const opId = await seedDueDeleteOp(stmts, db);
+      let deletes = 0;
+      const out = await runDiscordDeleteRetryPass(
+        mockDeleteRetryClient(
+          async () => {
+            deletes += 1;
+          },
+          { authorId: null },
+        ),
+        stmts,
+      );
+      assert.strictEqual(deletes, 0);
+      assert.strictEqual(out.terminal, 1);
+      const op = stmts.getScrimLifecycleOperationById.get(opId);
+      assert.strictEqual(op.status, 'failed_terminal');
+      assert.strictEqual(op.last_error_code, 'NOT_BOT_AUTHOR');
+    });
+  });
+});
+
 describe('Phase 3C — no double delete (G)', () => {
   beforeEach(() => {
     process.env.DISCORD_TASK_QUEUE_DELAY_MS = '0';
@@ -526,7 +620,7 @@ describe('Phase 3C — no double delete (G)', () => {
       };
       try {
         await syncInactiveScrimMessageByPolicy({
-          client: {},
+          client: ctx.client,
           stmts,
           messageRow: {
             guild_id: ctx.guildId,
