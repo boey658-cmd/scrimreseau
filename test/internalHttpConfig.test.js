@@ -15,10 +15,16 @@ import {
   createInternalHttpServer,
   listenInternalHttpServer,
 } from '../src/internalHttp/server.js';
+import { makeAuthzClient, TEST_ACTOR_ID } from './helpers/internalHttpAuthzMock.js';
 
 const TEST_TOKEN = 'test-internal-token-web3b';
 const VALID_GUILD = '1484520688726311012';
 const OTHER_GUILD = '1436848619796828322';
+const ACTOR = TEST_ACTOR_ID;
+
+function configPath(guildId) {
+  return `/internal/guilds/${guildId}/config?actor_discord_user_id=${ACTOR}`;
+}
 
 async function withTempDb(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scrim-internal-config-'));
@@ -83,9 +89,10 @@ let testListener = null;
 
 async function startTestServer(db, port = 0) {
   const config = { enabled: true, port, token: TEST_TOKEN };
+  const client = makeAuthzClient(VALID_GUILD, ACTOR);
   const { server, listener, host } = createInternalHttpServer({
     db,
-    client: null,
+    client: /** @type {any} */ (client),
     config,
     port,
   });
@@ -142,10 +149,21 @@ describe('Web3B config queries — data & fallbacks', () => {
       ins.run(VALID_GUILD, 'c2', 'rocket_league');
       ins.run(VALID_GUILD, 'c1', 'league_of_legends');
       const cfg = fetchGuildConfig(db, VALID_GUILD);
-      assert.deepStrictEqual(cfg.reception_channels, [
-        { game_key: 'league_of_legends', channel_id: 'c1' },
-        { game_key: 'rocket_league', channel_id: 'c2' },
-      ]);
+      assert.strictEqual(cfg.reception_channels.length, 2);
+      // ORDER BY game_key ASC → league_of_legends puis rocket_league
+      assert.strictEqual(cfg.reception_channels[0].game_key, 'league_of_legends');
+      assert.strictEqual(cfg.reception_channels[0].channel_id, 'c1');
+      assert.strictEqual(cfg.reception_channels[0].user_enabled, true);
+      assert.strictEqual(cfg.reception_channels[0].effective_active, true);
+      assert.strictEqual(cfg.reception_channels[0].paused_reason, null);
+      assert.strictEqual(cfg.reception_channels[1].game_key, 'rocket_league');
+      assert.strictEqual(cfg.reception_channels[1].channel_id, 'c2');
+      // Quota par jeu : FREE = 1 par game_key → les 2 restent actifs
+      assert.strictEqual(cfg.reception_channels[1].effective_active, true);
+      assert.strictEqual(cfg.reception_channels[1].paused_reason, null);
+      assert.strictEqual(cfg.reception_channel_usage.limit, 1);
+      assert.strictEqual(cfg.reception_channel_usage.active, 1);
+      assert.strictEqual(cfg.entitlement.plan_key, 'FREE');
     });
   });
 
@@ -298,11 +316,33 @@ describe('Web3B config queries — data & fallbacks', () => {
       assert.deepStrictEqual(Object.keys(cfg).sort(), [
         'command_channel_id',
         'command_permissions',
+        'elo_filter_rank_options',
+        'embed_customization',
+        'entitlement',
         'guild_id',
         'inactive_message_policy',
         'language',
+        'reception_channel_usage',
         'reception_channels',
         'structure_invite_url',
+        'structure_profile',
+      ]);
+      assert.ok(!('created_at' in cfg.structure_profile));
+      assert.ok(!('updated_at' in cfg.structure_profile));
+      assert.deepStrictEqual(Object.keys(cfg.structure_profile).sort(), [
+        'directory_featured',
+        'effective',
+        'feature_available',
+        'premium_badge',
+        'stored',
+      ]);
+      assert.deepStrictEqual(Object.keys(cfg.embed_customization).sort(), [
+        'effective',
+        'feature_available',
+        'presets',
+        'presets_available',
+        'preview_available',
+        'stored',
       ]);
     });
   });
@@ -320,7 +360,7 @@ describe('Web3B config HTTP', () => {
   it('bearer absent => 401', async () => {
     await withTempDb(async (db) => {
       const port = await startTestServer(db);
-      const res = await httpRequest(port, `/internal/guilds/${VALID_GUILD}/config`, { token: null });
+      const res = await httpRequest(port, configPath(VALID_GUILD), { token: null });
       assert.strictEqual(res.status, 401);
     });
   });
@@ -328,7 +368,7 @@ describe('Web3B config HTTP', () => {
   it('mauvais bearer => 401', async () => {
     await withTempDb(async (db) => {
       const port = await startTestServer(db);
-      const res = await httpRequest(port, `/internal/guilds/${VALID_GUILD}/config`, {
+      const res = await httpRequest(port, configPath(VALID_GUILD), {
         token: 'wrong',
       });
       assert.strictEqual(res.status, 401);
@@ -353,26 +393,51 @@ describe('Web3B config HTTP', () => {
          VALUES (?, '111', 'league_of_legends', 1)`,
       ).run(VALID_GUILD);
       const port = await startTestServer(db);
-      const res = await httpRequest(port, `/internal/guilds/${VALID_GUILD}/config`);
+      const res = await httpRequest(port, configPath(VALID_GUILD));
       assert.strictEqual(res.status, 200);
-      assert.deepStrictEqual(res.body, {
-        guild_id: VALID_GUILD,
-        language: 'fr',
-        reception_channels: [{ game_key: 'league_of_legends', channel_id: '111' }],
-        command_channel_id: null,
-        inactive_message_policy: 'keep',
-        structure_invite_url: null,
-        command_permissions: { mode: 'everyone', role_ids: [] },
-      });
+      assert.strictEqual(res.body.guild_id, VALID_GUILD);
+      assert.strictEqual(res.body.language, 'fr');
+      assert.strictEqual(res.body.reception_channels.length, 1);
+      assert.strictEqual(res.body.reception_channels[0].game_key, 'league_of_legends');
+      assert.strictEqual(res.body.reception_channels[0].channel_id, '111');
+      assert.strictEqual(res.body.reception_channels[0].user_enabled, true);
+      assert.strictEqual(res.body.reception_channels[0].effective_active, true);
+      assert.strictEqual(res.body.reception_channels[0].paused_reason, null);
+      assert.strictEqual(res.body.reception_channel_usage.limit, 1);
+      assert.strictEqual(res.body.reception_channel_usage.active, 1);
+      assert.strictEqual(res.body.entitlement.plan_key, 'FREE');
+      assert.strictEqual(res.body.command_channel_id, null);
+      assert.strictEqual(res.body.inactive_message_policy, 'keep');
+      assert.strictEqual(res.body.structure_invite_url, null);
+      assert.deepStrictEqual(res.body.command_permissions, { mode: 'everyone', role_ids: [] });
       assert.ok(!res.bodyText.includes('updated_by'));
       assert.ok(!res.bodyText.includes(TEST_TOKEN));
+    });
+  });
+
+  it('GET config sans actor => 400', async () => {
+    await withTempDb(async (db) => {
+      const port = await startTestServer(db);
+      const res = await httpRequest(port, `/internal/guilds/${VALID_GUILD}/config`);
+      assert.strictEqual(res.status, 400);
+    });
+  });
+
+  it('GET config actor autre guild => 403', async () => {
+    await withTempDb(async (db) => {
+      const port = await startTestServer(db);
+      const res = await httpRequest(
+        port,
+        `/internal/guilds/${OTHER_GUILD}/config?actor_discord_user_id=${ACTOR}`,
+      );
+      assert.ok([403, 409].includes(res.status));
     });
   });
 
   it('POST config => 405', async () => {
     await withTempDb(async (db) => {
       const port = await startTestServer(db);
-      const res = await httpRequest(port, `/internal/guilds/${VALID_GUILD}/config`, {
+      const res = await httpRequest(port, configPath(VALID_GUILD), {
         method: 'POST',
       });
       assert.strictEqual(res.status, 405);
@@ -382,7 +447,10 @@ describe('Web3B config HTTP', () => {
   it('overview existant continue de fonctionner', async () => {
     await withTempDb(async (db) => {
       const port = await startTestServer(db);
-      const res = await httpRequest(port, `/internal/guilds/${VALID_GUILD}/overview`);
+      const res = await httpRequest(
+        port,
+        `/internal/guilds/${VALID_GUILD}/overview?actor_discord_user_id=${ACTOR}`,
+      );
       assert.strictEqual(res.status, 200);
       assert.strictEqual(res.body.guild_id, VALID_GUILD);
       assert.ok('published_count' in res.body);

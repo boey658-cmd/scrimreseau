@@ -479,13 +479,13 @@ export const slashMeta = Object.freeze({
 
   scrimConfig: {
     description: L([
-      'Configure ScrimRéseau pour ce serveur.',
-      'Configure ScrimRéseau for this server.',
-      'Configura ScrimRéseau para este servidor.',
-      'Konfiguriere ScrimRéseau für diesen Server.',
-      'Configura ScrimRéseau per questo server.',
-      'Skonfiguruj ScrimRéseau dla tego serwera.',
-      'Configura o ScrimRéseau para este servidor.',
+      'Ouvre le dashboard ScrimRéseau pour configurer ce serveur.',
+      'Open the ScrimRéseau dashboard to configure this server.',
+      'Abre el dashboard de ScrimRéseau para configurar este servidor.',
+      'Öffnet das ScrimRéseau-Dashboard zur Konfiguration dieses Servers.',
+      'Apre la dashboard ScrimRéseau per configurare questo server.',
+      'Otwiera panel ScrimRéseau do konfiguracji tego serwera.',
+      'Abre o dashboard do ScrimRéseau para configurar este servidor.',
     ]),
   },
 
@@ -685,13 +685,13 @@ export const slashMeta = Object.freeze({
 
   structureLink: {
     description: L([
-      'Gère le lien Discord associé à une structure.',
-      'Manage the Discord link associated with a structure.',
-      'Gestiona el enlace de Discord asociado a una estructura.',
-      'Verwalte den Discord-Link einer Struktur.',
-      'Gestisci il link Discord associato a una struttura.',
-      'Zarządzaj linkiem Discord powiązanym ze strukturą.',
-      'Gere o link Discord associado a uma estrutura.',
+      'Ouvre le dashboard ScrimRéseau pour gérer le lien Discord de la structure.',
+      'Open the ScrimRéseau dashboard to manage the structure Discord link.',
+      'Abre el dashboard de ScrimRéseau para gestionar el enlace Discord de la estructura.',
+      'Öffnet das ScrimRéseau-Dashboard zur Verwaltung des Discord-Links der Struktur.',
+      'Apre la dashboard ScrimRéseau per gestire il link Discord della struttura.',
+      'Otwiera panel ScrimRéseau do zarządzania linkiem Discord struktury.',
+      'Abre o dashboard do ScrimRéseau para gerir o link Discord da estrutura.',
     ]),
     subSet: {
       description: L([

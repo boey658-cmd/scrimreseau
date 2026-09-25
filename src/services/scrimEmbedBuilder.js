@@ -9,6 +9,7 @@ import { localizeRank } from '../config/games.js';
 import { t } from '../i18n/index.js';
 import { getScrimEmoji } from '../utils/emojis.js';
 import { getParisTimezoneAbbr, SCRIM_TIMEZONE } from '../utils/scrimScheduledAt.js';
+import { getRankTierIndex, LOL_RANK_TIERS } from './rankTaxonomy.js';
 
 /** Embed scrim disponible (publication / réseau). */
 export const SCRIM_EMBED_COLOR_ACTIVE = 0x57f287;
@@ -44,38 +45,19 @@ const CUSTOM_EMOJIS = Object.freeze({
   fearless:    '<:fearless:1521804294062608505>',
 });
 
-/**
- * Tiers du rang, du plus bas (index 0) au plus élevé (index 9).
- * `keys` : noms français et anglais reconnus (comparaison exacte, insensible à la casse).
- *
- * @type {ReadonlyArray<{ readonly keys: readonly string[], readonly tier: keyof typeof CUSTOM_EMOJIS }>}
- */
-const RANK_TIERS = Object.freeze([
-  { keys: Object.freeze(['fer', 'iron']),                                                    tier: 'iron' },
-  { keys: Object.freeze(['bronze']),                                                         tier: 'bronze' },
-  { keys: Object.freeze(['argent', 'silver']),                                               tier: 'silver' },
-  { keys: Object.freeze(['or', 'gold']),                                                     tier: 'gold' },
-  { keys: Object.freeze(['platine', 'platinum']),                                            tier: 'platinum' },
-  { keys: Object.freeze(['émeraude', 'emeraude', 'emerald']),                               tier: 'emerald' },
-  { keys: Object.freeze(['diamant', 'diamond']),                                             tier: 'diamond' },
-  { keys: Object.freeze(['master']),                                                         tier: 'master' },
-  { keys: Object.freeze(['grandmaster', 'grand maître', 'grand maitre', 'grand-maître']),   tier: 'grandmaster' },
-  { keys: Object.freeze(['challenger']),                                                     tier: 'challenger' },
-]);
-
-/**
- * Indice de tier (0 = plus bas) pour un segment de rang normalisé.
- * Comparaison exacte sur le segment complet (évite le match 'master' dans 'grandmaster').
- * @param {string} segment
- * @returns {number} -1 si inconnu
- */
-function getRankTierIndex(segment) {
-  const norm = segment.toLowerCase().trim();
-  for (let i = 0; i < RANK_TIERS.length; i++) {
-    if (/** @type {readonly string[]} */ (RANK_TIERS[i].keys).includes(norm)) return i;
-  }
-  return -1;
-}
+/** Mapping catalogKey → clé emoji custom. */
+const CATALOG_TO_EMOJI_TIER = Object.freeze({
+  Fer: 'iron',
+  Bronze: 'bronze',
+  Argent: 'silver',
+  Or: 'gold',
+  Platine: 'platinum',
+  Émeraude: 'emerald',
+  Diamant: 'diamond',
+  Master: 'master',
+  Grandmaster: 'grandmaster',
+  Challenger: 'challenger',
+});
 
 /**
  * Retourne l'emoji custom du rang le plus élevé trouvé dans la chaîne.
@@ -89,13 +71,16 @@ export function getRankEmoji(rankStr) {
   if (typeof rankStr !== 'string' || !rankStr.trim()) return '🏆';
 
   let highestIndex = -1;
-  let highestTier  = /** @type {keyof typeof CUSTOM_EMOJIS | null} */ (null);
+  let highestTier = /** @type {keyof typeof CUSTOM_EMOJIS | null} */ (null);
 
   for (const segment of rankStr.split('/')) {
     const idx = getRankTierIndex(segment);
-    if (idx > highestIndex) {
+    if (idx > highestIndex && idx >= 0 && idx < LOL_RANK_TIERS.length) {
       highestIndex = idx;
-      highestTier  = RANK_TIERS[idx].tier;
+      const catalogKey = LOL_RANK_TIERS[idx].catalogKey;
+      highestTier = /** @type {keyof typeof CUSTOM_EMOJIS} */ (
+        CATALOG_TO_EMOJI_TIER[catalogKey] ?? null
+      );
     }
   }
 
@@ -543,7 +528,7 @@ function resolveScrimDisplaySchedule(payload, locale = 'fr') {
 
 /**
  * @param {ScrimEmbedPayload} payload
- * @param {{ includeContactHints?: boolean, includeContactInEmbed?: boolean }} [options]
+ * @param {{ includeContactHints?: boolean, includeContactInEmbed?: boolean, emojiPrefix?: string | null }} [options]
  * @returns {string}
  */
 function buildScrimEmbedDescription(payload, options = {}, locale = 'fr') {
@@ -598,7 +583,15 @@ function buildScrimEmbedDescription(payload, options = {}, locale = 'fr') {
     lines.push(...getScrimContactButtonHintLines(locale));
   }
 
-  return lines.join('\n');
+  let body = lines.join('\n');
+  const prefix =
+    typeof options.emojiPrefix === 'string' && options.emojiPrefix.trim()
+      ? options.emojiPrefix.trim()
+      : null;
+  if (prefix) {
+    body = `${prefix} ${body}`;
+  }
+  return body;
 }
 
 /**
@@ -616,7 +609,7 @@ export function buildScrimOfficialContactContent(contactUserId, locale = 'fr') {
 /**
  * @param {ScrimEmbedPayload} payload
  * @param {number} color
- * @param {{ includeContactHints?: boolean, includeContactInEmbed?: boolean }} [options]
+ * @param {{ includeContactHints?: boolean, includeContactInEmbed?: boolean, emojiPrefix?: string | null }} [options]
  * @param {string} [locale]
  * @returns {EmbedBuilder}
  */
@@ -630,19 +623,26 @@ function buildScrimEmbedWithStatus(payload, color, options = {}, locale = 'fr') 
  * Édition Discord : vague réseau remplacée par un repost (scrim toujours actif en DB).
  * @param {Record<string, unknown>} dbRow ligne `scrim_posts`
  * @param {string} [locale]
- * @param {{ includeContactInEmbed?: boolean }} [options]
+ * @param {{ includeContactInEmbed?: boolean, color?: number | null, emojiPrefix?: string | null }} [options]
  * @returns {{ content: null, embeds: EmbedBuilder[], components: [] }}
  */
 export function buildScrimSupersededMessageEditOptions(dbRow, locale = 'fr', options = {}) {
   const payload = scrimDbRowToEmbedPayload(dbRow);
   const includeContactInEmbed = options.includeContactInEmbed !== false;
+  const color =
+    typeof options.color === 'number' && Number.isFinite(options.color)
+      ? options.color
+      : SCRIM_EMBED_COLOR_SUPERSEDED;
   return {
     content: null,
     embeds: [
       buildScrimEmbedWithStatus(
         payload,
-        SCRIM_EMBED_COLOR_SUPERSEDED,
-        { includeContactInEmbed },
+        color,
+        {
+          includeContactInEmbed,
+          emojiPrefix: options.emojiPrefix ?? null,
+        },
         locale,
       ),
     ],
@@ -655,39 +655,36 @@ export function buildScrimSupersededMessageEditOptions(dbRow, locale = 'fr', opt
  * @param {'closed_manual' | 'closed_expired'} status
  * @param {Record<string, unknown>} dbRow ligne `scrim_posts` après fermeture
  * @param {string} [locale]
- * @param {{ includeContactInEmbed?: boolean }} [options]
+ * @param {{ includeContactInEmbed?: boolean, color?: number | null, emojiPrefix?: string | null }} [options]
  * @returns {{ content: null, embeds: EmbedBuilder[], components: [] }}
  */
 export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr', options = {}) {
   const payload = scrimDbRowToEmbedPayload(dbRow);
   const includeContactInEmbed = options.includeContactInEmbed !== false;
+  const defaultColor =
+    status === 'closed_manual'
+      ? SCRIM_EMBED_COLOR_CLOSED_MANUAL
+      : SCRIM_EMBED_COLOR_CLOSED_EXPIRED;
+  const color =
+    typeof options.color === 'number' && Number.isFinite(options.color)
+      ? options.color
+      : defaultColor;
 
-  if (status === 'closed_manual') {
+  if (status === 'closed_manual' || status === 'closed_expired') {
     return {
       content: null,
       embeds: [
         buildScrimEmbedWithStatus(
           payload,
-          SCRIM_EMBED_COLOR_CLOSED_MANUAL,
-          { includeContactInEmbed },
+          color,
+          {
+            includeContactInEmbed,
+            emojiPrefix: options.emojiPrefix ?? null,
+          },
           locale,
         ),
       ],
       /** Retire le bouton lien éventuellement présent sur l’annonce ouverte. */
-      components: [],
-    };
-  }
-  if (status === 'closed_expired') {
-    return {
-      content: null,
-      embeds: [
-        buildScrimEmbedWithStatus(
-          payload,
-          SCRIM_EMBED_COLOR_CLOSED_EXPIRED,
-          { includeContactInEmbed },
-          locale,
-        ),
-      ],
       components: [],
     };
   }
@@ -697,16 +694,21 @@ export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr',
 /**
  * @param {ScrimEmbedPayload} payload
  * @param {string} [locale]
- * @param {{ includeContactHints?: boolean, includeContactInEmbed?: boolean }} [options]
+ * @param {{ includeContactHints?: boolean, includeContactInEmbed?: boolean, color?: number | null, emojiPrefix?: string | null }} [options]
  * @returns {EmbedBuilder}
  */
 export function buildScrimEmbed(payload, locale = 'fr', options = {}) {
+  const color =
+    typeof options.color === 'number' && Number.isFinite(options.color)
+      ? options.color
+      : SCRIM_EMBED_COLOR_ACTIVE;
   return buildScrimEmbedWithStatus(
     payload,
-    SCRIM_EMBED_COLOR_ACTIVE,
+    color,
     {
       includeContactInEmbed: options.includeContactInEmbed !== false,
       includeContactHints: options.includeContactHints !== false,
+      emojiPrefix: options.emojiPrefix ?? null,
     },
     locale,
   );

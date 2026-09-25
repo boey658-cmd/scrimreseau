@@ -7,6 +7,7 @@ import {
   executeOrchestratedLifecycleOperations,
   orchestrateScrimCloseIntentionsForMessages,
 } from './scrimLifecycleOrchestrator.js';
+import { listActiveReceptionDestinationsForGame } from './receptionChannels.js';
 
 /** @typedef {'reserved' | 'broadcasting' | 'broadcast_done' | 'finalized' | 'cancelled' | 'failed'} RepostCycleStatus */
 
@@ -361,7 +362,9 @@ export async function executeRepostCycleForScrim(client, db, stmts, scrimPostDbI
   const cycleId = Number(cycle.id);
 
   const gameKey = /** @type {string} */ (row.game_key);
-  const channelRows = stmts.listChannelsByGame.all(gameKey);
+  const channelRows = listActiveReceptionDestinationsForGame(stmts, gameKey, {
+    scrimRankKey: typeof row.rank_key === 'string' ? row.rank_key : null,
+  });
   if (channelRows.length === 0) {
     updateCycleStatus(stmts, cycleId, 'failed');
     return { ok: false, successCount: 0, reason: 'no_channels' };

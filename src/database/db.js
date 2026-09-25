@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { computeScheduledAtIso } from '../utils/scrimScheduledAt.js';
 import { logger } from '../utils/logger.js';
+import { runSchemaMigrations } from './schemaMigrations.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultPath = path.join(__dirname, '..', '..', 'data', 'scrim.db');
@@ -24,8 +25,11 @@ CREATE TABLE IF NOT EXISTS guild_game_channels (
   guild_id TEXT NOT NULL,
   channel_id TEXT NOT NULL,
   game_key TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  sort_order INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
-  PRIMARY KEY (guild_id, game_key)
+  updated_at INTEGER,
+  PRIMARY KEY (guild_id, channel_id)
 );
 
 CREATE TABLE IF NOT EXISTS guild_blocked_users (
@@ -987,6 +991,8 @@ export function getDb() {
   migrateScrimLifecycleOperationsPhase3f(dbInstance);
   migrateNetworkDashboardRotation(dbInstance);
   migrateNetworkPublicExclusions(dbInstance);
+  // Migrations versionnées Phase 0+ (fail-safe si échec)
+  runSchemaMigrations(dbInstance);
   logger.info(
     'SQLite initialisée : mode WAL, busy_timeout=5000 ms. Une seule instance writer attendue sur ce fichier.',
     { path: dbPath, busy_timeout_ms: 5000, journal_mode: 'WAL' },
@@ -1026,12 +1032,51 @@ export function closeDb() {
 /** @param {import('better-sqlite3').Database} db */
 export function prepareStatements(db) {
   return {
+    /**
+     * Upsert FREE / remplace (sort_order forcé à 0).
+     * Pour add multi-salon préférer insertReceptionChannelAtOrder.
+     */
     upsertGuildChannel: db.prepare(`
-      INSERT INTO guild_game_channels (guild_id, channel_id, game_key, created_at)
-      VALUES (@guild_id, @channel_id, @game_key, @created_at)
-      ON CONFLICT(guild_id, game_key) DO UPDATE SET
-        channel_id = excluded.channel_id,
-        created_at = excluded.created_at
+      INSERT INTO guild_game_channels (
+        guild_id, channel_id, game_key, enabled, sort_order, created_at, updated_at
+      )
+      VALUES (
+        @guild_id, @channel_id, @game_key, 1, 0, @created_at, @created_at
+      )
+      ON CONFLICT(guild_id, channel_id) DO UPDATE SET
+        game_key = excluded.game_key,
+        enabled = 1,
+        sort_order = 0,
+        updated_at = excluded.created_at
+    `),
+    /** Phase 2 — insert/reactivate with explicit sort_order (enabled = user choice). */
+    insertReceptionChannelAtOrder: db.prepare(`
+      INSERT INTO guild_game_channels (
+        guild_id, channel_id, game_key, enabled, sort_order, created_at, updated_at
+      )
+      VALUES (
+        @guild_id, @channel_id, @game_key, @enabled, @sort_order, @created_at, @created_at
+      )
+      ON CONFLICT(guild_id, channel_id) DO UPDATE SET
+        game_key = excluded.game_key,
+        enabled = excluded.enabled,
+        sort_order = excluded.sort_order,
+        updated_at = excluded.created_at
+    `),
+    setReceptionChannelUserEnabled: db.prepare(`
+      UPDATE guild_game_channels
+      SET enabled = @enabled, updated_at = @updated_at
+      WHERE guild_id = @guild_id AND channel_id = @channel_id
+    `),
+    setReceptionChannelSortOrder: db.prepare(`
+      UPDATE guild_game_channels
+      SET sort_order = @sort_order, updated_at = @updated_at
+      WHERE guild_id = @guild_id AND channel_id = @channel_id
+    `),
+    /** FREE / set salon : retire les autres salons du même jeu pour la guild (comportement 1 salon). */
+    deleteGuildChannelsByGuildGame: db.prepare(`
+      DELETE FROM guild_game_channels
+      WHERE guild_id = ? AND game_key = ?
     `),
     deleteGuildChannel: db.prepare(`
       DELETE FROM guild_game_channels
@@ -1043,14 +1088,87 @@ export function prepareStatements(db) {
       WHERE guild_id = ? AND channel_id = ?
     `),
     getGuildGameChannelByChannelId: db.prepare(`
-      SELECT guild_id, channel_id, game_key, created_at
+      SELECT guild_id, channel_id, game_key, enabled, sort_order, created_at, updated_at
       FROM guild_game_channels
       WHERE guild_id = ? AND channel_id = ?
       LIMIT 1
     `),
+    /**
+     * Legacy listing (tous salons, y compris disabled) — préférer listEnabledChannelsByGame
+     * ou listActiveReceptionDestinationsForGame pour la diffusion.
+     */
     listChannelsByGame: db.prepare(`
       SELECT guild_id, channel_id FROM guild_game_channels
       WHERE game_key = ?
+      ORDER BY guild_id ASC, sort_order ASC, created_at ASC, channel_id ASC
+    `),
+    listEnabledChannelsByGame: db.prepare(`
+      SELECT guild_id, channel_id, game_key, enabled, sort_order, created_at
+      FROM guild_game_channels
+      WHERE game_key = ? AND enabled = 1
+      ORDER BY guild_id ASC, sort_order ASC, created_at ASC, channel_id ASC
+    `),
+    listEnabledChannelsByGuildGame: db.prepare(`
+      SELECT guild_id, channel_id, game_key, enabled, sort_order, created_at
+      FROM guild_game_channels
+      WHERE guild_id = ? AND game_key = ? AND enabled = 1
+      ORDER BY sort_order ASC, created_at ASC, channel_id ASC
+    `),
+    /** Tous salons configurés (y compris user-disabled) — dashboard / reorder. */
+    listAllChannelsByGuildGame: db.prepare(`
+      SELECT guild_id, channel_id, game_key, enabled, sort_order, created_at, updated_at
+      FROM guild_game_channels
+      WHERE guild_id = ? AND game_key = ?
+      ORDER BY sort_order ASC, created_at ASC, channel_id ASC
+    `),
+    countConfiguredChannelsByGuildGame: db.prepare(`
+      SELECT COUNT(*) AS n FROM guild_game_channels
+      WHERE guild_id = ? AND game_key = ?
+    `),
+    countUserEnabledChannelsByGuildGame: db.prepare(`
+      SELECT COUNT(*) AS n FROM guild_game_channels
+      WHERE guild_id = ? AND game_key = ? AND enabled = 1
+    `),
+    maxSortOrderByGuildGame: db.prepare(`
+      SELECT COALESCE(MAX(sort_order), -1) AS max_sort
+      FROM guild_game_channels
+      WHERE guild_id = ? AND game_key = ?
+    `),
+    /** Phase 3 — filtres Elo par salon. */
+    upsertReceptionChannelEloFilter: db.prepare(`
+      INSERT INTO guild_reception_channel_filters (
+        guild_id, channel_id, game_key, elo_rank_key, created_at, updated_at
+      ) VALUES (
+        @guild_id, @channel_id, @game_key, @elo_rank_key, @created_at, @updated_at
+      )
+      ON CONFLICT(guild_id, channel_id) DO UPDATE SET
+        game_key = excluded.game_key,
+        elo_rank_key = excluded.elo_rank_key,
+        updated_at = excluded.updated_at
+    `),
+    deleteReceptionChannelEloFilter: db.prepare(`
+      DELETE FROM guild_reception_channel_filters
+      WHERE guild_id = ? AND channel_id = ?
+    `),
+    deleteReceptionChannelEloFiltersByGuildGame: db.prepare(`
+      DELETE FROM guild_reception_channel_filters
+      WHERE guild_id = ? AND game_key = ?
+    `),
+    getReceptionChannelEloFilter: db.prepare(`
+      SELECT guild_id, channel_id, game_key, elo_rank_key, created_at, updated_at
+      FROM guild_reception_channel_filters
+      WHERE guild_id = ? AND channel_id = ?
+      LIMIT 1
+    `),
+    listReceptionChannelEloFiltersByGame: db.prepare(`
+      SELECT guild_id, channel_id, game_key, elo_rank_key
+      FROM guild_reception_channel_filters
+      WHERE game_key = ?
+    `),
+    listReceptionChannelEloFiltersByGuildGame: db.prepare(`
+      SELECT guild_id, channel_id, game_key, elo_rank_key
+      FROM guild_reception_channel_filters
+      WHERE guild_id = ? AND game_key = ?
     `),
     countGuildGameChannels: db.prepare(`
       SELECT COUNT(*) AS n FROM guild_game_channels
@@ -1298,13 +1416,24 @@ export function prepareStatements(db) {
       FROM scrim_post_messages
       WHERE scrim_post_db_id = ?
     `),
-    /** Message scrim posté sur une guilde (lien « Voir le message »). */
+    /**
+     * Message scrim posté sur une guilde (lien « Voir le message »).
+     * Compat multi-messages : préféré = message le plus récent (id DESC).
+     * Invariant lifecycle : close/expire itèrent TOUS les messages via listScrimPostMessagesByPostId.
+     * Avec N salons futurs, préférer resolvePreferredScrimPostMessageLink (salon actif).
+     */
     getScrimPostMessageForGuild: db.prepare(`
       SELECT channel_id, message_id
       FROM scrim_post_messages
       WHERE scrim_post_db_id = ? AND guild_id = ?
       ORDER BY id DESC
       LIMIT 1
+    `),
+    listScrimPostMessagesByPostAndGuild: db.prepare(`
+      SELECT id, channel_id, message_id
+      FROM scrim_post_messages
+      WHERE scrim_post_db_id = ? AND guild_id = ?
+      ORDER BY id DESC
     `),
     deleteScrimPostMessagesForPost: db.prepare(`
       DELETE FROM scrim_post_messages WHERE scrim_post_db_id = ?
@@ -1745,7 +1874,10 @@ export function prepareStatements(db) {
     `),
     /** Salon de réception scrim pour une guilde + jeu précis (lecture pour vérif permissions). */
     getGuildGameChannel: db.prepare(`
-      SELECT channel_id FROM guild_game_channels WHERE guild_id = ? AND game_key = ?
+      SELECT channel_id FROM guild_game_channels
+      WHERE guild_id = ? AND game_key = ? AND enabled = 1
+      ORDER BY sort_order ASC, created_at ASC, channel_id ASC
+      LIMIT 1
     `),
 
     /** Dashboard réseau : nombre de guildes distinctes avec au moins un salon scrim. */
@@ -2063,6 +2195,266 @@ export function prepareStatements(db) {
     oldestRetryDelivery: db.prepare(`
       SELECT next_attempt_at FROM scrim_broadcast_deliveries
       WHERE status = 'retry' ORDER BY next_attempt_at ASC LIMIT 1
+    `),
+
+    // === Entitlement grants (Phase 1) ===
+    insertEntitlementGrant: db.prepare(`
+      INSERT INTO entitlement_grants (
+        guild_id, plan_key, source, status,
+        starts_at, ends_at, grace_ends_at,
+        granted_by, reason, external_ref, idempotency_key, provider,
+        created_at, updated_at
+      ) VALUES (
+        @guild_id, @plan_key, @source, @status,
+        @starts_at, @ends_at, @grace_ends_at,
+        @granted_by, @reason, @external_ref, @idempotency_key, @provider,
+        @created_at, @updated_at
+      )
+    `),
+    getEntitlementGrantById: db.prepare(`
+      SELECT * FROM entitlement_grants WHERE id = ?
+    `),
+    getEntitlementGrantByIdempotencyKey: db.prepare(`
+      SELECT * FROM entitlement_grants WHERE idempotency_key = ? LIMIT 1
+    `),
+    listEntitlementGrantsByGuild: db.prepare(`
+      SELECT * FROM entitlement_grants
+      WHERE guild_id = ?
+      ORDER BY id ASC
+    `),
+    revokeEntitlementGrant: db.prepare(`
+      UPDATE entitlement_grants
+      SET status = @status,
+          revoked_at = @revoked_at,
+          revoked_by = @revoked_by,
+          revoke_reason = @revoke_reason,
+          updated_at = @updated_at
+      WHERE id = @id
+    `),
+    updateEntitlementGrantStatus: db.prepare(`
+      UPDATE entitlement_grants
+      SET status = @status, updated_at = @updated_at
+      WHERE id = @id
+    `),
+    listEntitlementGrantsNeedingExpire: db.prepare(`
+      SELECT * FROM entitlement_grants
+      WHERE status IN ('scheduled', 'active', 'canceled')
+        AND (
+          (grace_ends_at IS NOT NULL AND grace_ends_at <= ?)
+          OR (grace_ends_at IS NULL AND ends_at <= ?)
+        )
+    `),
+    getEntitlementGrantByExternalRef: db.prepare(`
+      SELECT * FROM entitlement_grants WHERE external_ref = ? LIMIT 1
+    `),
+    updatePaidEntitlementGrant: db.prepare(`
+      UPDATE entitlement_grants
+      SET plan_key = @plan_key,
+          status = @status,
+          starts_at = @starts_at,
+          ends_at = @ends_at,
+          grace_ends_at = @grace_ends_at,
+          reason = @reason,
+          provider = @provider,
+          updated_at = @updated_at
+      WHERE id = @id AND source = 'paid'
+    `),
+    clearEntitlementGrantRevoke: db.prepare(`
+      UPDATE entitlement_grants
+      SET revoked_at = NULL,
+          revoked_by = NULL,
+          revoke_reason = NULL,
+          updated_at = @updated_at
+      WHERE id = @id
+    `),
+
+    // === Billing Core (Phase 7A) ===
+    insertBillingCustomer: db.prepare(`
+      INSERT INTO billing_customers (
+        guild_id, provider, provider_customer_id, contact_user_id, created_at, updated_at
+      ) VALUES (
+        @guild_id, @provider, @provider_customer_id, @contact_user_id, @created_at, @updated_at
+      )
+    `),
+    getBillingCustomerByProviderIds: db.prepare(`
+      SELECT * FROM billing_customers
+      WHERE provider = ? AND provider_customer_id = ?
+      LIMIT 1
+    `),
+    getBillingCustomerById: db.prepare(`
+      SELECT * FROM billing_customers WHERE id = ?
+    `),
+    listBillingCustomersByGuild: db.prepare(`
+      SELECT * FROM billing_customers WHERE guild_id = ? ORDER BY id ASC
+    `),
+    insertBillingSubscription: db.prepare(`
+      INSERT INTO billing_subscriptions (
+        guild_id, customer_id, provider, provider_subscription_id,
+        plan_key, interval, product_key, status,
+        current_period_start, current_period_end,
+        cancel_at_period_end, canceled_at, grace_ends_at,
+        pending_plan_key, pending_plan_effective_at, last_provider_event_at,
+        created_at, updated_at
+      ) VALUES (
+        @guild_id, @customer_id, @provider, @provider_subscription_id,
+        @plan_key, @interval, @product_key, @status,
+        @current_period_start, @current_period_end,
+        @cancel_at_period_end, @canceled_at, @grace_ends_at,
+        @pending_plan_key, @pending_plan_effective_at, @last_provider_event_at,
+        @created_at, @updated_at
+      )
+    `),
+    updateBillingSubscription: db.prepare(`
+      UPDATE billing_subscriptions
+      SET plan_key = @plan_key,
+          interval = @interval,
+          product_key = @product_key,
+          status = @status,
+          current_period_start = @current_period_start,
+          current_period_end = @current_period_end,
+          cancel_at_period_end = @cancel_at_period_end,
+          canceled_at = @canceled_at,
+          grace_ends_at = @grace_ends_at,
+          pending_plan_key = @pending_plan_key,
+          pending_plan_effective_at = @pending_plan_effective_at,
+          last_provider_event_at = @last_provider_event_at,
+          updated_at = @updated_at
+      WHERE id = @id
+    `),
+    getBillingSubscriptionById: db.prepare(`
+      SELECT * FROM billing_subscriptions WHERE id = ?
+    `),
+    getBillingSubscriptionByProviderIds: db.prepare(`
+      SELECT * FROM billing_subscriptions
+      WHERE provider = ? AND provider_subscription_id = ?
+      LIMIT 1
+    `),
+    getLiveBillingSubscriptionByGuild: db.prepare(`
+      SELECT * FROM billing_subscriptions
+      WHERE guild_id = ?
+        AND status IN ('pending', 'active', 'past_due', 'grace')
+      ORDER BY id DESC
+      LIMIT 1
+    `),
+    listBillingSubscriptionsByGuild: db.prepare(`
+      SELECT * FROM billing_subscriptions
+      WHERE guild_id = ?
+      ORDER BY id ASC
+    `),
+    listLiveBillingSubscriptions: db.prepare(`
+      SELECT * FROM billing_subscriptions
+      WHERE status IN ('pending', 'active', 'past_due', 'grace')
+      ORDER BY id ASC
+    `),
+    claimBillingEvent: db.prepare(`
+      INSERT INTO billing_events (
+        provider, provider_event_id, event_type, provider_event_at,
+        guild_id, provider_subscription_id,
+        received_at, processed_at, processing_status,
+        payload_hash, error_code, retry_count, created_at
+      ) VALUES (
+        @provider, @provider_event_id, @event_type, @provider_event_at,
+        @guild_id, @provider_subscription_id,
+        @received_at, NULL, 'received',
+        @payload_hash, NULL, 0, @created_at
+      )
+    `),
+    getBillingEventByProviderIds: db.prepare(`
+      SELECT * FROM billing_events
+      WHERE provider = ? AND provider_event_id = ?
+      LIMIT 1
+    `),
+    getBillingEventById: db.prepare(`
+      SELECT * FROM billing_events WHERE id = ?
+    `),
+    markBillingEventProcessing: db.prepare(`
+      UPDATE billing_events
+      SET processing_status = 'processing'
+      WHERE id = ? AND processing_status IN ('received', 'failed')
+    `),
+    markBillingEventProcessed: db.prepare(`
+      UPDATE billing_events
+      SET processing_status = @processing_status,
+          processed_at = @processed_at,
+          error_code = NULL
+      WHERE id = @id
+    `),
+    markBillingEventFailed: db.prepare(`
+      UPDATE billing_events
+      SET processing_status = 'failed',
+          error_code = @error_code,
+          retry_count = retry_count + 1,
+          processed_at = @processed_at
+      WHERE id = @id
+    `),
+    insertBillingAudit: db.prepare(`
+      INSERT INTO billing_audit (
+        guild_id, subscription_id, event_id, action,
+        from_plan_key, to_plan_key, from_status, to_status,
+        detail_json, created_at
+      ) VALUES (
+        @guild_id, @subscription_id, @event_id, @action,
+        @from_plan_key, @to_plan_key, @from_status, @to_status,
+        @detail_json, @created_at
+      )
+    `),
+    listBillingAuditByGuild: db.prepare(`
+      SELECT * FROM billing_audit
+      WHERE guild_id = ?
+      ORDER BY id ASC
+    `),
+
+    // === Billing checkout intents (Phase 7B) ===
+    insertCheckoutIntent: db.prepare(`
+      INSERT INTO billing_checkout_intents (
+        id, guild_id, actor_user_id, internal_product_key, expected_price_id,
+        status, binding_hash, paddle_transaction_id, created_at, expires_at
+      ) VALUES (
+        @id, @guild_id, @actor_user_id, @internal_product_key, @expected_price_id,
+        @status, @binding_hash, @paddle_transaction_id, @created_at, @expires_at
+      )
+    `),
+    getCheckoutIntentById: db.prepare(`
+      SELECT * FROM billing_checkout_intents WHERE id = ?
+    `),
+    getActiveCheckoutIntentByGuild: db.prepare(`
+      SELECT * FROM billing_checkout_intents
+      WHERE guild_id = ? AND status = 'open' AND expires_at > ?
+      ORDER BY created_at DESC
+      LIMIT 1
+    `),
+    expireCheckoutIntent: db.prepare(`
+      UPDATE billing_checkout_intents
+      SET status = 'expired'
+      WHERE id = @id
+    `),
+    consumeCheckoutIntent: db.prepare(`
+      UPDATE billing_checkout_intents
+      SET status = 'consumed',
+          paddle_transaction_id = @paddle_transaction_id
+      WHERE id = @id AND status = 'open'
+    `),
+    upsertBillingAdjustment: db.prepare(`
+      INSERT INTO billing_adjustments (
+        provider, provider_adjustment_id, guild_id, provider_subscription_id,
+        action, status, effect_applied, last_event_id, created_at, updated_at
+      ) VALUES (
+        @provider, @provider_adjustment_id, @guild_id, @provider_subscription_id,
+        @action, @status, @effect_applied, @last_event_id, @created_at, @updated_at
+      )
+      ON CONFLICT(provider, provider_adjustment_id) DO UPDATE SET
+        status = excluded.status,
+        effect_applied = CASE
+          WHEN billing_adjustments.effect_applied = 1 THEN 1
+          ELSE excluded.effect_applied
+        END,
+        last_event_id = excluded.last_event_id,
+        updated_at = excluded.updated_at
+    `),
+    getBillingAdjustment: db.prepare(`
+      SELECT * FROM billing_adjustments
+      WHERE provider = ? AND provider_adjustment_id = ?
+      LIMIT 1
     `),
   };
 }

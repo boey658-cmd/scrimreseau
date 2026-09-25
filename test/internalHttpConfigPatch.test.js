@@ -248,17 +248,20 @@ describe('Web5B — parseConfigPatchBody', () => {
 });
 
 describe('Web5B — authz live', () => {
-  it('admin / ManageGuild / owner autorisés ; member 403', async () => {
+  it('admin / owner autorisés ; ManageGuild seul et member 403 (PATCH write)', async () => {
     await assertActorCanManageGuildConfig({
       client: /** @type {any} */ (makeMockClient({ member: makeMember({ admin: true }) })),
       guildId: GUILD_ID,
       actorDiscordUserId: ACTOR,
     });
-    await assertActorCanManageGuildConfig({
-      client: /** @type {any} */ (makeMockClient({ member: makeMember({ manageGuild: true }) })),
-      guildId: GUILD_ID,
-      actorDiscordUserId: ACTOR,
-    });
+    await assert.rejects(
+      () => assertActorCanManageGuildConfig({
+        client: /** @type {any} */ (makeMockClient({ member: makeMember({ manageGuild: true }) })),
+        guildId: GUILD_ID,
+        actorDiscordUserId: ACTOR,
+      }),
+      (err) => err instanceof ConfigWriteError && err.code === 'GUILD_NOT_MANAGEABLE',
+    );
     await assertActorCanManageGuildConfig({
       client: /** @type {any} */ (
         makeMockClient({ member: makeMember(), ownerId: ACTOR })
@@ -665,11 +668,17 @@ describe('Web5B — HTTP PATCH', () => {
       });
       assert.strictEqual(post.status, 405);
 
-      const getCfg = await httpRequest(port, `/internal/guilds/${GUILD_ID}/config`);
+      const getCfg = await httpRequest(
+        port,
+        `/internal/guilds/${GUILD_ID}/config?actor_discord_user_id=${ACTOR}`,
+      );
       assert.strictEqual(getCfg.status, 200);
       assert.ok('language' in getCfg.body);
 
-      const overview = await httpRequest(port, `/internal/guilds/${GUILD_ID}/overview`);
+      const overview = await httpRequest(
+        port,
+        `/internal/guilds/${GUILD_ID}/overview?actor_discord_user_id=${ACTOR}`,
+      );
       assert.strictEqual(overview.status, 200);
 
       const network = await httpRequest(port, '/internal/network/overview');

@@ -21,10 +21,12 @@ import {
   createInternalHttpServer,
   listenInternalHttpServer,
 } from '../src/internalHttp/server.js';
+import { makeAuthzClient, TEST_ACTOR_ID } from './helpers/internalHttpAuthzMock.js';
 
 const TEST_TOKEN = 'test-internal-token-web2b';
 const VALID_GUILD = '1484520688726311012';
 const OTHER_GUILD = '1436848619796828322';
+const ACTOR = TEST_ACTOR_ID;
 
 async function withTempDb(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scrim-internal-http-'));
@@ -252,11 +254,12 @@ describe('Web2B internal HTTP — HTTP surface', () => {
   it('bind 127.0.0.1 + overview 200 avec bon token', async () => {
     await withTempDb(async (db) => {
       insertScrimPost(db, { originGuildId: VALID_GUILD, status: 'active', publicId: 42 });
-      const mockClient = {
-        guilds: { cache: { has: (id) => id === VALID_GUILD } },
-      };
+      const mockClient = makeAuthzClient(VALID_GUILD, ACTOR);
       const port = await startTestServer(db, mockClient);
-      const res = await httpRequest(port, `/internal/guilds/${VALID_GUILD}/overview`);
+      const res = await httpRequest(
+        port,
+        `/internal/guilds/${VALID_GUILD}/overview?actor_discord_user_id=${ACTOR}`,
+      );
       assert.strictEqual(res.status, 200);
       assert.strictEqual(res.body.guild_id, VALID_GUILD);
       assert.strictEqual(res.body.bot_installed, true);

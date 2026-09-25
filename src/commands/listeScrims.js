@@ -14,6 +14,7 @@ import {
   runActiveScrimsListeQuery,
   runCountActiveScrimsListe,
 } from '../services/listeScrimsQuery.js';
+import { resolvePreferredScrimPostMessageLink } from '../services/scrimPostMessageLink.js';
 import { logger } from '../utils/logger.js';
 import { interactReply } from '../utils/interactionDiscord.js';
 import { getGuildLocale, t } from '../i18n/index.js';
@@ -124,7 +125,7 @@ export async function executeListeScrimsCore(interaction, ctx) {
     const dbId = Number(row.id);
     let messageUrl = null;
     if (Number.isFinite(dbId)) {
-      const linkRow = ctx.stmts.getScrimPostMessageForGuild.get(dbId, guildId);
+      const linkRow = resolvePreferredScrimPostMessageLink(ctx.stmts, dbId, guildId);
       if (
         linkRow &&
         typeof linkRow.channel_id === 'string' &&

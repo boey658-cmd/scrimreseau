@@ -1,29 +1,47 @@
 /**
  * Construction de la liste publique des partenaires réseau (page /network).
- * Logique pure, sans I/O — testable unitairement.
+ * Phase 5 : profil enrichi + badge + tri Premium featured.
  * Indépendante du dashboard Discord (rotation, PNG, config message).
  */
 
+import {
+  resolvePublicStructurePartner,
+  sortPublicNetworkPartners,
+  toPublicNetworkPartnerPayload,
+  getStructureProfileFeatureFlags,
+} from './structureProfileResolver.js';
+
 /**
- * @typedef {{ name: string, icon_url: string | null }} PublicNetworkPartner
+ * @typedef {{
+ *   name: string,
+ *   icon_url: string | null,
+ *   logo_url: string | null,
+ *   invite_url: string | null,
+ *   description: string | null,
+ *   website_url: string | null,
+ *   country_code: string | null,
+ *   languages: string[] | null,
+ *   socials: Array<{ provider: string, url: string }> | null,
+ *   premium_badge: boolean,
+ *   premium_featured: boolean,
+ * }} PublicNetworkPartner
  */
 
 /**
- * Filtre, résout et trie les partenaires visibles sur le site public.
- *
- * - Retire les guild_id exclus (network_public_exclusions)
- * - Retire les guilds absentes du cache Discord (resolveGuild → null)
- * - N’expose jamais guild_id
- *
- * @param {readonly string[]} partnerIds Liste ordonnée (ex. ORDER BY guild_id)
- * @param {ReadonlySet<string>} excludedIds Guilds masquées du site uniquement
- * @param {(guildId: string) => PublicNetworkPartner | null} resolveGuild
- *   Retourne null si la guild n’est pas dans le cache bot
- * @returns {{ partners: PublicNetworkPartner[], count: number }}
+ * @param {readonly string[]} partnerIds
+ * @param {ReadonlySet<string>} excludedIds
+ * @param {(guildId: string) => { name: string, icon_url: string | null } | null} resolveGuild
+ * @param {{
+ *   getInviteUrl?: (guildId: string) => string | null,
+ *   getStoredProfile?: (guildId: string) => import('./structureProfileResolver.js').StructureProfileFields | null,
+ *   getFlags?: (guildId: string) => ReturnType<typeof getStructureProfileFeatureFlags>,
+ *   nowMs?: number,
+ *   stmts?: any,
+ * }} [opts]
  */
-export function buildPublicNetworkPartners(partnerIds, excludedIds, resolveGuild) {
-  /** @type {PublicNetworkPartner[]} */
-  const partners = [];
+export function buildPublicNetworkPartners(partnerIds, excludedIds, resolveGuild, opts = {}) {
+  /** @type {Array<ReturnType<typeof resolvePublicStructurePartner>>} */
+  const resolved = [];
   const ids = Array.isArray(partnerIds) ? partnerIds : [];
   const excluded = excludedIds instanceof Set ? excludedIds : new Set();
 
@@ -34,20 +52,50 @@ export function buildPublicNetworkPartners(partnerIds, excludedIds, resolveGuild
     const info = resolveGuild(guildId);
     if (!info || typeof info !== 'object') continue;
 
-    const name = String(info.name ?? '').trim();
-    if (!name) continue;
+    const discordName = String(info.name ?? '').trim();
+    if (!discordName) continue;
 
     const iconRaw = info.icon_url;
-    const icon_url = iconRaw == null || iconRaw === ''
-      ? null
-      : String(iconRaw);
+    const discordIconUrl =
+      iconRaw == null || iconRaw === '' ? null : String(iconRaw);
 
-    partners.push({ name, icon_url });
+    const inviteUrl =
+      typeof opts.getInviteUrl === 'function' ? opts.getInviteUrl(guildId) : null;
+    const stored =
+      typeof opts.getStoredProfile === 'function'
+        ? opts.getStoredProfile(guildId)
+        : null;
+    let flags;
+    try {
+      flags =
+        typeof opts.getFlags === 'function'
+          ? opts.getFlags(guildId)
+          : getStructureProfileFeatureFlags(guildId, {
+              nowMs: opts.nowMs,
+              stmts: opts.stmts,
+            });
+    } catch {
+      flags = {
+        enriched_profile: false,
+        premium_badge: false,
+        directory_featured: false,
+      };
+    }
+
+    resolved.push(
+      resolvePublicStructurePartner({
+        guildId,
+        discordName,
+        discordIconUrl,
+        inviteUrl,
+        stored,
+        flags,
+      }),
+    );
   }
 
-  partners.sort((a, b) =>
-    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
-  );
+  const sorted = sortPublicNetworkPartners(resolved);
+  const partners = sorted.map(toPublicNetworkPartnerPayload);
 
   return {
     partners,

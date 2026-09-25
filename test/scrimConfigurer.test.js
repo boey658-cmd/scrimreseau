@@ -196,7 +196,8 @@ describe(`scrimConfigurer — clé de session multi-serveur`, () => {
       insertFullConfig(guildA, stmts, db);
       insertFullConfig(guildB, stmts, db);
 
-      // Modifier guildA ne touche pas guildB
+      // Modifier guildA ne touche pas guildB (remplacement FREE = delete + upsert)
+      stmts.deleteGuildChannelsByGuildGame.run(guildA, GAME_KEY);
       stmts.upsertGuildChannel.run({ guild_id: guildA, channel_id: `new-chan-A`, game_key: GAME_KEY, created_at: Date.now() });
 
       const configA = readFullConfig(guildA, stmts);
@@ -236,7 +237,8 @@ describe(`scrimConfigurer — modifications isolées`, () => {
       const guildId = `guild-iso-ann`;
       insertFullConfig(guildId, stmts, db);
 
-      // Action : modifier le salon des annonces
+      // Action : modifier le salon des annonces (remplacement FREE)
+      stmts.deleteGuildChannelsByGuildGame.run(guildId, GAME_KEY);
       stmts.upsertGuildChannel.run({ guild_id: guildId, channel_id: `chan-nouveau`, game_key: GAME_KEY, created_at: Date.now() });
 
       const config = readFullConfig(guildId, stmts);

@@ -163,6 +163,15 @@ describe('buildPublicNetworkPartners — pure', () => {
     assert.deepStrictEqual(out.partners[0], {
       name: 'ACKU',
       icon_url: 'https://cdn.example/a.png',
+      logo_url: null,
+      invite_url: null,
+      description: null,
+      website_url: null,
+      country_code: null,
+      languages: null,
+      socials: null,
+      premium_badge: false,
+      premium_featured: false,
     });
     assert.ok(!('guild_id' in out.partners[0]));
   });

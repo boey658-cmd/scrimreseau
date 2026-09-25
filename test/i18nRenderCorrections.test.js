@@ -371,16 +371,13 @@ describe('/scrim-moderation user description (test 22)', () => {
 describe('/structure-link set/remove descriptions (test 23)', () => {
   const strLink = commandListWithoutDev.find((c) => c.data.name === 'structure-link');
 
-  it('set description exacte', () => {
+  it('commande redirect : description EN dashboard, sans sous-commandes', () => {
     const json = strLink.data.toJSON();
-    const setSub = json.options?.find((o) => o.name === 'set');
-    assert.equal(setSub?.description, 'Set the Discord invite link associated with your structure.');
-  });
-
-  it('remove description exacte', () => {
-    const json = strLink.data.toJSON();
-    const remSub = json.options?.find((o) => o.name === 'remove');
-    assert.equal(remSub?.description, 'Remove the Discord invite link associated with your structure.');
+    assert.equal(
+      json.description,
+      'Open the ScrimRéseau dashboard to manage the structure Discord link.',
+    );
+    assert.ok(!json.options?.length);
   });
 });
 

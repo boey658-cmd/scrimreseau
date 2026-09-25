@@ -20,12 +20,14 @@ import {
   createInternalHttpServer,
   listenInternalHttpServer,
 } from '../src/internalHttp/server.js';
+import { makeAuthzClient, TEST_ACTOR_ID } from './helpers/internalHttpAuthzMock.js';
 
 const TEST_TOKEN = 'test-internal-token-install-status';
 const GUILD_A = '1484520688726311012';
 const GUILD_B = '1436848619796828322';
 const GUILD_C = '1070686329991602240';
 const PATH = '/internal/guilds/installation-status';
+const ACTOR = TEST_ACTOR_ID;
 
 async function withTempDb(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scrim-install-status-'));
@@ -315,7 +317,7 @@ describe('installation-status — HTTP', () => {
 
   it('régression : GET overview/config/network + PATCH config restent OK', async () => {
     await withTempDb(async (db, stmts) => {
-      const client = makeClient([GUILD_A]);
+      const client = makeAuthzClient(GUILD_A, ACTOR);
       // DB réelle pour les GET/PATCH config (pas le guard)
       const port = await startTestServer(db, /** @type {any} */ (client));
 
@@ -324,7 +326,7 @@ describe('installation-status — HTTP', () => {
           {
             hostname: '127.0.0.1',
             port,
-            path: `/internal/guilds/${GUILD_A}/overview`,
+            path: `/internal/guilds/${GUILD_A}/overview?actor_discord_user_id=${ACTOR}`,
             method: 'GET',
             headers: { Authorization: `Bearer ${TEST_TOKEN}` },
           },
@@ -350,7 +352,7 @@ describe('installation-status — HTTP', () => {
           {
             hostname: '127.0.0.1',
             port,
-            path: `/internal/guilds/${GUILD_A}/config`,
+            path: `/internal/guilds/${GUILD_A}/config?actor_discord_user_id=${ACTOR}`,
             method: 'GET',
             headers: { Authorization: `Bearer ${TEST_TOKEN}` },
           },

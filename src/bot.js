@@ -16,6 +16,10 @@ import { startPlayerSearchExpirationJob } from './jobs/playerSearchExpirationJob
 import { startScrimExpirationJob } from './services/scrimExpirationJob.js';
 import { startScrimRepostJob } from './services/scrimRepostJob.js';
 import {
+  bindEntitlementStore,
+  startEntitlementExpirationJob,
+} from './services/entitlements/index.js';
+import {
   scheduleNetworkDashboardUpdate,
   startDashboardRefreshJob,
   updateNetworkDashboard,
@@ -65,6 +69,8 @@ export async function startBot() {
       }
     });
     startDiscordTaskQueue();
+    bindEntitlementStore(stmts);
+    startEntitlementExpirationJob(readyClient, db, stmts);
     startScrimExpirationJob(readyClient, db, stmts);
     startScrimRepostJob(readyClient, db, stmts);
     startPlayerSearchExpirationJob(readyClient, db, playerSearchStmts);

@@ -8,10 +8,12 @@ import { stopScrimLifecycleDispatcher } from './src/services/scrimLifecycleDispa
 import { stopDiscordTaskQueue } from './src/services/discordTaskQueue.js';
 import { stopPlayerSearchExpirationJob } from './src/jobs/playerSearchExpirationJob.js';
 import { stopScrimExpirationJob } from './src/services/scrimExpirationJob.js';
+import { stopEntitlementExpirationJob } from './src/services/entitlements/index.js';
 import { stopScrimRepostJob } from './src/services/scrimRepostJob.js';
 import { stopDashboardRefreshJob } from './src/services/networkDashboard.js';
 import { stopScrimBroadcastDeliveryJob } from './src/services/scrimBroadcastDeliveryJob.js';
 import { createGracefulShutdown } from './src/services/shutdownOrchestrator.js';
+import { teardownFailedStartup } from './src/services/startupFailureTeardown.js';
 import { logger } from './src/utils/logger.js';
 import { recordUncaughtException, recordUnhandledRejection } from './src/utils/processHealth.js';
 
@@ -84,6 +86,7 @@ const gracefulShutdown = createGracefulShutdown({
           stopScrimRepostJob(),
           stopPlayerSearchExpirationJob(),
           stopScrimExpirationJob(),
+          stopEntitlementExpirationJob(),
         ]);
       },
     },
@@ -168,15 +171,23 @@ try {
   } catch {
     /* ignore */
   }
-  try {
-    await stopInternalHttpServer();
-  } catch {
-    /* ignore */
-  }
-  try {
-    closeDb();
-  } catch {
-    /* closeDb est déjà défensif */
-  }
-  process.exitCode = 1;
+  const failedClient = clientRef;
+  clientRef = null;
+  await teardownFailedStartup({
+    client: failedClient,
+    stopJobs: [
+      () => stopScrimBroadcastDeliveryJob(),
+      () => stopDashboardRefreshJob(),
+      () => stopDailyDevReportJob(),
+      () => stopScrimRepostJob(),
+      () => stopPlayerSearchExpirationJob(),
+      () => stopScrimExpirationJob(),
+      () => stopEntitlementExpirationJob(),
+      () => stopDiscordEditRetryJob(),
+      () => stopScrimLifecycleDispatcher(),
+      () => stopDiscordTaskQueue(),
+    ],
+    stopHttp: () => stopInternalHttpServer(),
+    closeDb,
+  });
 }

@@ -2,6 +2,8 @@ import { getGame } from '../config/games.js';
 import { logger } from '../utils/logger.js';
 import { enqueueDiscordTask } from './discordTaskQueue.js';
 import { deliverScrimToDestination } from './scrimDelivery.js';
+import { getDb } from '../database/db.js';
+import { getEmbedStylesBatch } from './embedCustomizationResolver.js';
 
 const BROADCAST_DELAY_MS = 75;
 
@@ -53,6 +55,10 @@ export async function broadcastScrimRequest(args) {
   const _game = getGame(payload.gameKey);
 
   let successCount = 0;
+  const styleBatch = getEmbedStylesBatch(
+    getDb(),
+    rows.map((r) => String(r.guild_id)),
+  );
 
   for (let i = 0; i < rows.length; i += 1) {
     const row = rows[i];
@@ -64,6 +70,7 @@ export async function broadcastScrimRequest(args) {
         authorUserId,
         payload,
         delayMs: i > 0 ? BROADCAST_DELAY_MS : 0,
+        styleBatch,
       });
 
       if (result.outcome !== 'sent') {

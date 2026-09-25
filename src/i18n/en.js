@@ -94,6 +94,9 @@ export const en = {
   'structureLink.removeNotFound': 'ℹ️ No Discord link was configured for this structure.',
   'structureLink.dbErrorSet': '❌ An error occurred while saving. Please try again later.',
   'structureLink.dbErrorRemove': '❌ An error occurred while removing. Please try again later.',
+  'structureLink.redirectTitle': '⚙️ ScrimRéseau Configuration',
+  'structureLink.redirectDescription': 'Your server configuration is managed from the ScrimRéseau dashboard.\nYou can manage your channels, permissions, language and server settings there.\nOnly server administrators can modify the configuration.',
+  'structureLink.redirectButton': 'Open dashboard',
 
   // ── /scrim-config panel ───────────────────────────────────────────────
   'scrimConfig.adminOnly': '❌ You must be an administrator to use this command.',
@@ -104,6 +107,9 @@ export const en = {
   'scrimConfig.panelExpired': '⏰ The panel has expired.',
   'scrimConfig.noPermissions': '❌ You no longer have the necessary permissions.',
   'scrimConfig.genericError': '❌ An error occurred.',
+  'scrimConfig.redirectTitle': '⚙️ ScrimRéseau Configuration',
+  'scrimConfig.redirectDescription': 'Your server configuration is managed from the ScrimRéseau dashboard.\nYou can manage your channels, permissions, language and server settings there.\nOnly server administrators can modify the configuration.',
+  'scrimConfig.redirectButton': 'Open dashboard',
   // Main embed
   'scrimConfig.mainTitle': '⚙️ ScrimRéseau Configuration',
   'scrimConfig.mainDescription': 'Use the buttons to modify this server\'s configuration.',
@@ -200,7 +206,7 @@ export const en = {
   'helpAdmin.title': '🛠️ ScrimRéseau — Admin Help',
   'helpAdmin.description': 'Configuration and moderation of the scrim network for your server.',
   'helpAdmin.scrimConfigTitle': '⚙️ /scrim-config',
-  'helpAdmin.scrimConfigValue': 'Opens the interactive ScrimRéseau configuration panel.\n\n**📢 Channels** — announcement channel (scrim broadcast) and command channel (`/find-scrim`).\n\n**🔑 Permissions** — roles allowed to use `/find-scrim`, or everyone.\n\n**💬 Messages** — behavior for closed or replaced scrim messages (keep / delete).\n\n**🔄 Reset** — resets a setting or the entire configuration (confirmation required).\n\nThe panel is ephemeral, interactive, and expires after 10 minutes.',
+  'helpAdmin.scrimConfigValue': 'Redirects you to the ScrimRéseau dashboard to manage this server\'s configuration (channels, permissions, language, settings).\n\nOnly server administrators can modify the configuration.\n\nLanguage can also be changed with `/language` on Discord.',
   'helpAdmin.moderationTitle': '🛡️ /scrim-moderation',
   'helpAdmin.moderationValue': 'Local scrim moderation:\n\n**• user → block**\nPrevents that user\'s scrim announcements from being broadcast on this server.\n\n**• user → unblock**\nAllows that user\'s scrim announcements to be broadcast again on this server.',
   'helpAdmin.reportSpamTitle': '🚨 /report-spam',

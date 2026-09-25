@@ -526,7 +526,10 @@ describe('Web5F — SQLITE_BUSY', () => {
 
         stmts.upsertGuildLanguage.run = orig;
 
-        const get = await httpRequest(port, `/internal/guilds/${GUILD_ID}/config`);
+        const get = await httpRequest(
+          port,
+          `/internal/guilds/${GUILD_ID}/config?actor_discord_user_id=${ACTOR}`,
+        );
         assert.strictEqual(get.status, 200);
         assert.strictEqual(get.body.guild_id, GUILD_ID);
       } finally {
@@ -592,17 +595,20 @@ describe('Web5F — authz live stale / owner / absent', () => {
     });
   });
 
-  it('B/C/D: owner sans bits, ManageGuild, Administrator autorisés', async () => {
+  it('B/D: owner sans bits, Administrator autorisés ; C: ManageGuild seul refusé (PATCH)', async () => {
     await assertActorCanManageGuildConfig({
       client: /** @type {any} */ (makeMockClient({ member: makeMember(), ownerId: ACTOR })),
       guildId: GUILD_ID,
       actorDiscordUserId: ACTOR,
     });
-    await assertActorCanManageGuildConfig({
-      client: /** @type {any} */ (makeMockClient({ member: makeMember({ manageGuild: true }) })),
-      guildId: GUILD_ID,
-      actorDiscordUserId: ACTOR,
-    });
+    await assert.rejects(
+      () => assertActorCanManageGuildConfig({
+        client: /** @type {any} */ (makeMockClient({ member: makeMember({ manageGuild: true }) })),
+        guildId: GUILD_ID,
+        actorDiscordUserId: ACTOR,
+      }),
+      (err) => err instanceof ConfigWriteError && err.code === 'GUILD_NOT_MANAGEABLE',
+    );
     await assertActorCanManageGuildConfig({
       client: /** @type {any} */ (makeMockClient({ member: makeMember({ admin: true }) })),
       guildId: GUILD_ID,
@@ -1077,18 +1083,19 @@ describe('Web5F — request body / method / bearer / response / survival', () =>
     await withTempDb(async (db, stmts) => {
       const client = makeMockClient();
       const port = await startTestServer(db, client, stmts);
-      const pathCfg = `/internal/guilds/${GUILD_ID}/config`;
+      const pathCfg = `/internal/guilds/${GUILD_ID}/config?actor_discord_user_id=${ACTOR}`;
+      const pathCfgNoQs = `/internal/guilds/${GUILD_ID}/config`;
 
       assert.strictEqual((await httpRequest(port, pathCfg)).status, 200);
 
-      const patch = await httpRequest(port, pathCfg, {
+      const patch = await httpRequest(port, pathCfgNoQs, {
         method: 'PATCH',
         body: basePatch('language', { language: 'en' }),
       });
       assert.strictEqual(patch.status, 200);
 
       for (const method of ['POST', 'PUT', 'DELETE']) {
-        const res = await httpRequest(port, pathCfg, {
+        const res = await httpRequest(port, pathCfgNoQs, {
           method,
           body: basePatch('language', { language: 'fr' }),
         });
@@ -1134,6 +1141,7 @@ describe('Web5F — request body / method / bearer / response / survival', () =>
       });
       const port = await startTestServer(db, client, stmts);
       const pathCfg = `/internal/guilds/${GUILD_ID}/config`;
+      const pathCfgGet = `${pathCfg}?actor_discord_user_id=${ACTOR}`;
 
       // série d'erreurs volontaires
       await httpRequest(port, pathCfg, { method: 'PATCH', token: null, body: { a: 1 } });
@@ -1150,7 +1158,7 @@ describe('Web5F — request body / method / bearer / response / survival', () =>
         body: basePatch('reception_channel', { channel_id: CHANNEL_ID }),
       });
 
-      const getBefore = await httpRequest(port, pathCfg);
+      const getBefore = await httpRequest(port, pathCfgGet);
       assert.strictEqual(getBefore.status, 200);
 
       const patch = await httpRequest(port, pathCfg, {
@@ -1165,7 +1173,7 @@ describe('Web5F — request body / method / bearer / response / survival', () =>
       assert.ok(!('noop' in patch.body));
       assert.ok(!('section' in patch.body));
 
-      const getAfter = await httpRequest(port, pathCfg);
+      const getAfter = await httpRequest(port, pathCfgGet);
       assert.strictEqual(getAfter.status, 200);
       assert.deepStrictEqual(patch.body, getAfter.body);
       assert.deepStrictEqual(patch.body, fetchGuildConfig(db, GUILD_ID));

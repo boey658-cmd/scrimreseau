@@ -95,6 +95,9 @@ export const fr = {
   'structureLink.removeNotFound': 'ℹ️ Aucun lien Discord n\'était configuré pour cette structure.',
   'structureLink.dbErrorSet': '❌ Une erreur est survenue lors de l\'enregistrement. Réessayez plus tard.',
   'structureLink.dbErrorRemove': '❌ Une erreur est survenue lors de la suppression. Réessayez plus tard.',
+  'structureLink.redirectTitle': '⚙️ Configuration ScrimRéseau',
+  'structureLink.redirectDescription': 'La configuration de votre serveur est gérée depuis le dashboard ScrimRéseau.\nVous pouvez y gérer vos salons, permissions, langue et paramètres du serveur.\nSeuls les administrateurs du serveur peuvent modifier la configuration.',
+  'structureLink.redirectButton': 'Ouvrir le dashboard',
 
   // ── /scrim-config panel ───────────────────────────────────────────────
   'scrimConfig.adminOnly': '❌ Tu dois être administrateur pour utiliser cette commande.',
@@ -105,6 +108,10 @@ export const fr = {
   'scrimConfig.panelExpired': '⏰ Le panneau a expiré.',
   'scrimConfig.noPermissions': '❌ Tu n\'as plus les permissions nécessaires.',
   'scrimConfig.genericError': '❌ Une erreur est survenue.',
+  // Redirect dashboard (Phase 0.5)
+  'scrimConfig.redirectTitle': '⚙️ Configuration ScrimRéseau',
+  'scrimConfig.redirectDescription': 'La configuration de votre serveur est gérée depuis le dashboard ScrimRéseau.\nVous pouvez y gérer vos salons, permissions, langue et paramètres du serveur.\nSeuls les administrateurs du serveur peuvent modifier la configuration.',
+  'scrimConfig.redirectButton': 'Ouvrir le dashboard',
   // Main embed
   'scrimConfig.mainTitle': '⚙️ Configuration ScrimRéseau',
   'scrimConfig.mainDescription': 'Utilisez les boutons pour modifier la configuration de ce serveur.',
@@ -201,7 +208,7 @@ export const fr = {
   'helpAdmin.title': '🛠️ ScrimRéseau — Aide Admin',
   'helpAdmin.description': 'Configuration et modération du réseau de scrims pour ton serveur.',
   'helpAdmin.scrimConfigTitle': '⚙️ /scrim-config',
-  'helpAdmin.scrimConfigValue': 'Ouvre le panneau de configuration interactif ScrimRéseau.\n\n**📢 Salons** — salon des annonces (diffusion scrims) et salon des commandes (`/find-scrim`).\n\n**🔑 Permissions** — rôles autorisés à utiliser `/find-scrim`, ou tout le monde.\n\n**💬 Messages** — comportement des messages de scrims terminés ou remplacés (garder / supprimer).\n\n**🔄 Réinitialiser** — réinitialise un paramètre ou toute la configuration (confirmation requise).\n\nLe panneau est éphémère, interactif, et expire après 10 minutes.',
+  'helpAdmin.scrimConfigValue': 'Te redirige vers le dashboard ScrimRéseau pour gérer la configuration de ce serveur (salons, permissions, langue, paramètres).\n\nSeuls les administrateurs du serveur peuvent modifier la configuration.\n\nLa langue peut aussi être changée avec `/language` sur Discord.',
   'helpAdmin.moderationTitle': '🛡️ /scrim-moderation',
   'helpAdmin.moderationValue': 'Modération locale des scrims :\n\n**• user → bloquer**\nEmpêche un utilisateur d\'utiliser les scrims sur ce serveur.\n\n**• user → débloquer**\nRéautorise un utilisateur.',
   'helpAdmin.reportSpamTitle': '🚨 /report-spam',

@@ -7,6 +7,7 @@ import { isPersistentBroadcastEnabled } from '../utils/persistentBroadcastFlag.j
 import {
   allocateScrimPublicId,
 } from '../services/scrimLifecycle.js';
+import { listActiveReceptionDestinationsForGame } from '../services/receptionChannels.js';
 import {
   checkScrimChannel,
   checkScrimPermissions,
@@ -466,7 +467,9 @@ export const rechercheScrim = {
       return;
     }
 
-    const rows = ctx.stmts.listChannelsByGame.all(gameKey);
+    const rows = listActiveReceptionDestinationsForGame(ctx.stmts, gameKey, {
+      scrimRankKey: rankRes.value,
+    });
     if (!rows.length) {
       logger.info('recherche-scrim — aucune cible', {
         game_key: gameKey,

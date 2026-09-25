@@ -28,6 +28,8 @@ import {
 } from '../i18n/slashLocalizations.js';
 import { interactReply } from '../utils/interactionDiscord.js';
 import { logger } from '../utils/logger.js';
+import { getDb } from '../database/db.js';
+import { applyGuildConfigSectionWrite } from '../services/guildConfigWrites.js';
 
 const meta = slashMeta.language;
 
@@ -94,9 +96,19 @@ export const language = {
     }
     const newLocale = normalizeEnabledGuildLocale(rawLang);
 
-    // ── Sauvegarde ───────────────────────────────────────────────────────
+    // ── Sauvegarde (couche métier unique) ───────────────────────────────
     try {
-      ctx.stmts.upsertGuildLanguage.run(guildId, newLocale);
+      await applyGuildConfigSectionWrite(
+        {
+          client: interaction.client,
+          guild: interaction.guild,
+          db: ctx.db ?? getDb(),
+          stmts: ctx.stmts,
+          guildId,
+          actorDiscordUserId: interaction.user.id,
+        },
+        { section: 'language', language: newLocale },
+      );
     } catch (err) {
       logger.error('/language — erreur DB', {
         guild_id: guildId,

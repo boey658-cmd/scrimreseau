@@ -10,6 +10,8 @@ import { classifyDiscordEditError } from './discordRetryPolicy.js';
 import { getGuildLocale } from '../i18n/index.js';
 import { isPersistentBroadcastEnabled } from '../utils/persistentBroadcastFlag.js';
 import { isScrimReseauPublicGuildId } from '../utils/scrimPublicGuildGate.js';
+import { getDb } from '../database/db.js';
+import { resolveDestinationEmbedOptions } from './embedCustomizationResolver.js';
 import { invalidateIncompatibleEditRetriesForScrimPost } from './scrimLifecycleEditCoalescing.js';
 import { isScrimLifecycleTargetStatusCurrent } from './scrimLifecycleTargetStatus.js';
 import {
@@ -143,11 +145,26 @@ function resolveGuildLocale(stmts, guildId) {
 /**
  * Options d’embed pour close/supersede selon la destination.
  * Officiel : pas de contact embed (content hors embed à clear via content:null).
+ * Style local Premium (couleur/emote) via resolver — style ACTUEL au moment de l’edit.
  * @param {string} guildId
- * @returns {{ includeContactInEmbed: boolean }}
+ * @param {ScrimLifecycleEventType} eventType
+ * @returns {{ includeContactInEmbed: boolean, color?: number | null, emojiPrefix?: string | null }}
  */
-function closedEmbedContactOptionsForGuild(guildId) {
-  return { includeContactInEmbed: !isScrimReseauPublicGuildId(guildId) };
+function closedEmbedOptionsForGuild(guildId, eventType) {
+  try {
+    const dest = resolveDestinationEmbedOptions({
+      db: getDb(),
+      guildId,
+      status: eventType,
+    });
+    return {
+      includeContactInEmbed: dest.includeContactInEmbed,
+      color: dest.colorInt,
+      emojiPrefix: dest.emojiPrefix,
+    };
+  } catch {
+    return { includeContactInEmbed: !isScrimReseauPublicGuildId(guildId) };
+  }
 }
 
 /**
@@ -159,15 +176,15 @@ function closedEmbedContactOptionsForGuild(guildId) {
  */
 function buildOrchestratedEditPayloadJson(stmts, dbRow, eventType, messageRow) {
   const locale = resolveGuildLocale(stmts, messageRow.guild_id);
-  const contactOpts = closedEmbedContactOptionsForGuild(messageRow.guild_id);
+  const styleOpts = closedEmbedOptionsForGuild(messageRow.guild_id, eventType);
   const editOptions =
     eventType === 'superseded_repost'
-      ? buildScrimSupersededMessageEditOptions(dbRow, locale, contactOpts)
+      ? buildScrimSupersededMessageEditOptions(dbRow, locale, styleOpts)
       : buildScrimClosedMessageEditOptions(
           /** @type {'closed_manual' | 'closed_expired'} */ (eventType),
           dbRow,
           locale,
-          contactOpts,
+          styleOpts,
         );
   return serializeScrimEditPayload(editOptions);
 }
@@ -819,7 +836,10 @@ export async function executeOrchestratedLifecycleOperation(client, stmts, opRow
           /** @type {'closed_manual' | 'closed_expired'} */ (opRow.target_status),
           dbRow,
           locale,
-          closedEmbedContactOptionsForGuild(guildId),
+          closedEmbedOptionsForGuild(
+            guildId,
+            /** @type {ScrimLifecycleEventType} */ (opRow.target_status),
+          ),
         ),
       );
       ensureCloseFallbackEditOperation(stmts, {
@@ -858,7 +878,10 @@ export async function executeOrchestratedLifecycleOperation(client, stmts, opRow
   } else {
     const dbRow = stmts.getScrimPostById.get(scrimPostDbId);
     const locale = resolveGuildLocale(stmts, guildId);
-    const contactOpts = closedEmbedContactOptionsForGuild(guildId);
+    const contactOpts = closedEmbedOptionsForGuild(
+      guildId,
+      /** @type {ScrimLifecycleEventType} */ (opRow.target_status),
+    );
     editOptions =
       opRow.target_status === 'superseded_repost'
         ? buildScrimSupersededMessageEditOptions(dbRow, locale, contactOpts)

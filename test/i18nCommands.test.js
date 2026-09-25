@@ -226,8 +226,8 @@ describe('/structure-link', () => {
     const subNames = (json?.options ?? [])
       .filter((o) => o.type === 1)
       .map((o) => o.name);
-    assert.ok(subNames.includes('set'), 'Sous-commande set manquante dans /structure-link');
-    assert.ok(subNames.includes('remove'), 'Sous-commande remove manquante dans /structure-link');
+    // Phase 0.5 : redirect dashboard — plus de sous-commandes write
+    assert.deepEqual(subNames, [], 'structure-link ne doit plus avoir de sous-commandes set/remove');
   });
 });
 
@@ -368,11 +368,11 @@ describe('descriptions des commandes — anglais uniquement (test 16-20)', () =>
       'list-scrims': 'List active scrim searches.',
       'my-scrims': 'Show your active scrim searches.',
       'find-scrim': 'Broadcast a scrim search on the ScrimRéseau network.',
-      'scrim-config': 'Configure ScrimRéseau for this server.',
+      'scrim-config': 'Open the ScrimRéseau dashboard to configure this server.',
       'scrim-moderation': 'Manage blocked scrim users for this server.',
       'scrim-close': 'Close one of your active scrim searches.',
       'report-spam': 'Report a user for excessive scrim search spam.',
-      'structure-link': 'Manage the Discord link associated with a structure.',
+      'structure-link': 'Open the ScrimRéseau dashboard to manage the structure Discord link.',
       'language': 'Set the ScrimRéseau language for this server.',
     };
     for (const [name, expected] of Object.entries(expectedDescriptions)) {

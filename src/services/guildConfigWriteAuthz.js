@@ -1,6 +1,14 @@
 /**
- * Authz write live Discord pour PATCH config interne (Web5B).
- * Ne fait jamais confiance à un flag admin client.
+ * Authz live Discord pour HTTP interne config (GET / PATCH).
+ *
+ * Trust boundary BFF :
+ * - Bearer = machine-to-machine
+ * - actor_discord_user_id = identité Discord authentifiée par le BFF
+ * - Jamais de confiance au frontend pour roles / plan / guild_id seul
+ *
+ * Phase 0.5 :
+ * - GET (lecture) : owner ∪ Administrator ∪ ManageGuild
+ * - PATCH / writes dashboard : Administrator uniquement (owner Discord inclus via bits)
  */
 
 import { PermissionFlagsBits } from 'discord.js';
@@ -69,16 +77,14 @@ function isTimeoutOrNetworkError(err) {
 }
 
 /**
- * Vérifie que l'acteur peut gérer la config du guild (live Discord).
- *
  * @param {{
  *   client: import('discord.js').Client,
  *   guildId: string,
  *   actorDiscordUserId: string,
  * }} p
- * @returns {Promise<import('discord.js').Guild>}
+ * @returns {Promise<{ guild: import('discord.js').Guild, member: import('discord.js').GuildMember }>}
  */
-export async function assertActorCanManageGuildConfig(p) {
+async function fetchGuildAndMember(p) {
   const { client, guildId, actorDiscordUserId } = p;
 
   if (!client?.guilds) {
@@ -123,17 +129,62 @@ export async function assertActorCanManageGuildConfig(p) {
     throw new ConfigWriteError(403, 'GUILD_NOT_MANAGEABLE');
   }
 
-  const isOwner = guild.ownerId === actorDiscordUserId;
+  return { guild, member };
+}
+
+/**
+ * Lecture config / overview (GET) — ManageGuild ∪ Administrator ∪ owner.
+ *
+ * @param {{
+ *   client: import('discord.js').Client,
+ *   guildId: string,
+ *   actorDiscordUserId: string,
+ * }} p
+ * @returns {Promise<import('discord.js').Guild>}
+ */
+export async function assertActorCanReadGuildConfig(p) {
+  const { guild, member } = await fetchGuildAndMember(p);
+  const isOwner = guild.ownerId === p.actorDiscordUserId;
   const perms = member.permissions;
-  const canManage = Boolean(
+  const canRead = Boolean(
     isOwner
     || perms?.has(PermissionFlagsBits.Administrator)
     || perms?.has(PermissionFlagsBits.ManageGuild),
   );
-
-  if (!canManage) {
+  if (!canRead) {
     throw new ConfigWriteError(403, 'GUILD_NOT_MANAGEABLE');
   }
-
   return guild;
+}
+
+/**
+ * Écriture config dashboard (PATCH) — Administrator uniquement.
+ * (Le propriétaire Discord dispose typiquement de tous les bits via Discord.js.)
+ *
+ * @param {{
+ *   client: import('discord.js').Client,
+ *   guildId: string,
+ *   actorDiscordUserId: string,
+ * }} p
+ * @returns {Promise<import('discord.js').Guild>}
+ */
+export async function assertActorCanWriteGuildConfig(p) {
+  const { guild, member } = await fetchGuildAndMember(p);
+  const isOwner = guild.ownerId === p.actorDiscordUserId;
+  const perms = member.permissions;
+  const canWrite = Boolean(
+    isOwner || perms?.has(PermissionFlagsBits.Administrator),
+  );
+  if (!canWrite) {
+    throw new ConfigWriteError(403, 'GUILD_NOT_MANAGEABLE');
+  }
+  return guild;
+}
+
+/**
+ * @deprecated Prefer assertActorCanWriteGuildConfig (PATCH) or assertActorCanReadGuildConfig (GET).
+ * Alias write (Phase 0.5) pour compat imports existants.
+ */
+export async function assertActorCanManageGuildConfig(p) {
+  return assertActorCanWriteGuildConfig(p);
 }

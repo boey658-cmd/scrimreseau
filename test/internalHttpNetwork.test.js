@@ -15,10 +15,12 @@ import {
   createInternalHttpServer,
   listenInternalHttpServer,
 } from '../src/internalHttp/server.js';
+import { makeAuthzClient, TEST_ACTOR_ID } from './helpers/internalHttpAuthzMock.js';
 
 const TEST_TOKEN = 'test-internal-token-web4b';
 const GUILD_A = '1484520688726311012';
 const GUILD_B = '1436848619796828322';
+const ACTOR = TEST_ACTOR_ID;
 
 async function withTempDb(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scrim-internal-network-'));
@@ -81,11 +83,11 @@ let testServer = null;
 /** @type {{ stopAccepting?: () => void } | null} */
 let testListener = null;
 
-async function startTestServer(db, port = 0) {
+async function startTestServer(db, port = 0, client = null) {
   const config = { enabled: true, port, token: TEST_TOKEN };
   const { server, listener, host } = createInternalHttpServer({
     db,
-    client: null,
+    client,
     config,
     port,
   });
@@ -288,12 +290,19 @@ describe('Web4B network overview — HTTP', () => {
 
   it('routes guild overview/config continuent de fonctionner', async () => {
     await withTempDb(async (db) => {
-      const port = await startTestServer(db);
-      const overview = await httpRequest(port, `/internal/guilds/${GUILD_A}/overview`);
+      const client = makeAuthzClient(GUILD_A, ACTOR);
+      const port = await startTestServer(db, 0, client);
+      const overview = await httpRequest(
+        port,
+        `/internal/guilds/${GUILD_A}/overview?actor_discord_user_id=${ACTOR}`,
+      );
       assert.strictEqual(overview.status, 200);
       assert.ok('published_count' in overview.body);
 
-      const config = await httpRequest(port, `/internal/guilds/${GUILD_A}/config`);
+      const config = await httpRequest(
+        port,
+        `/internal/guilds/${GUILD_A}/config?actor_discord_user_id=${ACTOR}`,
+      );
       assert.strictEqual(config.status, 200);
       assert.ok('language' in config.body);
     });

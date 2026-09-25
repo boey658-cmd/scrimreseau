@@ -4,7 +4,7 @@
 
 import { prepareStatements } from '../database/db.js';
 import { ConfigWriteError, isConfigWriteError } from '../services/configWriteError.js';
-import { assertActorCanManageGuildConfig } from '../services/guildConfigWriteAuthz.js';
+import { assertActorCanWriteGuildConfig } from '../services/guildConfigWriteAuthz.js';
 import { applyGuildConfigSectionWrite } from '../services/guildConfigWrites.js';
 import { isSqliteBusyError } from './overviewQueries.js';
 import { parseGuildIdParam, GUILD_ID_PATTERN } from './guildId.js';
@@ -15,20 +15,53 @@ export const CONFIG_PATCH_MAX_BODY_BYTES = 32 * 1024;
 const SECTIONS = new Set([
   'language',
   'reception_channel',
+  'reception_channels_add',
+  'reception_channels_remove',
+  'reception_channels_reorder',
+  'reception_channels_set_enabled',
+  'reception_channel_filter',
   'command_channel',
   'inactive_message_policy',
   'structure_link',
+  'structure_profile',
   'command_permissions',
+  'embed_customization',
+  'embed_customization_reset',
+  'embed_preset_create',
+  'embed_preset_update',
+  'embed_preset_delete',
+  'embed_preset_apply',
 ]);
 
 /** Clés autorisées par section (en plus de actor/request_id/source/section). */
 const SECTION_KEYS = {
   language: new Set(['language']),
   reception_channel: new Set(['channel_id']),
+  reception_channels_add: new Set(['channel_id']),
+  reception_channels_remove: new Set(['channel_id']),
+  reception_channels_reorder: new Set(['channel_ids']),
+  reception_channels_set_enabled: new Set(['channel_id', 'enabled']),
+  reception_channel_filter: new Set(['channel_id', 'elo_rank_key']),
   command_channel: new Set(['channel_id']),
   inactive_message_policy: new Set(['policy']),
   structure_link: new Set(['url']),
+  structure_profile: new Set([
+    'display_name',
+    'description',
+    'logo_url',
+    'website_url',
+    'country_code',
+    'languages',
+    'socials',
+    'reset',
+  ]),
   command_permissions: new Set(['mode', 'role_ids']),
+  embed_customization: new Set(['color_hex', 'emoji']),
+  embed_customization_reset: new Set([]),
+  embed_preset_create: new Set(['name', 'color_hex', 'emoji']),
+  embed_preset_update: new Set(['preset_id', 'name', 'color_hex', 'emoji']),
+  embed_preset_delete: new Set(['preset_id']),
+  embed_preset_apply: new Set(['preset_id']),
 };
 
 const BASE_KEYS = new Set([
@@ -177,7 +210,7 @@ export async function handleGuildConfigPatch(p) {
     throw new ConfigWriteError(503, 'BOT_UNAVAILABLE');
   }
 
-  const guild = await assertActorCanManageGuildConfig({
+  const guild = await assertActorCanWriteGuildConfig({
     client: p.client,
     guildId,
     actorDiscordUserId: parsed.actorDiscordUserId,

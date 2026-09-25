@@ -12,6 +12,8 @@ import { classifyDiscordEditError } from './discordRetryPolicy.js';
 import { enqueueDiscordTask } from './discordTaskQueue.js';
 import { runTransientDiscord } from './discordApiGuard.js';
 import { removeScrimReceptionDestination } from './scrimDestinationCleanup.js';
+import { getDb } from '../database/db.js';
+import { resolveDestinationEmbedOptions } from './embedCustomizationResolver.js';
 
 /** Longueur max Discord pour MessageCreateOptions.nonce. */
 export const PERSISTENT_DELIVERY_NONCE_MAX_LEN = 25;
@@ -108,6 +110,7 @@ export function mapDiscordTerminalErrorCode(code) {
  *   sendMode?: 'queued' | 'direct',
  *   discordMaxAttempts?: number,
  *   deliveryId?: number | string,
+ *   styleBatch?: Map<string, any>,
  * }} args
  * @returns {Promise<DeliveryResult>}
  */
@@ -121,6 +124,7 @@ export async function deliverScrimToDestination({
   sendMode = 'queued',
   discordMaxAttempts,
   deliveryId,
+  styleBatch,
 }) {
   if (delayMs > 0) await sleep(delayMs);
 
@@ -254,14 +258,32 @@ export async function deliverScrimToDestination({
       : 'fr';
 
     // 7. Embed (+ boutons : partenaire = invite ; officiel = site, sans contact embed)
-    const isOfficial = isScrimReseauPublicGuildId(row.guild_id);
-    const embed = buildScrimEmbed(
-      payload,
-      guildLocale,
-      isOfficial
-        ? { includeContactInEmbed: false, includeContactHints: false }
-        : {},
-    );
+    // Style local Premium via resolver (jamais de mutation du payload scrim global).
+    let destOpts;
+    try {
+      destOpts = resolveDestinationEmbedOptions({
+        db: getDb(),
+        guildId: row.guild_id,
+        stmts,
+        batch: styleBatch,
+        status: 'active',
+      });
+    } catch {
+      destOpts = {
+        isOfficial: isScrimReseauPublicGuildId(row.guild_id),
+        includeContactInEmbed: !isScrimReseauPublicGuildId(row.guild_id),
+        includeContactHints: !isScrimReseauPublicGuildId(row.guild_id),
+        colorInt: null,
+        emojiPrefix: null,
+      };
+    }
+    const isOfficial = destOpts.isOfficial;
+    const embed = buildScrimEmbed(payload, guildLocale, {
+      includeContactInEmbed: destOpts.includeContactInEmbed,
+      includeContactHints: destOpts.includeContactHints,
+      color: destOpts.colorInt,
+      emojiPrefix: destOpts.emojiPrefix,
+    });
     const communityRows = buildScrimCommunityServerActionRows(
       /** @type {any} */ (payload).multiOpggUrl ?? null,
       guildLocale,

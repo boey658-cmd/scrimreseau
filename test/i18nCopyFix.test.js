@@ -136,16 +136,14 @@ describe('PASS 3 — polish', () => {
   });
 
   it('helpAdmin PL/PT use naturalized wording', () => {
-    assert.match(pl['helpAdmin.scrimConfigValue'], /emisja scrimów/);
-    assert.match(pl['helpAdmin.scrimConfigValue'], /role uprawnione do używania/);
-    assert.ok(!pl['helpAdmin.scrimConfigValue'].includes('scrim transmisja'));
-    assert.ok(!pl['helpAdmin.scrimConfigValue'].includes('role, w których można używać'));
+    assert.match(pl['helpAdmin.scrimConfigValue'], /panelu ScrimRéseau|panel ScrimRéseau/i);
+    assert.match(pl['helpAdmin.scrimConfigValue'], /administratorzy/i);
+    assert.ok(pl['helpAdmin.scrimConfigValue'].includes('/language'));
 
-    assert.match(pt['helpAdmin.scrimConfigValue'], /difusão de scrims/);
-    assert.match(pt['helpAdmin.scrimConfigValue'], /cargos autorizados/);
-    assert.ok(!pt['helpAdmin.scrimConfigValue'].includes('scrim transmissão'));
+    assert.match(pt['helpAdmin.scrimConfigValue'], /dashboard do ScrimRéseau|dashboard do Scrim/i);
+    assert.match(pt['helpAdmin.scrimConfigValue'], /administradores/i);
+    assert.ok(pt['helpAdmin.scrimConfigValue'].includes('/language'));
     assert.ok(!pt['helpAdmin.scrimConfigValue'].includes('funções permitidas'));
-    assert.ok(!pt['helpAdmin.scrimConfigValue'].includes('reinicia uma definição'));
   });
 });
 
