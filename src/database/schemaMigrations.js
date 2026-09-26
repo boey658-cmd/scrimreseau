@@ -266,6 +266,48 @@ function migrateGuildEmbedCustomization(db) {
 }
 
 /**
+ * Phase 6b — emojis par ligne (emoji_date/format/rank/contact/structure).
+ * Backward-compatible : ADD COLUMN si absent. Ne touche pas `emoji` legacy.
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} table
+ * @param {string} column
+ */
+function addColumnIfMissing(db, table, column) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  const exists = cols.some((c) => String(c.name) === column);
+  if (exists) return false;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
+  return true;
+}
+
+/**
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateGuildEmbedLineEmojis(db) {
+  // Ensure base tables exist (idempotent).
+  migrateGuildEmbedCustomization(db);
+
+  const lineCols = [
+    'emoji_date',
+    'emoji_format',
+    'emoji_rank',
+    'emoji_contact',
+    'emoji_structure',
+  ];
+  let added = 0;
+  for (const col of lineCols) {
+    if (addColumnIfMissing(db, 'guild_embed_customization', col)) added += 1;
+    if (addColumnIfMissing(db, 'guild_embed_presets', col)) added += 1;
+  }
+
+  logger.info('Migration SQLite schema_migrations', {
+    change: 'guild_embed_line_emojis',
+    action: 'ADD_COLUMN_IF_MISSING',
+    columns_added: added,
+  });
+}
+
+/**
  * @typedef {{ id: string, up: (db: import('better-sqlite3').Database) => void }} SchemaMigration
  */
 
@@ -312,6 +354,12 @@ export const SCHEMA_MIGRATIONS = Object.freeze([
     id: '20260924_01_billing_paddle_sandbox',
     up: (db) => {
       migrateBillingPaddleSandbox(db);
+    },
+  },
+  {
+    id: '20260926_01_guild_embed_line_emojis',
+    up: (db) => {
+      migrateGuildEmbedLineEmojis(db);
     },
   },
 ]);

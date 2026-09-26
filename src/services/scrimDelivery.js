@@ -275,6 +275,7 @@ export async function deliverScrimToDestination({
         includeContactHints: !isScrimReseauPublicGuildId(row.guild_id),
         colorInt: null,
         emojiPrefix: null,
+        lineEmojis: {},
       };
     }
     const isOfficial = destOpts.isOfficial;
@@ -283,6 +284,7 @@ export async function deliverScrimToDestination({
       includeContactHints: destOpts.includeContactHints,
       color: destOpts.colorInt,
       emojiPrefix: destOpts.emojiPrefix,
+      lineEmojis: destOpts.lineEmojis ?? null,
     });
     const communityRows = buildScrimCommunityServerActionRows(
       /** @type {any} */ (payload).multiOpggUrl ?? null,

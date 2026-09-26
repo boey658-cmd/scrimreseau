@@ -471,10 +471,110 @@ describe('Phase 6 — migration + dashboard view', () => {
     await withTempDb(async (db, stmts) => {
       const applied = listAppliedSchemaMigrations(db);
       assert.ok(applied.includes('20260923_05_guild_embed_customization'));
+      assert.ok(applied.includes('20260926_01_guild_embed_line_emojis'));
       const cfg = fetchGuildConfig(db, GUILD_A, { stmts });
       assert.ok(cfg.embed_customization);
       assert.equal(cfg.embed_customization.feature_available, false);
       assert.ok(Array.isArray(cfg.embed_customization.presets));
+    });
+  });
+});
+
+describe('Phase 6b — emojis par ligne', () => {
+  it('legacy emoji préfixe tant qu\'aucun emoji ligne n\'est enregistré', async () => {
+    await withTempDb(async (db, stmts) => {
+      const t0 = Date.now();
+      grant(db, stmts, GUILD_A, 'P2', t0);
+      clearEntitlementCache();
+      upsertEmbedCustomization(db, GUILD_A, {
+        color_hex: '#FF0000',
+        emoji: '🔥',
+        active_preset_id: null,
+      }, t0);
+      const opts = resolveDestinationEmbedOptions({
+        db, guildId: GUILD_A, stmts, nowMs: t0, status: 'active',
+      });
+      assert.equal(opts.emojiPrefix, '🔥');
+      const embed = buildScrimEmbed(buildSampleScrimEmbedPayload(), 'fr', {
+        color: opts.colorInt,
+        emojiPrefix: opts.emojiPrefix,
+        lineEmojis: opts.lineEmojis,
+      });
+      assert.ok(String(embed.data.description).startsWith('🔥 '));
+    });
+  });
+
+  it('sauvegarde nouvelle UX nullifie legacy et applique overrides ligne', async () => {
+    await withTempDb(async (db, stmts) => {
+      const t0 = Date.now();
+      grant(db, stmts, GUILD_A, 'P2', t0);
+      clearEntitlementCache();
+      upsertEmbedCustomization(db, GUILD_A, {
+        color_hex: '#FF0000',
+        emoji: '🔥',
+        active_preset_id: null,
+      }, t0);
+
+      await applyGuildConfigSectionWrite(mockCtx(db, stmts, GUILD_A), {
+        section: 'embed_customization',
+        color_hex: '#00FF00',
+        emoji_date: '📅',
+        emoji_format: '⚔️',
+        emoji_rank: '🎯',
+        emoji_contact: '👤',
+        emoji_structure: '🌐',
+      });
+
+      const row = getEmbedCustomization(db, GUILD_A);
+      assert.equal(row?.emoji, null);
+      assert.equal(row?.emoji_date, '📅');
+      assert.equal(row?.color_hex, '#00FF00');
+
+      const opts = resolveDestinationEmbedOptions({
+        db, guildId: GUILD_A, stmts, nowMs: t0, status: 'active',
+      });
+      assert.equal(opts.emojiPrefix, null);
+      assert.equal(opts.lineEmojis.date, '📅');
+      assert.equal(opts.lineEmojis.format, '⚔️');
+
+      const embed = buildScrimEmbed(buildSampleScrimEmbedPayload(), 'fr', {
+        color: opts.colorInt,
+        emojiPrefix: opts.emojiPrefix,
+        lineEmojis: opts.lineEmojis,
+        includeContactHints: false,
+      });
+      const desc = String(embed.data.description);
+      assert.ok(!desc.startsWith('🔥'));
+      assert.ok(desc.includes('📅'));
+      assert.ok(desc.includes('⚔️'));
+      assert.ok(desc.includes('🎯'));
+      assert.ok(desc.includes('👤'));
+      assert.ok(desc.includes('🌐'));
+    });
+  });
+
+  it('NULL ligne => défaut système ; preset round-trip 5 emojis', async () => {
+    await withTempDb(async (db, stmts) => {
+      const t0 = Date.now();
+      grant(db, stmts, GUILD_A, 'P2', t0);
+      clearEntitlementCache();
+      const p = createEmbedPreset(db, GUILD_A, {
+        name: 'Compétitif',
+        color_hex: '#112233',
+        emoji: null,
+        emoji_date: '🕐',
+        emoji_format: null,
+        emoji_rank: '🏅',
+        emoji_contact: null,
+        emoji_structure: '🏠',
+      }, t0);
+      applyEmbedPreset(db, GUILD_A, p.id, t0);
+      const row = getEmbedCustomization(db, GUILD_A);
+      assert.equal(row?.emoji, null);
+      assert.equal(row?.emoji_date, '🕐');
+      assert.equal(row?.emoji_format, null);
+      assert.equal(row?.emoji_rank, '🏅');
+      assert.equal(row?.emoji_structure, '🏠');
     });
   });
 });

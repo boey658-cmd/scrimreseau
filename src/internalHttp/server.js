@@ -668,6 +668,11 @@ async function handleEmbedPreview(deps, req, res, rawGuildId) {
       'source',
       'color_hex',
       'emoji',
+      'emoji_date',
+      'emoji_format',
+      'emoji_rank',
+      'emoji_contact',
+      'emoji_structure',
       'preset_id',
       'locale',
     ]);
@@ -687,6 +692,11 @@ async function handleEmbedPreview(deps, req, res, rawGuildId) {
     const preview = buildGuildEmbedPreview(deps.db, guildId, {
       color_hex: body.color_hex,
       emoji: body.emoji,
+      emoji_date: body.emoji_date,
+      emoji_format: body.emoji_format,
+      emoji_rank: body.emoji_rank,
+      emoji_contact: body.emoji_contact,
+      emoji_structure: body.emoji_structure,
       preset_id: body.preset_id,
       locale: typeof body.locale === 'string' ? body.locale : 'fr',
       stmts: deps.stmts,

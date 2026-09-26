@@ -1,11 +1,12 @@
 /**
- * Résolution style embed destination (Phase 6).
+ * Résolution style embed destination (Phase 6 + line emojis).
  * Fail-closed Premium → style défaut. Jamais de mutation du payload scrim global.
  */
 
 import { canUseFeature } from './entitlements/index.js';
 import {
   embedColorHexToInt,
+  shouldUseLegacyEmojiPrefix,
 } from './embedCustomizationValidation.js';
 import {
   getEmbedCustomization,
@@ -21,6 +22,12 @@ import { logger } from '../utils/logger.js';
  *   colorHex: string | null,
  *   colorInt: number | null,
  *   emoji: string | null,
+ *   emoji_date: string | null,
+ *   emoji_format: string | null,
+ *   emoji_rank: string | null,
+ *   emoji_contact: string | null,
+ *   emoji_structure: string | null,
+ *   useLegacyPrefix: boolean,
  *   source: 'default' | 'direct' | 'preset',
  *   active_preset_id: number | null,
  *   feature_available: boolean,
@@ -28,14 +35,22 @@ import { logger } from '../utils/logger.js';
  */
 
 /**
- * @param {string | null | undefined} colorHex
- * @param {string | null | undefined} emoji
+ * @param {{
+ *   colorHex?: string | null,
+ *   emoji?: string | null,
+ *   emoji_date?: string | null,
+ *   emoji_format?: string | null,
+ *   emoji_rank?: string | null,
+ *   emoji_contact?: string | null,
+ *   emoji_structure?: string | null,
+ * }} fields
  * @param {'default' | 'direct' | 'preset'} source
  * @param {number | null} activePresetId
  * @param {boolean} featureAvailable
  * @returns {EffectiveEmbedStyle}
  */
-function buildStyle(colorHex, emoji, source, activePresetId, featureAvailable) {
+function buildStyle(fields, source, activePresetId, featureAvailable) {
+  let colorHex = fields.colorHex ?? null;
   let colorInt = null;
   if (colorHex) {
     try {
@@ -45,10 +60,24 @@ function buildStyle(colorHex, emoji, source, activePresetId, featureAvailable) {
       colorHex = null;
     }
   }
+  const row = {
+    emoji: fields.emoji ?? null,
+    emoji_date: fields.emoji_date ?? null,
+    emoji_format: fields.emoji_format ?? null,
+    emoji_rank: fields.emoji_rank ?? null,
+    emoji_contact: fields.emoji_contact ?? null,
+    emoji_structure: fields.emoji_structure ?? null,
+  };
   return {
-    colorHex: colorHex ?? null,
+    colorHex,
     colorInt,
-    emoji: emoji ?? null,
+    emoji: row.emoji,
+    emoji_date: row.emoji_date,
+    emoji_format: row.emoji_format,
+    emoji_rank: row.emoji_rank,
+    emoji_contact: row.emoji_contact,
+    emoji_structure: row.emoji_structure,
+    useLegacyPrefix: shouldUseLegacyEmojiPrefix(row),
     source,
     active_preset_id: activePresetId,
     feature_available: featureAvailable,
@@ -73,11 +102,11 @@ export function resolveEffectiveEmbedStyle(db, guildId, opts = {}) {
       guild_id: guildId,
       message: err instanceof Error ? err.message : String(err),
     });
-    return buildStyle(null, null, 'default', null, false);
+    return buildStyle({}, 'default', null, false);
   }
 
   if (!featureOk) {
-    return buildStyle(null, null, 'default', null, false);
+    return buildStyle({}, 'default', null, false);
   }
 
   try {
@@ -86,7 +115,7 @@ export function resolveEffectiveEmbedStyle(db, guildId, opts = {}) {
       ? batchEntry.customization
       : getEmbedCustomization(db, guildId);
     if (!cust) {
-      return buildStyle(null, null, 'default', null, true);
+      return buildStyle({}, 'default', null, true);
     }
 
     if (cust.active_preset_id != null) {
@@ -95,23 +124,42 @@ export function resolveEffectiveEmbedStyle(db, guildId, opts = {}) {
         : getEmbedPreset(db, guildId, Number(cust.active_preset_id));
       if (preset) {
         return buildStyle(
-          preset.color_hex,
-          preset.emoji,
+          {
+            colorHex: preset.color_hex,
+            emoji: preset.emoji,
+            emoji_date: preset.emoji_date,
+            emoji_format: preset.emoji_format,
+            emoji_rank: preset.emoji_rank,
+            emoji_contact: preset.emoji_contact,
+            emoji_structure: preset.emoji_structure,
+          },
           'preset',
           preset.id,
           true,
         );
       }
-      // orphelin → fallback direct fields
     }
 
-    return buildStyle(cust.color_hex, cust.emoji, 'direct', null, true);
+    return buildStyle(
+      {
+        colorHex: cust.color_hex,
+        emoji: cust.emoji,
+        emoji_date: cust.emoji_date,
+        emoji_format: cust.emoji_format,
+        emoji_rank: cust.emoji_rank,
+        emoji_contact: cust.emoji_contact,
+        emoji_structure: cust.emoji_structure,
+      },
+      'direct',
+      null,
+      true,
+    );
   } catch (err) {
     logger.warn('embed style: resolve error → default', {
       guild_id: guildId,
       message: err instanceof Error ? err.message : String(err),
     });
-    return buildStyle(null, null, 'default', null, false);
+    return buildStyle({}, 'default', null, false);
   }
 }
 
@@ -143,7 +191,14 @@ export function resolveDestinationEmbedOptions(args) {
     includeContactInEmbed,
     includeContactHints,
     colorInt: style.colorInt,
-    emojiPrefix: style.emoji,
+    emojiPrefix: style.useLegacyPrefix ? style.emoji : null,
+    lineEmojis: {
+      date: style.emoji_date,
+      format: style.emoji_format,
+      rank: style.emoji_rank,
+      contact: style.emoji_contact,
+      structure: style.emoji_structure,
+    },
     style,
   };
 }
@@ -178,15 +233,25 @@ export function buildDashboardEmbedCustomizationView(db, guildId, opts = {}) {
   const presets = listEmbedPresets(db, guildId);
   const effective = resolveEffectiveEmbedStyle(db, guildId, opts);
 
+  const lineFields = (row) => ({
+    emoji_date: row?.emoji_date ?? null,
+    emoji_format: row?.emoji_format ?? null,
+    emoji_rank: row?.emoji_rank ?? null,
+    emoji_contact: row?.emoji_contact ?? null,
+    emoji_structure: row?.emoji_structure ?? null,
+  });
+
   return {
     stored: {
       color_hex: storedCust?.color_hex ?? null,
       emoji: storedCust?.emoji ?? null,
+      ...lineFields(storedCust),
       active_preset_id: storedCust?.active_preset_id ?? null,
     },
     effective: {
       color_hex: effective.colorHex,
-      emoji: effective.emoji,
+      emoji: effective.useLegacyPrefix ? effective.emoji : null,
+      ...lineFields(effective),
       source: effective.source,
       active_preset_id: effective.active_preset_id,
     },
@@ -195,6 +260,7 @@ export function buildDashboardEmbedCustomizationView(db, guildId, opts = {}) {
       name: p.name,
       color_hex: p.color_hex,
       emoji: p.emoji,
+      ...lineFields(p),
     })),
     feature_available: featureCustomization,
     presets_available: featurePresets,

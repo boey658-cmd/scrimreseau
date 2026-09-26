@@ -371,16 +371,20 @@ const MAX_CONTACT_USERNAME_LEN = 200;
  * @param {string | null | undefined} contactUsername
  * @returns {string[]}
  */
-function buildScrimContactDescriptionLines(contactUserId, contactUsername) {
+function buildScrimContactDescriptionLines(contactUserId, contactUsername, contactEmoji) {
   const u = typeof contactUsername === 'string' ? contactUsername.trim() : '';
   const safe =
     u.length > MAX_CONTACT_USERNAME_LEN
       ? `${u.slice(0, MAX_CONTACT_USERNAME_LEN)}…`
       : u;
+  const emoji =
+    typeof contactEmoji === 'string' && contactEmoji.trim()
+      ? contactEmoji.trim()
+      : '👤';
   if (safe) {
-    return [`👤 <@${contactUserId}> • ${safe}`];
+    return [`${emoji} <@${contactUserId}> • ${safe}`];
   }
-  return [`👤 <@${contactUserId}>`];
+  return [`${emoji} <@${contactUserId}>`];
 }
 
 /** Explication sous le contact (partenaires uniquement — 2 lignes). */
@@ -528,28 +532,59 @@ function resolveScrimDisplaySchedule(payload, locale = 'fr') {
 
 /**
  * @param {ScrimEmbedPayload} payload
- * @param {{ includeContactHints?: boolean, includeContactInEmbed?: boolean, emojiPrefix?: string | null }} [options]
+ * @param {{
+ *   includeContactHints?: boolean,
+ *   includeContactInEmbed?: boolean,
+ *   emojiPrefix?: string | null,
+ *   lineEmojis?: {
+ *     date?: string | null,
+ *     format?: string | null,
+ *     rank?: string | null,
+ *     contact?: string | null,
+ *     structure?: string | null,
+ *   } | null,
+ * }} [options]
  * @returns {string}
  */
 function buildScrimEmbedDescription(payload, options = {}, locale = 'fr') {
   const { dateStr, timeStr } = resolveScrimDisplaySchedule(payload, locale);
+  const lineEmojis = options.lineEmojis && typeof options.lineEmojis === 'object'
+    ? options.lineEmojis
+    : {};
 
   const formatLine = formatScrimFormatLineForEmbed(
     payload.format,
     payload.nombreDeGames ?? null,
   );
 
+  const dateEmoji =
+    typeof lineEmojis.date === 'string' && lineEmojis.date.trim()
+      ? lineEmojis.date.trim()
+      : getScrimEmoji('date');
+  const formatEmoji =
+    typeof lineEmojis.format === 'string' && lineEmojis.format.trim()
+      ? lineEmojis.format.trim()
+      : getScrimEmoji('format');
+  const rankEmojiCustom =
+    typeof lineEmojis.rank === 'string' && lineEmojis.rank.trim()
+      ? lineEmojis.rank.trim()
+      : null;
+  const structureEmoji =
+    typeof lineEmojis.structure === 'string' && lineEmojis.structure.trim()
+      ? lineEmojis.structure.trim()
+      : '🌐';
+
   // ── Ligne 1 : date • heure (heure inline, pas d'emoji séparé) ───────
-  const line1 = `${getScrimEmoji('date')} ${dateStr} • ${timeStr}`;
+  const line1 = `${dateEmoji} ${dateStr} • ${timeStr}`;
 
   // ── Ligne 2 : format (• Fearless texte si présent) ──────────────────
   const fearlessText = getFearlessText(payload.fearless ?? null, locale);
   const line2 = fearlessText
-    ? `${getScrimEmoji('format')} ${formatLine} • ${fearlessText}`
-    : `${getScrimEmoji('format')} ${formatLine}`;
+    ? `${formatEmoji} ${formatLine} • ${fearlessText}`
+    : `${formatEmoji} ${formatLine}`;
 
   // ── Ligne 3 : rang (emoji + texte + précision optionnelle) ─────────
-  const rankEmoji = getRankEmoji(payload.rank);
+  const rankEmoji = rankEmojiCustom ?? getRankEmoji(payload.rank);
   const localizedRank = localizeRank(payload.rank, locale);
   const rankText = formatRankWithPrecision(localizedRank, payload.eloPrecision ?? null, locale);
   const line3 = `${rankEmoji} ${rankText}`;
@@ -563,6 +598,7 @@ function buildScrimEmbedDescription(payload, options = {}, locale = 'fr') {
     const contactLine = buildScrimContactDescriptionLines(
       payload.contactUserId,
       payload.contactDisplayName ?? null,
+      lineEmojis.contact,
     )[0] ?? '';
     lines.push(contactLine);
   }
@@ -571,12 +607,18 @@ function buildScrimEmbedDescription(payload, options = {}, locale = 'fr') {
   if (payload.structureNameSnapshot) {
     const name = payload.structureNameSnapshot;
     const url = payload.structureInviteUrl ?? null;
+    let structureBody;
     if (url) {
       const safeName = name.replace(/[\[\]()]/g, '\\$&');
-      lines.push(t(locale, 'embed.structureLabelLinked', { safeName, url }));
+      structureBody = t(locale, 'embed.structureLabelLinked', { safeName, url });
     } else {
-      lines.push(t(locale, 'embed.structureLabel', { name }));
+      structureBody = t(locale, 'embed.structureLabel', { name });
     }
+    // Remplace le 🌐 i18n par l'emoji ligne (custom ou défaut).
+    const structureLine = structureBody.startsWith('🌐')
+      ? `${structureEmoji}${structureBody.slice('🌐'.length)}`
+      : `${structureEmoji} ${structureBody}`;
+    lines.push(structureLine);
   }
 
   if (options.includeContactHints) {
@@ -642,6 +684,7 @@ export function buildScrimSupersededMessageEditOptions(dbRow, locale = 'fr', opt
         {
           includeContactInEmbed,
           emojiPrefix: options.emojiPrefix ?? null,
+          lineEmojis: options.lineEmojis ?? null,
         },
         locale,
       ),
@@ -680,6 +723,7 @@ export function buildScrimClosedMessageEditOptions(status, dbRow, locale = 'fr',
           {
             includeContactInEmbed,
             emojiPrefix: options.emojiPrefix ?? null,
+          lineEmojis: options.lineEmojis ?? null,
           },
           locale,
         ),
@@ -709,6 +753,7 @@ export function buildScrimEmbed(payload, locale = 'fr', options = {}) {
       includeContactInEmbed: options.includeContactInEmbed !== false,
       includeContactHints: options.includeContactHints !== false,
       emojiPrefix: options.emojiPrefix ?? null,
+      lineEmojis: options.lineEmojis ?? null,
     },
     locale,
   );

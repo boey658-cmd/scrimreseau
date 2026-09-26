@@ -1,11 +1,13 @@
 /**
- * Persistence customization / presets embed (Phase 6).
+ * Persistence customization / presets embed (Phase 6 + line emojis).
  */
 
 import {
   EMBED_PRESETS_MAX_PER_GUILD,
   coerceStoredColorHex,
   coerceStoredEmoji,
+  coerceStoredLineEmojis,
+  hasAnyLineEmoji,
 } from './embedCustomizationValidation.js';
 import { ConfigWriteError } from './configWriteError.js';
 
@@ -14,6 +16,11 @@ import { ConfigWriteError } from './configWriteError.js';
  *   guild_id: string,
  *   color_hex: string | null,
  *   emoji: string | null,
+ *   emoji_date: string | null,
+ *   emoji_format: string | null,
+ *   emoji_rank: string | null,
+ *   emoji_contact: string | null,
+ *   emoji_structure: string | null,
  *   active_preset_id: number | null,
  *   created_at: number,
  *   updated_at: number,
@@ -27,10 +34,56 @@ import { ConfigWriteError } from './configWriteError.js';
  *   name: string,
  *   color_hex: string | null,
  *   emoji: string | null,
+ *   emoji_date: string | null,
+ *   emoji_format: string | null,
+ *   emoji_rank: string | null,
+ *   emoji_contact: string | null,
+ *   emoji_structure: string | null,
  *   created_at: number,
  *   updated_at: number,
  * }} EmbedPresetRow
  */
+
+const CUST_COLS =
+  'guild_id, color_hex, emoji, emoji_date, emoji_format, emoji_rank, emoji_contact, emoji_structure, active_preset_id, created_at, updated_at';
+const PRESET_COLS =
+  'id, guild_id, name, color_hex, emoji, emoji_date, emoji_format, emoji_rank, emoji_contact, emoji_structure, created_at, updated_at';
+
+/**
+ * @param {Record<string, unknown>} row
+ * @returns {EmbedCustomizationRow}
+ */
+function mapCustomizationRow(row) {
+  const lines = coerceStoredLineEmojis(row);
+  return {
+    guild_id: String(row.guild_id),
+    color_hex: coerceStoredColorHex(row.color_hex),
+    emoji: coerceStoredEmoji(row.emoji),
+    ...lines,
+    active_preset_id:
+      row.active_preset_id == null ? null : Number(row.active_preset_id),
+    created_at: Number(row.created_at) || 0,
+    updated_at: Number(row.updated_at) || 0,
+  };
+}
+
+/**
+ * @param {Record<string, unknown>} row
+ * @returns {EmbedPresetRow}
+ */
+function mapPresetRow(row) {
+  const lines = coerceStoredLineEmojis(row);
+  return {
+    id: Number(row.id),
+    guild_id: String(row.guild_id),
+    name: String(row.name),
+    color_hex: coerceStoredColorHex(row.color_hex),
+    emoji: coerceStoredEmoji(row.emoji),
+    ...lines,
+    created_at: Number(row.created_at) || 0,
+    updated_at: Number(row.updated_at) || 0,
+  };
+}
 
 /**
  * @param {import('better-sqlite3').Database} db
@@ -41,20 +94,12 @@ export function getEmbedCustomization(db, guildId) {
   try {
     const row = db
       .prepare(
-        `SELECT guild_id, color_hex, emoji, active_preset_id, created_at, updated_at
+        `SELECT ${CUST_COLS}
          FROM guild_embed_customization WHERE guild_id = ? LIMIT 1`,
       )
       .get(guildId);
     if (!row) return null;
-    return {
-      guild_id: String(row.guild_id),
-      color_hex: coerceStoredColorHex(row.color_hex),
-      emoji: coerceStoredEmoji(row.emoji),
-      active_preset_id:
-        row.active_preset_id == null ? null : Number(row.active_preset_id),
-      created_at: Number(row.created_at) || 0,
-      updated_at: Number(row.updated_at) || 0,
-    };
+    return mapCustomizationRow(row);
   } catch {
     return null;
   }
@@ -66,24 +111,46 @@ export function getEmbedCustomization(db, guildId) {
  * @param {{
  *   color_hex: string | null,
  *   emoji: string | null,
+ *   emoji_date: string | null,
+ *   emoji_format: string | null,
+ *   emoji_rank: string | null,
+ *   emoji_contact: string | null,
+ *   emoji_structure: string | null,
  *   active_preset_id: number | null,
  * }} data
  * @param {number} [nowMs]
  */
 export function upsertEmbedCustomization(db, guildId, data, nowMs = Date.now()) {
+  const lines = {
+    emoji_date: data.emoji_date ?? null,
+    emoji_format: data.emoji_format ?? null,
+    emoji_rank: data.emoji_rank ?? null,
+    emoji_contact: data.emoji_contact ?? null,
+    emoji_structure: data.emoji_structure ?? null,
+  };
   db.prepare(
     `INSERT INTO guild_embed_customization
-       (guild_id, color_hex, emoji, active_preset_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)
+       (guild_id, color_hex, emoji, emoji_date, emoji_format, emoji_rank, emoji_contact, emoji_structure, active_preset_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(guild_id) DO UPDATE SET
        color_hex = excluded.color_hex,
        emoji = excluded.emoji,
+       emoji_date = excluded.emoji_date,
+       emoji_format = excluded.emoji_format,
+       emoji_rank = excluded.emoji_rank,
+       emoji_contact = excluded.emoji_contact,
+       emoji_structure = excluded.emoji_structure,
        active_preset_id = excluded.active_preset_id,
        updated_at = excluded.updated_at`,
   ).run(
     guildId,
     data.color_hex,
     data.emoji,
+    lines.emoji_date,
+    lines.emoji_format,
+    lines.emoji_rank,
+    lines.emoji_contact,
+    lines.emoji_structure,
     data.active_preset_id,
     nowMs,
     nowMs,
@@ -107,20 +174,12 @@ export function listEmbedPresets(db, guildId) {
   try {
     const rows = db
       .prepare(
-        `SELECT id, guild_id, name, color_hex, emoji, created_at, updated_at
+        `SELECT ${PRESET_COLS}
          FROM guild_embed_presets WHERE guild_id = ?
          ORDER BY name COLLATE NOCASE ASC, id ASC`,
       )
       .all(guildId);
-    return rows.map((row) => ({
-      id: Number(row.id),
-      guild_id: String(row.guild_id),
-      name: String(row.name),
-      color_hex: coerceStoredColorHex(row.color_hex),
-      emoji: coerceStoredEmoji(row.emoji),
-      created_at: Number(row.created_at) || 0,
-      updated_at: Number(row.updated_at) || 0,
-    }));
+    return rows.map((row) => mapPresetRow(row));
   } catch {
     return [];
   }
@@ -136,20 +195,12 @@ export function getEmbedPreset(db, guildId, presetId) {
   try {
     const row = db
       .prepare(
-        `SELECT id, guild_id, name, color_hex, emoji, created_at, updated_at
+        `SELECT ${PRESET_COLS}
          FROM guild_embed_presets WHERE guild_id = ? AND id = ? LIMIT 1`,
       )
       .get(guildId, presetId);
     if (!row) return null;
-    return {
-      id: Number(row.id),
-      guild_id: String(row.guild_id),
-      name: String(row.name),
-      color_hex: coerceStoredColorHex(row.color_hex),
-      emoji: coerceStoredEmoji(row.emoji),
-      created_at: Number(row.created_at) || 0,
-      updated_at: Number(row.updated_at) || 0,
-    };
+    return mapPresetRow(row);
   } catch {
     return null;
   }
@@ -177,7 +228,7 @@ export function getEmbedStylesBatch(db, guildIds) {
     try {
       const custRows = db
         .prepare(
-          `SELECT guild_id, color_hex, emoji, active_preset_id, created_at, updated_at
+          `SELECT ${CUST_COLS}
            FROM guild_embed_customization WHERE guild_id IN (${placeholders})`,
         )
         .all(...chunk);
@@ -185,15 +236,7 @@ export function getEmbedStylesBatch(db, guildIds) {
         const gid = String(row.guild_id);
         const entry = map.get(gid);
         if (!entry) continue;
-        entry.customization = {
-          guild_id: gid,
-          color_hex: coerceStoredColorHex(row.color_hex),
-          emoji: coerceStoredEmoji(row.emoji),
-          active_preset_id:
-            row.active_preset_id == null ? null : Number(row.active_preset_id),
-          created_at: Number(row.created_at) || 0,
-          updated_at: Number(row.updated_at) || 0,
-        };
+        entry.customization = mapCustomizationRow(row);
       }
     } catch {
       /* fail soft */
@@ -202,7 +245,7 @@ export function getEmbedStylesBatch(db, guildIds) {
     try {
       const presetRows = db
         .prepare(
-          `SELECT id, guild_id, name, color_hex, emoji, created_at, updated_at
+          `SELECT ${PRESET_COLS}
            FROM guild_embed_presets WHERE guild_id IN (${placeholders})`,
         )
         .all(...chunk);
@@ -210,15 +253,7 @@ export function getEmbedStylesBatch(db, guildIds) {
         const gid = String(row.guild_id);
         const entry = map.get(gid);
         if (!entry) continue;
-        const preset = {
-          id: Number(row.id),
-          guild_id: gid,
-          name: String(row.name),
-          color_hex: coerceStoredColorHex(row.color_hex),
-          emoji: coerceStoredEmoji(row.emoji),
-          created_at: Number(row.created_at) || 0,
-          updated_at: Number(row.updated_at) || 0,
-        };
+        const preset = mapPresetRow(row);
         entry.presetsById.set(preset.id, preset);
       }
     } catch {
@@ -232,7 +267,16 @@ export function getEmbedStylesBatch(db, guildIds) {
 /**
  * @param {import('better-sqlite3').Database} db
  * @param {string} guildId
- * @param {{ name: string, color_hex: string | null, emoji: string | null }} data
+ * @param {{
+ *   name: string,
+ *   color_hex: string | null,
+ *   emoji: string | null,
+ *   emoji_date: string | null,
+ *   emoji_format: string | null,
+ *   emoji_rank: string | null,
+ *   emoji_contact: string | null,
+ *   emoji_structure: string | null,
+ * }} data
  * @param {number} [nowMs]
  * @returns {EmbedPresetRow}
  */
@@ -244,20 +288,41 @@ export function createEmbedPreset(db, guildId, data, nowMs = Date.now()) {
     throw new ConfigWriteError(400, 'PRESET_LIMIT_REACHED');
   }
 
+  const payload = {
+    name: data.name,
+    color_hex: data.color_hex,
+    emoji: data.emoji ?? null,
+    emoji_date: data.emoji_date ?? null,
+    emoji_format: data.emoji_format ?? null,
+    emoji_rank: data.emoji_rank ?? null,
+    emoji_contact: data.emoji_contact ?? null,
+    emoji_structure: data.emoji_structure ?? null,
+  };
+
   try {
     const info = db
       .prepare(
         `INSERT INTO guild_embed_presets
-           (guild_id, name, color_hex, emoji, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+           (guild_id, name, color_hex, emoji, emoji_date, emoji_format, emoji_rank, emoji_contact, emoji_structure, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(guildId, data.name, data.color_hex, data.emoji, nowMs, nowMs);
+      .run(
+        guildId,
+        payload.name,
+        payload.color_hex,
+        payload.emoji,
+        payload.emoji_date,
+        payload.emoji_format,
+        payload.emoji_rank,
+        payload.emoji_contact,
+        payload.emoji_structure,
+        nowMs,
+        nowMs,
+      );
     return {
       id: Number(info.lastInsertRowid),
       guild_id: guildId,
-      name: data.name,
-      color_hex: data.color_hex,
-      emoji: data.emoji,
+      ...payload,
       created_at: nowMs,
       updated_at: nowMs,
     };
@@ -274,7 +339,16 @@ export function createEmbedPreset(db, guildId, data, nowMs = Date.now()) {
  * @param {import('better-sqlite3').Database} db
  * @param {string} guildId
  * @param {number} presetId
- * @param {{ name: string, color_hex: string | null, emoji: string | null }} data
+ * @param {{
+ *   name: string,
+ *   color_hex: string | null,
+ *   emoji: string | null,
+ *   emoji_date: string | null,
+ *   emoji_format: string | null,
+ *   emoji_rank: string | null,
+ *   emoji_contact: string | null,
+ *   emoji_structure: string | null,
+ * }} data
  * @param {number} [nowMs]
  * @returns {EmbedPresetRow}
  */
@@ -286,9 +360,23 @@ export function updateEmbedPreset(db, guildId, presetId, data, nowMs = Date.now(
   try {
     db.prepare(
       `UPDATE guild_embed_presets
-       SET name = ?, color_hex = ?, emoji = ?, updated_at = ?
+       SET name = ?, color_hex = ?, emoji = ?,
+           emoji_date = ?, emoji_format = ?, emoji_rank = ?, emoji_contact = ?, emoji_structure = ?,
+           updated_at = ?
        WHERE guild_id = ? AND id = ?`,
-    ).run(data.name, data.color_hex, data.emoji, nowMs, guildId, presetId);
+    ).run(
+      data.name,
+      data.color_hex,
+      data.emoji,
+      data.emoji_date,
+      data.emoji_format,
+      data.emoji_rank,
+      data.emoji_contact,
+      data.emoji_structure,
+      nowMs,
+      guildId,
+      presetId,
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (/UNIQUE/i.test(msg)) {
@@ -301,6 +389,11 @@ export function updateEmbedPreset(db, guildId, presetId, data, nowMs = Date.now(
     name: data.name,
     color_hex: data.color_hex,
     emoji: data.emoji,
+    emoji_date: data.emoji_date,
+    emoji_format: data.emoji_format,
+    emoji_rank: data.emoji_rank,
+    emoji_contact: data.emoji_contact,
+    emoji_structure: data.emoji_structure,
     updated_at: nowMs,
   };
 }
@@ -332,6 +425,8 @@ export function deleteEmbedPreset(db, guildId, presetId) {
 
 /**
  * Apply preset as active style.
+ * New-style presets (any line emoji) clear legacy `emoji`.
+ * Legacy presets (emoji only) keep prefix behavior.
  * @param {import('better-sqlite3').Database} db
  * @param {string} guildId
  * @param {number} presetId
@@ -342,12 +437,18 @@ export function applyEmbedPreset(db, guildId, presetId, nowMs = Date.now()) {
   if (!preset) {
     throw new ConfigWriteError(404, 'PRESET_NOT_FOUND');
   }
+  const lineMode = hasAnyLineEmoji(preset) || preset.emoji == null;
   upsertEmbedCustomization(
     db,
     guildId,
     {
       color_hex: preset.color_hex,
-      emoji: preset.emoji,
+      emoji: lineMode ? null : preset.emoji,
+      emoji_date: preset.emoji_date,
+      emoji_format: preset.emoji_format,
+      emoji_rank: preset.emoji_rank,
+      emoji_contact: preset.emoji_contact,
+      emoji_structure: preset.emoji_structure,
       active_preset_id: preset.id,
     },
     nowMs,

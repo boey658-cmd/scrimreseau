@@ -33,7 +33,7 @@ import {
 } from './structureProfileStore.js';
 import {
   normalizeOptionalEmbedColor,
-  normalizeOptionalEmbedEmoji,
+  normalizeLineEmojisFromPatch,
   normalizePresetName,
 } from './embedCustomizationValidation.js';
 import {
@@ -850,12 +850,19 @@ function writeEmbedCustomization(ctx, patch) {
     throw new ConfigWriteError(403, 'FEATURE_NOT_AVAILABLE');
   }
   const color_hex = normalizeOptionalEmbedColor(patch.color_hex);
-  const emoji = normalizeOptionalEmbedEmoji(patch.emoji);
+  // Nouvelle UX : écrit les 5 emojis ligne et force emoji legacy à NULL.
+  const lines = normalizeLineEmojisFromPatch(patch);
+  const emoji = null;
   const current = getEmbedCustomization(ctx.db, ctx.guildId);
   if (
     current
     && current.color_hex === color_hex
     && current.emoji === emoji
+    && current.emoji_date === lines.emoji_date
+    && current.emoji_format === lines.emoji_format
+    && current.emoji_rank === lines.emoji_rank
+    && current.emoji_contact === lines.emoji_contact
+    && current.emoji_structure === lines.emoji_structure
     && current.active_preset_id == null
   ) {
     return { noop: true, config: fetchGuildConfig(ctx.db, ctx.guildId, { stmts: ctx.stmts }) };
@@ -864,6 +871,7 @@ function writeEmbedCustomization(ctx, patch) {
     upsertEmbedCustomization(ctx.db, ctx.guildId, {
       color_hex,
       emoji,
+      ...lines,
       active_preset_id: null,
     });
     logger.info('embed customization saved', { guild_id: ctx.guildId });
@@ -905,9 +913,14 @@ function writeEmbedPresetCreate(ctx, patch) {
   }
   const name = normalizePresetName(patch.name);
   const color_hex = normalizeOptionalEmbedColor(patch.color_hex);
-  const emoji = normalizeOptionalEmbedEmoji(patch.emoji);
+  const lines = normalizeLineEmojisFromPatch(patch);
   try {
-    createEmbedPreset(ctx.db, ctx.guildId, { name, color_hex, emoji });
+    createEmbedPreset(ctx.db, ctx.guildId, {
+      name,
+      color_hex,
+      emoji: null,
+      ...lines,
+    });
     logger.info('embed preset created', { guild_id: ctx.guildId });
   } catch (err) {
     if (err instanceof ConfigWriteError) throw err;
@@ -931,9 +944,14 @@ function writeEmbedPresetUpdate(ctx, patch) {
   }
   const name = normalizePresetName(patch.name);
   const color_hex = normalizeOptionalEmbedColor(patch.color_hex);
-  const emoji = normalizeOptionalEmbedEmoji(patch.emoji);
+  const lines = normalizeLineEmojisFromPatch(patch);
   try {
-    updateEmbedPreset(ctx.db, ctx.guildId, presetId, { name, color_hex, emoji });
+    updateEmbedPreset(ctx.db, ctx.guildId, presetId, {
+      name,
+      color_hex,
+      emoji: null,
+      ...lines,
+    });
   } catch (err) {
     if (err instanceof ConfigWriteError) throw err;
     if (isSqliteBusyError(err)) throw new ConfigWriteError(503, 'SQLITE_BUSY');

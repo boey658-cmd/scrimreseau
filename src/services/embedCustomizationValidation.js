@@ -11,6 +11,15 @@ export const EMBED_EMOJI_MAX_GRAPHEMES = 4;
 export const EMBED_PRESET_NAME_MAX = 40;
 export const EMBED_PRESETS_MAX_PER_GUILD = 20;
 
+/** Emojis configurables par ligne (Premium 2+). */
+export const EMBED_LINE_EMOJI_KEYS = Object.freeze([
+  'emoji_date',
+  'emoji_format',
+  'emoji_rank',
+  'emoji_contact',
+  'emoji_structure',
+]);
+
 /**
  * @param {unknown} raw
  * @returns {string | null}
@@ -139,4 +148,79 @@ export function coerceStoredEmoji(raw) {
   } catch {
     return null;
   }
+}
+
+/**
+ * @param {Record<string, unknown>} patch
+ * @returns {{
+ *   emoji_date: string | null,
+ *   emoji_format: string | null,
+ *   emoji_rank: string | null,
+ *   emoji_contact: string | null,
+ *   emoji_structure: string | null,
+ * }}
+ */
+export function normalizeLineEmojisFromPatch(patch) {
+  return {
+    emoji_date: normalizeOptionalEmbedEmoji(patch.emoji_date),
+    emoji_format: normalizeOptionalEmbedEmoji(patch.emoji_format),
+    emoji_rank: normalizeOptionalEmbedEmoji(patch.emoji_rank),
+    emoji_contact: normalizeOptionalEmbedEmoji(patch.emoji_contact),
+    emoji_structure: normalizeOptionalEmbedEmoji(patch.emoji_structure),
+  };
+}
+
+/**
+ * @param {{
+ *   emoji_date?: string | null,
+ *   emoji_format?: string | null,
+ *   emoji_rank?: string | null,
+ *   emoji_contact?: string | null,
+ *   emoji_structure?: string | null,
+ * } | null | undefined} row
+ * @returns {boolean}
+ */
+export function hasAnyLineEmoji(row) {
+  if (!row) return false;
+  return EMBED_LINE_EMOJI_KEYS.some((key) => {
+    const v = row[key];
+    return typeof v === 'string' && v.length > 0;
+  });
+}
+
+/**
+ * Préfixe legacy uniquement si `emoji` est set et aucun emoji ligne n'a été enregistré.
+ * @param {{
+ *   emoji?: string | null,
+ *   emoji_date?: string | null,
+ *   emoji_format?: string | null,
+ *   emoji_rank?: string | null,
+ *   emoji_contact?: string | null,
+ *   emoji_structure?: string | null,
+ * } | null | undefined} row
+ * @returns {boolean}
+ */
+export function shouldUseLegacyEmojiPrefix(row) {
+  if (!row) return false;
+  return Boolean(row.emoji) && !hasAnyLineEmoji(row);
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} row
+ * @returns {{
+ *   emoji_date: string | null,
+ *   emoji_format: string | null,
+ *   emoji_rank: string | null,
+ *   emoji_contact: string | null,
+ *   emoji_structure: string | null,
+ * }}
+ */
+export function coerceStoredLineEmojis(row) {
+  return {
+    emoji_date: coerceStoredEmoji(row?.emoji_date),
+    emoji_format: coerceStoredEmoji(row?.emoji_format),
+    emoji_rank: coerceStoredEmoji(row?.emoji_rank),
+    emoji_contact: coerceStoredEmoji(row?.emoji_contact),
+    emoji_structure: coerceStoredEmoji(row?.emoji_structure),
+  };
 }

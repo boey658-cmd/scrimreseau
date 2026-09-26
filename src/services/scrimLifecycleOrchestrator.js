@@ -148,7 +148,7 @@ function resolveGuildLocale(stmts, guildId) {
  * Style local Premium (couleur/emote) via resolver — style ACTUEL au moment de l’edit.
  * @param {string} guildId
  * @param {ScrimLifecycleEventType} eventType
- * @returns {{ includeContactInEmbed: boolean, color?: number | null, emojiPrefix?: string | null }}
+ * @returns {{ includeContactInEmbed: boolean, color?: number | null, emojiPrefix?: string | null, lineEmojis?: object | null }}
  */
 function closedEmbedOptionsForGuild(guildId, eventType) {
   try {
@@ -161,6 +161,7 @@ function closedEmbedOptionsForGuild(guildId, eventType) {
       includeContactInEmbed: dest.includeContactInEmbed,
       color: dest.colorInt,
       emojiPrefix: dest.emojiPrefix,
+      lineEmojis: dest.lineEmojis ?? null,
     };
   } catch {
     return { includeContactInEmbed: !isScrimReseauPublicGuildId(guildId) };
