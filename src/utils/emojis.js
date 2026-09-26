@@ -27,7 +27,7 @@ const VALID_TYPES = new Set(
 );
 
 /** Tags custom Discord <:name:id> ou <a:name:id> (noms [a-zA-Z0-9_]{2,32}). */
-const CUSTOM_TAG = /^<a?:([a-zA-Z0-9_]{2,32}):(\d+)>$/;
+export const DISCORD_CUSTOM_EMOJI_TAG_RE = /^<a?:([a-zA-Z0-9_]{2,32}):(\d+)>$/;
 
 /** @type {Record<string, string> | null} */
 let cache = null;
@@ -48,13 +48,13 @@ function loadRawMap() {
 }
 
 /**
- * @param {string | undefined} tag
+ * @param {string | null | undefined} tag
  * @returns {boolean}
  */
-function isValidCustomEmojiTag(tag) {
+export function isDiscordCustomEmojiTag(tag) {
   if (typeof tag !== 'string') return false;
   const t = tag.trim();
-  return t.length > 0 && CUSTOM_TAG.test(t);
+  return t.length > 0 && DISCORD_CUSTOM_EMOJI_TAG_RE.test(t);
 }
 
 /**
@@ -73,7 +73,7 @@ export function getScrimEmoji(type) {
   const map = loadRawMap();
   const tag = map[type];
 
-  if (isValidCustomEmojiTag(tag)) {
+  if (isDiscordCustomEmojiTag(tag)) {
     return /** @type {string} */ (tag.trim());
   }
 

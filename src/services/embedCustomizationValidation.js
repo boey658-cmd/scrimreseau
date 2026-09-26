@@ -1,12 +1,14 @@
 /**
  * Validation personnalisation embed locale (Phase 6).
- * Couleur #RRGGBB + emoji Unicode uniquement.
+ * Couleur #RRGGBB + emoji Unicode OU balise Discord custom stricte.
  */
 
+import { isDiscordCustomEmojiTag } from '../utils/emojis.js';
 import { ConfigWriteError } from './configWriteError.js';
 
 export const EMBED_COLOR_HEX_RE = /^#[0-9A-Fa-f]{6}$/;
-export const EMBED_EMOJI_MAX_CHARS = 16;
+/** Plafond global (Unicode court ou tag Discord <:name:id> / <a:name:id>). */
+export const EMBED_EMOJI_MAX_CHARS = 64;
 export const EMBED_EMOJI_MAX_GRAPHEMES = 4;
 export const EMBED_PRESET_NAME_MAX = 40;
 export const EMBED_PRESETS_MAX_PER_GUILD = 20;
@@ -63,6 +65,13 @@ export function normalizeOptionalEmbedEmoji(raw) {
   if (trimmed.length > EMBED_EMOJI_MAX_CHARS) {
     throw new ConfigWriteError(400, 'INVALID_EMOJI', 'emoji trop long');
   }
+
+  // B) Discord custom — exact match only (<:name:id> | <a:name:id>)
+  if (isDiscordCustomEmojiTag(trimmed)) {
+    return trimmed;
+  }
+
+  // A) Unicode — refuse mentions / URLs / balises / texte libre ASCII
   const lower = trimmed.toLowerCase();
   if (
     lower.includes('@everyone')

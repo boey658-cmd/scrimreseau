@@ -126,6 +126,33 @@ describe('Phase 6 — validation couleur/emoji', () => {
     assert.throws(() => normalizeOptionalEmbedEmoji('<@123>'), (e) => e.code === 'INVALID_EMOJI');
     assert.throws(() => normalizeOptionalEmbedEmoji('fire'), (e) => e.code === 'INVALID_EMOJI');
   });
+
+  it('emoji Discord custom <:name:id> / <a:name:id> acceptés ; hors format refusés', () => {
+    assert.equal(
+      normalizeOptionalEmbedEmoji('<:gold:1521794312642232400>'),
+      '<:gold:1521794312642232400>',
+    );
+    assert.equal(
+      normalizeOptionalEmbedEmoji('<a:spin:123456789012345678>'),
+      '<a:spin:123456789012345678>',
+    );
+    assert.throws(
+      () => normalizeOptionalEmbedEmoji('hi <:gold:1521794312642232400>'),
+      (e) => e.code === 'INVALID_EMOJI',
+    );
+    assert.throws(
+      () => normalizeOptionalEmbedEmoji('<:gold:1521794312642232400><:x:1>'),
+      (e) => e.code === 'INVALID_EMOJI',
+    );
+    assert.throws(
+      () => normalizeOptionalEmbedEmoji('https://cdn.discordapp.com/emojis/1.png'),
+      (e) => e.code === 'INVALID_EMOJI',
+    );
+    assert.throws(
+      () => normalizeOptionalEmbedEmoji('<#123456789012345678>'),
+      (e) => e.code === 'INVALID_EMOJI',
+    );
+  });
 });
 
 describe('Phase 6 — entitlement gates + downgrade', () => {
@@ -575,6 +602,43 @@ describe('Phase 6b — emojis par ligne', () => {
       assert.equal(row?.emoji_format, null);
       assert.equal(row?.emoji_rank, '🏅');
       assert.equal(row?.emoji_structure, '🏠');
+    });
+  });
+
+  it('custom Discord : round-trip DB + builder conserve la balise exacte', async () => {
+    await withTempDb(async (db, stmts) => {
+      const t0 = Date.now();
+      grant(db, stmts, GUILD_A, 'P2', t0);
+      clearEntitlementCache();
+      const tagDate = '<:customdate:1521794312642232400>';
+      const tagFormat = '<a:formatspin:123456789012345678>';
+      await applyGuildConfigSectionWrite(mockCtx(db, stmts, GUILD_A), {
+        section: 'embed_customization',
+        color_hex: '#57F287',
+        emoji_date: tagDate,
+        emoji_format: tagFormat,
+        emoji_rank: null,
+        emoji_contact: '👤',
+        emoji_structure: null,
+      });
+      const row = getEmbedCustomization(db, GUILD_A);
+      assert.equal(row?.emoji_date, tagDate);
+      assert.equal(row?.emoji_format, tagFormat);
+      assert.equal(row?.emoji, null);
+
+      const opts = resolveDestinationEmbedOptions({
+        db, guildId: GUILD_A, stmts, nowMs: t0, status: 'active',
+      });
+      assert.equal(opts.lineEmojis.date, tagDate);
+      assert.equal(opts.lineEmojis.format, tagFormat);
+      const embed = buildScrimEmbed(buildSampleScrimEmbedPayload(), 'fr', {
+        emojiPrefix: opts.emojiPrefix,
+        lineEmojis: opts.lineEmojis,
+      });
+      const desc = String(embed.data.description);
+      assert.ok(desc.includes(tagDate), desc);
+      assert.ok(desc.includes(tagFormat), desc);
+      assert.ok(!desc.startsWith(`${tagDate} ${tagDate}`), 'pas de double préfixe');
     });
   });
 });
