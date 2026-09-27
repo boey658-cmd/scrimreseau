@@ -185,6 +185,29 @@ export function createPaddleBillingProvider(config, deps = {}) {
     };
   }
 
+  /**
+   * Vérifie via API Paddle que le price ID mappé matche le catalogue (montant + EUR).
+   * Sandbox E2E : empêche un mauvais mapping env silencieux.
+   * @param {string} productKey
+   */
+  async function assertProductPriceMatchesCatalog(productKey) {
+    const priceId = config.productToPrice[productKey];
+    if (!priceId) {
+      throw new ConfigWriteError(503, 'PADDLE_PRICE_MAP_INCOMPLETE', 'price mapping incomplet');
+    }
+    const paddle = getClient();
+    try {
+      const price = await paddle.prices.get(priceId);
+      assertPaddlePriceMatchesCatalog(productKey, {
+        unitPriceAmount: price?.unitPrice?.amount,
+        currencyCode: price?.unitPrice?.currencyCode,
+      });
+    } catch (err) {
+      if (err instanceof ConfigWriteError) throw err;
+      mapPaddleApiError(err);
+    }
+  }
+
   return {
     providerName: 'paddle',
     verifyAndUnmarshal,
@@ -192,6 +215,7 @@ export function createPaddleBillingProvider(config, deps = {}) {
     retrieveSubscription,
     createPortal,
     createCheckout,
+    assertProductPriceMatchesCatalog,
     verifyWebhook: async (raw, signature) => {
       try {
         await verifyAndUnmarshal(String(raw), String(signature ?? ''));
@@ -404,6 +428,22 @@ function normalizeSubscriptionEvent(eventId, occurredAt, data, paddleEventType, 
   };
 }
 
+/**
+ * Période de facturation d'une transaction Paddle.
+ * SDK notification (unmarshal) : data.billingPeriod.{startsAt,endsAt}
+ * Payload brut / fixtures : data.billing_period.{starts_at,ends_at}
+ * @param {Record<string, any>} data
+ * @returns {{ start: number, end: number } | null}
+ */
+function extractTransactionBillingPeriod(data) {
+  const period = data.billingPeriod ?? data.billing_period ?? null;
+  if (!period || typeof period !== 'object') return null;
+  const start = parsePaddleTime(period.startsAt ?? period.starts_at);
+  const end = parsePaddleTime(period.endsAt ?? period.ends_at);
+  if (start == null || end == null || end <= start) return null;
+  return { start, end };
+}
+
 function normalizeTransactionCompleted(eventId, occurredAt, data, opts, config) {
   const ctx = extractGuildContext(data, opts);
   if (!ctx) {
@@ -420,17 +460,15 @@ function normalizeTransactionCompleted(eventId, occurredAt, data, opts, config) 
     throw new ConfigWriteError(400, 'UNKNOWN_PRODUCT', 'price_id transaction manquant');
   }
   const product = resolveProductFromPriceId(priceId, config);
-  // Période : souvent absente sur transaction — placeholder jusqu'à subscription.* 
-  // On utilise billing_period si présent, sinon fenêtre 30j/365j approximative (sera corrigée par subscription.updated)
-  const details = data.details ?? {};
-  const totals = details.totals ?? {};
   // Ne pas comparer total TTC taxé au catalogue — uniquement price ID
-  void totals;
+  void (data.details ?? {});
 
-  const periodStart = occurredAt;
-  const periodEnd = product.interval === 'year'
-    ? occurredAt + 365 * 24 * 60 * 60 * 1000
-    : occurredAt + 30 * 24 * 60 * 60 * 1000;
+  // Pas de placeholder +30j/+365j : uniquement la période Paddle réelle.
+  // Si absente/invalide → skip ; subscription.* (currentBillingPeriod) ou reconcile fournira les dates.
+  const billingPeriod = extractTransactionBillingPeriod(data);
+  if (!billingPeriod) {
+    return { skip: true, reason: 'transaction_completed_missing_billing_period' };
+  }
 
   return {
     provider: 'paddle',
@@ -444,8 +482,8 @@ function normalizeTransactionCompleted(eventId, occurredAt, data, opts, config) 
     interval: product.interval,
     productKey: product.productKey,
     status: 'active',
-    currentPeriodStart: periodStart,
-    currentPeriodEnd: periodEnd,
+    currentPeriodStart: billingPeriod.start,
+    currentPeriodEnd: billingPeriod.end,
     cancelAtPeriodEnd: false,
     amountMinor: product.amountMinor,
     currency: 'EUR',
@@ -460,7 +498,7 @@ function normalizeTransactionPaymentSignal(eventId, occurredAt, data, paddleEven
     return { skip: true, reason: 'payment_signal_without_subscription' };
   }
   const items = data.items ?? [];
-  const priceId = items[0]?.price?.id ?? items[0]?.priceId;
+  const priceId = items[0]?.price?.id ?? items[0]?.priceId ?? items[0]?.price_id;
   let product = null;
   try {
     if (typeof priceId === 'string') product = resolveProductFromPriceId(priceId, config);
@@ -470,7 +508,14 @@ function normalizeTransactionPaymentSignal(eventId, occurredAt, data, paddleEven
   if (!product) {
     return { skip: true, reason: 'payment_signal_unknown_price' };
   }
-  const periodEnd = occurredAt;
+
+  // Ne jamais tronquer la période à occurredAt (ça forçait grace immédiat).
+  // Utiliser billingPeriod transaction ; sinon skip → subscription.past_due rattrape.
+  const billingPeriod = extractTransactionBillingPeriod(data);
+  if (!billingPeriod) {
+    return { skip: true, reason: 'payment_signal_missing_billing_period' };
+  }
+
   return {
     provider: 'paddle',
     providerEventId: eventId,
@@ -483,9 +528,9 @@ function normalizeTransactionPaymentSignal(eventId, occurredAt, data, paddleEven
     interval: product.interval,
     productKey: product.productKey,
     status: 'past_due',
-    currentPeriodStart: occurredAt - 1,
-    currentPeriodEnd: periodEnd,
-    graceEndsAt: periodEnd + BILLING_GRACE_MS,
+    currentPeriodStart: billingPeriod.start,
+    currentPeriodEnd: billingPeriod.end,
+    graceEndsAt: billingPeriod.end + BILLING_GRACE_MS,
     amountMinor: product.amountMinor,
     currency: 'EUR',
     rawNormalized: { from: paddleEventType },
@@ -656,17 +701,21 @@ export function mapPaddleSubscriptionToProviderState(sub, config) {
   if (paddleStatus === 'paused') status = 'expired';
   if (paddleStatus === 'active') status = 'active';
 
+  const periodStart = parsePaddleTime(period.startsAt ?? period.starts_at);
+  const periodEnd = parsePaddleTime(period.endsAt ?? period.ends_at);
+  if (periodStart == null || periodEnd == null || periodEnd <= periodStart) {
+    throw new ConfigWriteError(400, 'MALFORMED_EVENT', 'subscription retrieve sans billing period');
+  }
+
   return {
     guildId,
     planKey: product.planKey,
     interval: product.interval,
     status,
-    currentPeriodStart: parsePaddleTime(period.startsAt ?? period.starts_at) ?? Date.now(),
-    currentPeriodEnd: parsePaddleTime(period.endsAt ?? period.ends_at) ?? Date.now() + 1,
+    currentPeriodStart: periodStart,
+    currentPeriodEnd: periodEnd,
     cancelAtPeriodEnd: Boolean(sub.scheduledChange?.action === 'cancel' || sub.scheduled_change?.action === 'cancel'),
-    graceEndsAt: status === 'past_due'
-      ? (parsePaddleTime(period.endsAt ?? period.ends_at) ?? Date.now()) + BILLING_GRACE_MS
-      : null,
+    graceEndsAt: status === 'past_due' ? periodEnd + BILLING_GRACE_MS : null,
     providerEventAt: Date.now(),
     providerSubscriptionId: sub.id,
     providerCustomerId: sub.customerId ?? sub.customer_id,

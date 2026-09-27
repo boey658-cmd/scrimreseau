@@ -93,6 +93,16 @@ export async function handleBillingCheckoutPrepare(deps, req, res, rawGuildId, s
       return;
     }
 
+    try {
+      await provider.assertProductPriceMatchesCatalog(productKey);
+    } catch (err) {
+      if (err instanceof ConfigWriteError) {
+        sendJson(res, err.status, { error: err.code });
+        return;
+      }
+      throw err;
+    }
+
     const intent = createOrReuseCheckoutIntent({
       db: deps.db,
       stmts: deps.stmts,

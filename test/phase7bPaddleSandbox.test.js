@@ -23,6 +23,8 @@ import {
   hashBinding,
   generateCheckoutIntentId,
   CHECKOUT_INTENT_TTL_MS,
+  mapPaddleSubscriptionToProviderState,
+  processPaddleWebhook,
 } from '../src/services/billing/index.js';
 import { ConfigWriteError } from '../src/services/configWriteError.js';
 
@@ -215,6 +217,475 @@ describe('Phase 7B — paddle normalize fixtures', () => {
         },
       },
     }), (e) => e.code === 'UNKNOWN_PRODUCT');
+  });
+
+  it('transaction.completed mensuel → période billingPeriod (pas +30j)', () => {
+    process.env.PADDLE_ENVIRONMENT = 'sandbox';
+    process.env.PADDLE_PRICE_P1_MONTHLY = 'pri_01testp1monthly00000000001';
+    process.env.PADDLE_PRICE_P1_YEARLY = 'pri_01testp1yearly000000000001';
+    process.env.PADDLE_PRICE_P2_MONTHLY = 'pri_01testp2monthly00000000001';
+    process.env.PADDLE_PRICE_P2_YEARLY = 'pri_01testp2yearly000000000001';
+    process.env.PADDLE_PRICE_P3_MONTHLY = 'pri_01testp3monthly00000000001';
+    process.env.PADDLE_PRICE_P3_YEARLY = 'pri_01testp3yearly000000000001';
+    process.env.PADDLE_API_KEY = 'pdl_sdbx_test_key_not_real';
+    process.env.PADDLE_WEBHOOK_SECRET = 'pdl_ntfset_test_secret_not_real';
+    process.env.PADDLE_CLIENT_TOKEN = 'test_client_token_not_real';
+
+    const config = parsePaddleSandboxConfig();
+    const provider = createPaddleBillingProvider(config, { paddleClient: null });
+    // Période volontairement ≠ occurredAt / ≠ MONTH pour prouver l'absence de placeholder
+    const periodStart = T0 + 12_345;
+    const periodEnd = periodStart + (32 * 24 * 60 * 60 * 1000);
+    const out = /** @type {any} */ (provider.normalizeWebhookEvent({
+      eventId: 'evt_tx_completed_month',
+      eventType: 'transaction.completed',
+      occurredAt: new Date(T0).toISOString(),
+      data: {
+        id: 'txn_01month',
+        subscriptionId: 'sub_01month',
+        customerId: 'ctm_01',
+        customData: { scrim_guild_id: GUILD, scrim_intent_id: 'bci_m', scrim_product_key: 'P1_MONTHLY' },
+        items: [{ price: { id: 'pri_01testp1monthly00000000001' }, quantity: 1 }],
+        billingPeriod: {
+          startsAt: new Date(periodStart).toISOString(),
+          endsAt: new Date(periodEnd).toISOString(),
+        },
+      },
+    }, { nowMs: T0 }));
+
+    assert.equal(out.skip, undefined);
+    assert.equal(out.eventType, 'subscription.created');
+    assert.equal(out.planKey, 'P1');
+    assert.equal(out.interval, 'month');
+    assert.equal(out.currentPeriodStart, periodStart);
+    assert.equal(out.currentPeriodEnd, periodEnd);
+    assert.notEqual(out.currentPeriodEnd, T0 + MONTH);
+    assert.notEqual(out.currentPeriodStart, T0);
+  });
+
+  it('transaction.completed annuel → billing_period snake_case', () => {
+    process.env.PADDLE_ENVIRONMENT = 'sandbox';
+    process.env.PADDLE_PRICE_P1_MONTHLY = 'pri_01testp1monthly00000000001';
+    process.env.PADDLE_PRICE_P1_YEARLY = 'pri_01testp1yearly000000000001';
+    process.env.PADDLE_PRICE_P2_MONTHLY = 'pri_01testp2monthly00000000001';
+    process.env.PADDLE_PRICE_P2_YEARLY = 'pri_01testp2yearly000000000001';
+    process.env.PADDLE_PRICE_P3_MONTHLY = 'pri_01testp3monthly00000000001';
+    process.env.PADDLE_PRICE_P3_YEARLY = 'pri_01testp3yearly000000000001';
+    process.env.PADDLE_API_KEY = 'pdl_sdbx_test_key_not_real';
+    process.env.PADDLE_WEBHOOK_SECRET = 'pdl_ntfset_test_secret_not_real';
+    process.env.PADDLE_CLIENT_TOKEN = 'test_client_token_not_real';
+
+    const config = parsePaddleSandboxConfig();
+    const provider = createPaddleBillingProvider(config, { paddleClient: null });
+    const periodStart = T0 + 99_000;
+    const periodEnd = periodStart + (400 * 24 * 60 * 60 * 1000);
+    const YEAR_PLACEHOLDER = 365 * 24 * 60 * 60 * 1000;
+    const out = /** @type {any} */ (provider.normalizeWebhookEvent({
+      event_id: 'evt_tx_completed_year',
+      event_type: 'transaction.completed',
+      occurred_at: new Date(T0).toISOString(),
+      data: {
+        id: 'txn_01year',
+        subscription_id: 'sub_01year',
+        customer_id: 'ctm_01',
+        custom_data: { scrim_guild_id: GUILD },
+        items: [{ price: { id: 'pri_01testp1yearly000000000001' }, quantity: 1 }],
+        billing_period: {
+          starts_at: new Date(periodStart).toISOString(),
+          ends_at: new Date(periodEnd).toISOString(),
+        },
+      },
+    }, { nowMs: T0 }));
+
+    assert.equal(out.skip, undefined);
+    assert.equal(out.planKey, 'P1');
+    assert.equal(out.interval, 'year');
+    assert.equal(out.currentPeriodStart, periodStart);
+    assert.equal(out.currentPeriodEnd, periodEnd);
+    assert.notEqual(out.currentPeriodEnd, T0 + YEAR_PLACEHOLDER);
+  });
+
+  it('transaction.completed sans période fiable → skip (pas de dates inventées)', () => {
+    process.env.PADDLE_ENVIRONMENT = 'sandbox';
+    process.env.PADDLE_PRICE_P1_MONTHLY = 'pri_01testp1monthly00000000001';
+    process.env.PADDLE_PRICE_P1_YEARLY = 'pri_01testp1yearly000000000001';
+    process.env.PADDLE_PRICE_P2_MONTHLY = 'pri_01testp2monthly00000000001';
+    process.env.PADDLE_PRICE_P2_YEARLY = 'pri_01testp2yearly000000000001';
+    process.env.PADDLE_PRICE_P3_MONTHLY = 'pri_01testp3monthly00000000001';
+    process.env.PADDLE_PRICE_P3_YEARLY = 'pri_01testp3yearly000000000001';
+    process.env.PADDLE_API_KEY = 'pdl_sdbx_test_key_not_real';
+    process.env.PADDLE_WEBHOOK_SECRET = 'pdl_ntfset_test_secret_not_real';
+    process.env.PADDLE_CLIENT_TOKEN = 'test_client_token_not_real';
+
+    const config = parsePaddleSandboxConfig();
+    const provider = createPaddleBillingProvider(config, { paddleClient: null });
+    const out = /** @type {any} */ (provider.normalizeWebhookEvent({
+      eventId: 'evt_tx_no_period',
+      eventType: 'transaction.completed',
+      occurredAt: new Date(T0).toISOString(),
+      data: {
+        id: 'txn_noperiod',
+        subscriptionId: 'sub_noperiod',
+        customerId: 'ctm_01',
+        customData: { scrim_guild_id: GUILD },
+        items: [{ price: { id: 'pri_01testp1monthly00000000001' }, quantity: 1 }],
+        // billingPeriod absent
+      },
+    }, { nowMs: T0 }));
+
+    assert.equal(out.skip, true);
+    assert.equal(out.reason, 'transaction_completed_missing_billing_period');
+    assert.equal(out.currentPeriodStart, undefined);
+    assert.equal(out.currentPeriodEnd, undefined);
+  });
+
+  it('transaction.completed période invalide (end <= start) → skip', () => {
+    process.env.PADDLE_ENVIRONMENT = 'sandbox';
+    process.env.PADDLE_PRICE_P1_MONTHLY = 'pri_01testp1monthly00000000001';
+    process.env.PADDLE_PRICE_P1_YEARLY = 'pri_01testp1yearly000000000001';
+    process.env.PADDLE_PRICE_P2_MONTHLY = 'pri_01testp2monthly00000000001';
+    process.env.PADDLE_PRICE_P2_YEARLY = 'pri_01testp2yearly000000000001';
+    process.env.PADDLE_PRICE_P3_MONTHLY = 'pri_01testp3monthly00000000001';
+    process.env.PADDLE_PRICE_P3_YEARLY = 'pri_01testp3yearly000000000001';
+    process.env.PADDLE_API_KEY = 'pdl_sdbx_test_key_not_real';
+    process.env.PADDLE_WEBHOOK_SECRET = 'pdl_ntfset_test_secret_not_real';
+    process.env.PADDLE_CLIENT_TOKEN = 'test_client_token_not_real';
+
+    const config = parsePaddleSandboxConfig();
+    const provider = createPaddleBillingProvider(config, { paddleClient: null });
+    const out = /** @type {any} */ (provider.normalizeWebhookEvent({
+      eventId: 'evt_tx_bad_period',
+      eventType: 'transaction.completed',
+      occurredAt: new Date(T0).toISOString(),
+      data: {
+        id: 'txn_bad',
+        subscriptionId: 'sub_bad',
+        customerId: 'ctm_01',
+        customData: { scrim_guild_id: GUILD },
+        items: [{ price: { id: 'pri_01testp1monthly00000000001' }, quantity: 1 }],
+        billingPeriod: {
+          startsAt: new Date(T0 + MONTH).toISOString(),
+          endsAt: new Date(T0).toISOString(),
+        },
+      },
+    }, { nowMs: T0 }));
+    assert.equal(out.skip, true);
+    assert.equal(out.reason, 'transaction_completed_missing_billing_period');
+  });
+
+  it('transaction.completed avec période → grant paid dates exactes (core)', async () => {
+    await withTempDb(async (db, stmts) => {
+      process.env.PADDLE_ENVIRONMENT = 'sandbox';
+      process.env.PADDLE_PRICE_P1_MONTHLY = 'pri_01testp1monthly00000000001';
+      process.env.PADDLE_PRICE_P1_YEARLY = 'pri_01testp1yearly000000000001';
+      process.env.PADDLE_PRICE_P2_MONTHLY = 'pri_01testp2monthly00000000001';
+      process.env.PADDLE_PRICE_P2_YEARLY = 'pri_01testp2yearly000000000001';
+      process.env.PADDLE_PRICE_P3_MONTHLY = 'pri_01testp3monthly00000000001';
+      process.env.PADDLE_PRICE_P3_YEARLY = 'pri_01testp3yearly000000000001';
+      process.env.PADDLE_API_KEY = 'pdl_sdbx_test_key_not_real';
+      process.env.PADDLE_WEBHOOK_SECRET = 'pdl_ntfset_test_secret_not_real';
+      process.env.PADDLE_CLIENT_TOKEN = 'test_client_token_not_real';
+
+      const periodStart = T0 + 5_000;
+      const periodEnd = periodStart + (28 * 24 * 60 * 60 * 1000);
+      const config = parsePaddleSandboxConfig();
+      const provider = createPaddleBillingProvider(config, { paddleClient: null });
+      const normalized = /** @type {any} */ (provider.normalizeWebhookEvent({
+        eventId: 'evt_tx_grant',
+        eventType: 'transaction.completed',
+        occurredAt: new Date(T0).toISOString(),
+        data: {
+          id: 'txn_grant',
+          subscriptionId: 'sub_grant',
+          customerId: 'ctm_grant',
+          customData: { scrim_guild_id: GUILD },
+          items: [{ price: { id: 'pri_01testp2monthly00000000001' }, quantity: 1 }],
+          billingPeriod: {
+            startsAt: new Date(periodStart).toISOString(),
+            endsAt: new Date(periodEnd).toISOString(),
+          },
+        },
+      }, { nowMs: T0 }));
+
+      const result = processNormalizedBillingEvent({
+        db,
+        stmts,
+        nowMs: T0,
+        event: normalized,
+      });
+      assert.equal(result.ok, true);
+      assert.equal(getPlan(GUILD, { nowMs: T0 + 10_000, stmts, bypassCache: true }), 'P2');
+
+      const grant = stmts.listEntitlementGrantsByGuild.all(GUILD).find((g) => g.source === 'paid');
+      assert.ok(grant);
+      assert.equal(grant.starts_at, periodStart);
+      assert.equal(grant.ends_at, periodEnd);
+
+      // Idempotence : même event_id
+      const dup = processNormalizedBillingEvent({
+        db,
+        stmts,
+        nowMs: T0 + 1,
+        event: normalized,
+      });
+      assert.equal(dup.ok, true);
+      assert.equal(dup.duplicate, true);
+    });
+  });
+
+  it('source provider : aucun placeholder +30j/+365j restant', () => {
+    const src = fs.readFileSync(
+      path.join(process.cwd(), 'src/services/billing/paddleBillingProvider.js'),
+      'utf8',
+    );
+    assert.ok(!src.includes('occurredAt + 365 * 24'));
+    assert.ok(!src.includes('occurredAt + 30 * 24'));
+    assert.ok(src.includes('extractTransactionBillingPeriod'));
+  });
+
+  it('transaction.payment_failed avec billingPeriod → past_due, période conservée', () => {
+    process.env.PADDLE_ENVIRONMENT = 'sandbox';
+    process.env.PADDLE_PRICE_P1_MONTHLY = 'pri_01testp1monthly00000000001';
+    process.env.PADDLE_PRICE_P1_YEARLY = 'pri_01testp1yearly000000000001';
+    process.env.PADDLE_PRICE_P2_MONTHLY = 'pri_01testp2monthly00000000001';
+    process.env.PADDLE_PRICE_P2_YEARLY = 'pri_01testp2yearly000000000001';
+    process.env.PADDLE_PRICE_P3_MONTHLY = 'pri_01testp3monthly00000000001';
+    process.env.PADDLE_PRICE_P3_YEARLY = 'pri_01testp3yearly000000000001';
+    process.env.PADDLE_API_KEY = 'pdl_sdbx_test_key_not_real';
+    process.env.PADDLE_WEBHOOK_SECRET = 'pdl_ntfset_test_secret_not_real';
+    process.env.PADDLE_CLIENT_TOKEN = 'test_client_token_not_real';
+
+    const periodStart = T0 - 10 * 24 * 60 * 60 * 1000;
+    const periodEnd = T0 + 20 * 24 * 60 * 60 * 1000;
+    const config = parsePaddleSandboxConfig();
+    const provider = createPaddleBillingProvider(config, { paddleClient: null });
+    const out = /** @type {any} */ (provider.normalizeWebhookEvent({
+      eventId: 'evt_pay_fail',
+      eventType: 'transaction.payment_failed',
+      occurredAt: new Date(T0).toISOString(),
+      data: {
+        id: 'txn_fail',
+        subscriptionId: 'sub_fail',
+        customerId: 'ctm_01',
+        customData: { scrim_guild_id: GUILD },
+        items: [{ price: { id: 'pri_01testp1monthly00000000001' }, quantity: 1 }],
+        billingPeriod: {
+          startsAt: new Date(periodStart).toISOString(),
+          endsAt: new Date(periodEnd).toISOString(),
+        },
+      },
+    }, { nowMs: T0 }));
+
+    assert.equal(out.skip, undefined);
+    assert.equal(out.eventType, 'payment.failed');
+    assert.equal(out.currentPeriodStart, periodStart);
+    assert.equal(out.currentPeriodEnd, periodEnd);
+    assert.notEqual(out.currentPeriodEnd, T0);
+    assert.equal(out.graceEndsAt, periodEnd + (7 * 24 * 60 * 60 * 1000));
+  });
+
+  it('transaction.payment_failed sans période → skip (pas de tronquage)', () => {
+    process.env.PADDLE_ENVIRONMENT = 'sandbox';
+    process.env.PADDLE_PRICE_P1_MONTHLY = 'pri_01testp1monthly00000000001';
+    process.env.PADDLE_PRICE_P1_YEARLY = 'pri_01testp1yearly000000000001';
+    process.env.PADDLE_PRICE_P2_MONTHLY = 'pri_01testp2monthly00000000001';
+    process.env.PADDLE_PRICE_P2_YEARLY = 'pri_01testp2yearly000000000001';
+    process.env.PADDLE_PRICE_P3_MONTHLY = 'pri_01testp3monthly00000000001';
+    process.env.PADDLE_PRICE_P3_YEARLY = 'pri_01testp3yearly000000000001';
+    process.env.PADDLE_API_KEY = 'pdl_sdbx_test_key_not_real';
+    process.env.PADDLE_WEBHOOK_SECRET = 'pdl_ntfset_test_secret_not_real';
+    process.env.PADDLE_CLIENT_TOKEN = 'test_client_token_not_real';
+
+    const config = parsePaddleSandboxConfig();
+    const provider = createPaddleBillingProvider(config, { paddleClient: null });
+    const out = /** @type {any} */ (provider.normalizeWebhookEvent({
+      eventId: 'evt_pay_fail_nop',
+      eventType: 'transaction.payment_failed',
+      occurredAt: new Date(T0).toISOString(),
+      data: {
+        id: 'txn_fail2',
+        subscriptionId: 'sub_fail2',
+        customerId: 'ctm_01',
+        customData: { scrim_guild_id: GUILD },
+        items: [{ price: { id: 'pri_01testp1monthly00000000001' }, quantity: 1 }],
+      },
+    }, { nowMs: T0 }));
+    assert.equal(out.skip, true);
+    assert.equal(out.reason, 'payment_signal_missing_billing_period');
+  });
+
+  it('subscription.updated renew → ends_at période réelle', async () => {
+    await withTempDb(async (db, stmts) => {
+      process.env.PADDLE_ENVIRONMENT = 'sandbox';
+      process.env.PADDLE_PRICE_P1_MONTHLY = 'pri_01testp1monthly00000000001';
+      process.env.PADDLE_PRICE_P1_YEARLY = 'pri_01testp1yearly000000000001';
+      process.env.PADDLE_PRICE_P2_MONTHLY = 'pri_01testp2monthly00000000001';
+      process.env.PADDLE_PRICE_P2_YEARLY = 'pri_01testp2yearly000000000001';
+      process.env.PADDLE_PRICE_P3_MONTHLY = 'pri_01testp3monthly00000000001';
+      process.env.PADDLE_PRICE_P3_YEARLY = 'pri_01testp3yearly000000000001';
+      process.env.PADDLE_API_KEY = 'pdl_sdbx_test_key_not_real';
+      process.env.PADDLE_WEBHOOK_SECRET = 'pdl_ntfset_test_secret_not_real';
+      process.env.PADDLE_CLIENT_TOKEN = 'test_client_token_not_real';
+
+      const config = parsePaddleSandboxConfig();
+      const provider = createPaddleBillingProvider(config, { paddleClient: null });
+
+      const firstEnd = T0 + MONTH;
+      const created = /** @type {any} */ (provider.normalizeWebhookEvent({
+        eventId: 'evt_renew_1',
+        eventType: 'subscription.activated',
+        occurredAt: new Date(T0).toISOString(),
+        data: {
+          id: 'sub_renew',
+          status: 'active',
+          customerId: 'ctm_renew',
+          customData: { scrim_guild_id: GUILD },
+          items: [{ price: { id: 'pri_01testp1monthly00000000001' }, quantity: 1 }],
+          currentBillingPeriod: {
+            startsAt: new Date(T0).toISOString(),
+            endsAt: new Date(firstEnd).toISOString(),
+          },
+        },
+      }, { nowMs: T0 }));
+      assert.equal(processNormalizedBillingEvent({ db, stmts, nowMs: T0, event: created }).ok, true);
+
+      const renewStart = firstEnd;
+      const renewEnd = renewStart + MONTH + 86_400_000; // volontairement ≠ MONTH exact
+      const renewed = /** @type {any} */ (provider.normalizeWebhookEvent({
+        eventId: 'evt_renew_2',
+        eventType: 'subscription.updated',
+        occurredAt: new Date(renewStart).toISOString(),
+        data: {
+          id: 'sub_renew',
+          status: 'active',
+          customerId: 'ctm_renew',
+          customData: { scrim_guild_id: GUILD },
+          items: [{ price: { id: 'pri_01testp1monthly00000000001' }, quantity: 1 }],
+          currentBillingPeriod: {
+            startsAt: new Date(renewStart).toISOString(),
+            endsAt: new Date(renewEnd).toISOString(),
+          },
+        },
+      }, { nowMs: renewStart }));
+      assert.equal(renewed.eventType, 'subscription.renewed');
+      assert.equal(processNormalizedBillingEvent({ db, stmts, nowMs: renewStart, event: renewed }).ok, true);
+
+      const grant = stmts.listEntitlementGrantsByGuild.all(GUILD).find((g) => g.source === 'paid');
+      assert.ok(grant);
+      assert.equal(grant.ends_at, renewEnd);
+      assert.equal(stmts.listEntitlementGrantsByGuild.all(GUILD).filter((g) => g.source === 'paid').length, 1);
+    });
+  });
+
+  it('assertProductPriceMatchesCatalog refuse mismatch montant', async () => {
+    process.env.PADDLE_ENVIRONMENT = 'sandbox';
+    process.env.PADDLE_PRICE_P1_MONTHLY = 'pri_01testp1monthly00000000001';
+    process.env.PADDLE_PRICE_P1_YEARLY = 'pri_01testp1yearly000000000001';
+    process.env.PADDLE_PRICE_P2_MONTHLY = 'pri_01testp2monthly00000000001';
+    process.env.PADDLE_PRICE_P2_YEARLY = 'pri_01testp2yearly000000000001';
+    process.env.PADDLE_PRICE_P3_MONTHLY = 'pri_01testp3monthly00000000001';
+    process.env.PADDLE_PRICE_P3_YEARLY = 'pri_01testp3yearly000000000001';
+    process.env.PADDLE_API_KEY = 'pdl_sdbx_test_key_not_real';
+    process.env.PADDLE_WEBHOOK_SECRET = 'pdl_ntfset_test_secret_not_real';
+    process.env.PADDLE_CLIENT_TOKEN = 'test_client_token_not_real';
+
+    const config = parsePaddleSandboxConfig();
+    const provider = createPaddleBillingProvider(config, {
+      paddleClient: {
+        prices: {
+          get: async () => ({
+            unitPrice: { amount: '9999', currencyCode: 'EUR' },
+          }),
+        },
+      },
+    });
+    await assert.rejects(
+      () => provider.assertProductPriceMatchesCatalog('P1_MONTHLY'),
+      (e) => e instanceof ConfigWriteError && e.code === 'PADDLE_AMOUNT_MISMATCH',
+    );
+  });
+
+  it('assertProductPriceMatchesCatalog OK si montant catalogue', async () => {
+    process.env.PADDLE_ENVIRONMENT = 'sandbox';
+    process.env.PADDLE_PRICE_P1_MONTHLY = 'pri_01testp1monthly00000000001';
+    process.env.PADDLE_PRICE_P1_YEARLY = 'pri_01testp1yearly000000000001';
+    process.env.PADDLE_PRICE_P2_MONTHLY = 'pri_01testp2monthly00000000001';
+    process.env.PADDLE_PRICE_P2_YEARLY = 'pri_01testp2yearly000000000001';
+    process.env.PADDLE_PRICE_P3_MONTHLY = 'pri_01testp3monthly00000000001';
+    process.env.PADDLE_PRICE_P3_YEARLY = 'pri_01testp3yearly000000000001';
+    process.env.PADDLE_API_KEY = 'pdl_sdbx_test_key_not_real';
+    process.env.PADDLE_WEBHOOK_SECRET = 'pdl_ntfset_test_secret_not_real';
+    process.env.PADDLE_CLIENT_TOKEN = 'test_client_token_not_real';
+
+    const config = parsePaddleSandboxConfig();
+    const provider = createPaddleBillingProvider(config, {
+      paddleClient: {
+        prices: {
+          get: async () => ({
+            unitPrice: { amount: '499', currencyCode: 'EUR' },
+          }),
+        },
+      },
+    });
+    await provider.assertProductPriceMatchesCatalog('P1_MONTHLY');
+  });
+
+  it('mapPaddleSubscriptionToProviderState refuse période inventée', () => {
+    process.env.PADDLE_ENVIRONMENT = 'sandbox';
+    process.env.PADDLE_PRICE_P2_MONTHLY = 'pri_01testp2monthly00000000001';
+    process.env.PADDLE_PRICE_P1_MONTHLY = 'pri_01testp1monthly00000000001';
+    process.env.PADDLE_PRICE_P1_YEARLY = 'pri_01testp1yearly000000000001';
+    process.env.PADDLE_PRICE_P2_YEARLY = 'pri_01testp2yearly000000000001';
+    process.env.PADDLE_PRICE_P3_MONTHLY = 'pri_01testp3monthly00000000001';
+    process.env.PADDLE_PRICE_P3_YEARLY = 'pri_01testp3yearly000000000001';
+    const config = parsePaddleSandboxConfig();
+    assert.throws(
+      () => mapPaddleSubscriptionToProviderState({
+        id: 'sub_x',
+        status: 'active',
+        customData: { scrim_guild_id: GUILD },
+        items: [{ price: { id: 'pri_01testp2monthly00000000001' } }],
+        // currentBillingPeriod absent
+      }, config),
+      (e) => e.code === 'MALFORMED_EVENT',
+    );
+  });
+
+  it('INVALID_SIGNATURE → 400 (pas de retry)', async () => {
+    await withTempDb(async (db, stmts) => {
+      process.env.PADDLE_ENVIRONMENT = 'sandbox';
+      process.env.PADDLE_PRICE_P1_MONTHLY = 'pri_01testp1monthly00000000001';
+      process.env.PADDLE_PRICE_P1_YEARLY = 'pri_01testp1yearly000000000001';
+      process.env.PADDLE_PRICE_P2_MONTHLY = 'pri_01testp2monthly00000000001';
+      process.env.PADDLE_PRICE_P2_YEARLY = 'pri_01testp2yearly000000000001';
+      process.env.PADDLE_PRICE_P3_MONTHLY = 'pri_01testp3monthly00000000001';
+      process.env.PADDLE_PRICE_P3_YEARLY = 'pri_01testp3yearly000000000001';
+      process.env.PADDLE_API_KEY = 'pdl_sdbx_test_key_not_real';
+      process.env.PADDLE_WEBHOOK_SECRET = 'pdl_ntfset_test_secret_not_real';
+      process.env.PADDLE_CLIENT_TOKEN = 'test_client_token_not_real';
+
+      const config = parsePaddleSandboxConfig();
+      const provider = createPaddleBillingProvider(config, {
+        paddleClient: {
+          webhooks: {
+            unmarshal: async () => {
+              throw new ConfigWriteError(400, 'INVALID_SIGNATURE', 'bad sig');
+            },
+          },
+        },
+      });
+      const res = await processPaddleWebhook({
+        db,
+        stmts,
+        provider,
+        rawBody: '{}',
+        signature: 'ts=1;h1=bad',
+        nowMs: T0,
+      });
+      assert.equal(res.httpStatus, 400);
+      assert.equal(res.ok, false);
+      assert.equal(res.error, 'INVALID_SIGNATURE');
+    });
   });
 });
 
