@@ -35,6 +35,7 @@ import {
 import { serializeScrimEditPayload, safeScrimEmbedMessageEdit } from './safeDiscordMessageEdit.js';
 import { wakeScrimLifecycleDispatcher } from './scrimLifecycleDispatcher.js';
 import { SCRIM_LIFECYCLE_MAX_ATTEMPTS } from './scrimLifecycleAttempts.js';
+import { removeScrimReceptionDestination } from './scrimDestinationCleanup.js';
 
 /** @typedef {'closed_manual' | 'closed_expired' | 'superseded_repost'} ScrimLifecycleEventType */
 
@@ -624,6 +625,22 @@ function finalizeOrchestratedPrefetchError(stmts, opRow, err, stage) {
 
   if (c.kind === 'terminal') {
     markScrimLifecycleOperationFailedTerminal(stmts, operationId, c.code, c.message);
+    // Salon disparu : retirer la destination (même cleanup que le broadcast), une seule fois.
+    if (
+      stage === 'channel'
+      && String(c.code) === String(RESTJSONErrorCodes.UnknownChannel)
+    ) {
+      try {
+        removeScrimReceptionDestination(
+          stmts,
+          String(opRow.guild_id ?? ''),
+          String(opRow.channel_id ?? ''),
+          'UNKNOWN_CHANNEL',
+        );
+      } catch {
+        /* non bloquant */
+      }
+    }
     try {
       logger.info('scrimLifecycleOrchestrator: prefetch_terminal', {
         lifecycle_operation_id: operationId,

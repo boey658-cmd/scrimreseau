@@ -55,6 +55,7 @@ import {
 import { computeScheduledAtIso } from '../utils/scrimScheduledAt.js';
 import {
   interactAutocompleteRespond,
+  interactDeferReply,
   interactEditReply,
   interactReply,
 } from '../utils/interactionDiscord.js';
@@ -77,6 +78,22 @@ const DEFAULT_SCRIM_COMMUNITY_TIP_URL = 'https://discord.gg/ton-invite';
  */
 function validationMsg(res, locale) {
   return res.errorCode ? t(locale, res.errorCode) : `❌ ${res.error}`;
+}
+
+/**
+ * Réponse éphémère : `reply` avant ACK, `editReply` après defer/reply.
+ * @param {import('discord.js').ChatInputCommandInteraction} interaction
+ * @param {string} content
+ */
+async function ephemeralRespond(interaction, content) {
+  if (interaction.deferred || interaction.replied) {
+    await interactEditReply(interaction, { content });
+    return;
+  }
+  await interactReply(interaction, {
+    content,
+    flags: MessageFlags.Ephemeral,
+  });
 }
 
 /**
@@ -242,10 +259,7 @@ export const rechercheScrim = {
     const locale = getGuildLocale(interaction.guildId, ctx.stmts);
 
     if (hasActiveScrimRequest(userId)) {
-      await interactReply(interaction, {
-        content: t(locale, 'findScrim.lock'),
-        flags: MessageFlags.Ephemeral,
-      });
+      await ephemeralRespond(interaction, t(locale, 'findScrim.lock'));
       return;
     }
 
@@ -254,12 +268,12 @@ export const rechercheScrim = {
       return await (async () => {
     const locale = getGuildLocale(interaction.guildId, ctx.stmts);
     if (!interaction.inGuild()) {
-      await interactReply(interaction, {
-        content: t(locale, 'findScrim.guildOnly'),
-        flags: MessageFlags.Ephemeral,
-      });
+      await ephemeralRespond(interaction, t(locale, 'findScrim.guildOnly'));
       return;
     }
+
+    // ACK Discord avant tout fetch / travail lent (évite 10062 Unknown interaction).
+    await interactDeferReply(interaction, { flags: MessageFlags.Ephemeral });
 
     const publicGuildGate = await checkScrimReseauPublicGuildMembership(
       interaction.client,
@@ -267,10 +281,7 @@ export const rechercheScrim = {
       locale,
     );
     if (!publicGuildGate.ok) {
-      await interactReply(interaction, {
-        content: publicGuildGate.content,
-        flags: MessageFlags.Ephemeral,
-      });
+      await ephemeralRespond(interaction, publicGuildGate.content);
       return;
     }
 
@@ -278,17 +289,11 @@ export const rechercheScrim = {
       failClosedOnError: true,
     });
     if (blState.result === 'service_unavailable') {
-      await interactReply(interaction, {
-        content: t(locale, 'generic.blacklistServiceUnavailable'),
-        flags: MessageFlags.Ephemeral,
-      });
+      await ephemeralRespond(interaction, t(locale, 'generic.blacklistServiceUnavailable'));
       return;
     }
     if (blState.result === 'blocked') {
-      await interactReply(interaction, {
-        content: t(locale, 'generic.blacklistedUser'),
-        flags: MessageFlags.Ephemeral,
-      });
+      await ephemeralRespond(interaction, t(locale, 'generic.blacklistedUser'));
       return;
     }
 
@@ -300,10 +305,7 @@ export const rechercheScrim = {
       locale,
     );
     if (!channelCheck.ok) {
-      await interactReply(interaction, {
-        content: channelCheck.error,
-        flags: MessageFlags.Ephemeral,
-      });
+      await ephemeralRespond(interaction, channelCheck.error);
       return;
     }
 
@@ -315,10 +317,7 @@ export const rechercheScrim = {
       locale,
     );
     if (!permCheck.ok) {
-      await interactReply(interaction, {
-        content: permCheck.error,
-        flags: MessageFlags.Ephemeral,
-      });
+      await ephemeralRespond(interaction, permCheck.error);
       return;
     }
 
@@ -336,22 +335,19 @@ export const rechercheScrim = {
 
     const dateRes = parseScrimSearchDate(dateRaw);
     if (!dateRes.ok) {
-      await interactReply(interaction, { content: validationMsg(dateRes, locale), flags: MessageFlags.Ephemeral });
+      await ephemeralRespond(interaction, validationMsg(dateRes, locale));
       return;
     }
 
     const timeRes = parseAndNormalizeTime(timeRaw);
     if (!timeRes.ok) {
-      await interactReply(interaction, { content: validationMsg(timeRes, locale), flags: MessageFlags.Ephemeral });
+      await ephemeralRespond(interaction, validationMsg(timeRes, locale));
       return;
     }
 
     const flexEndRes = validateOptionalFlexibleEndTime(timeRes.value, timeMaxRaw);
     if (!flexEndRes.ok) {
-      await interactReply(interaction, {
-        content: validationMsg(flexEndRes, locale),
-        flags: MessageFlags.Ephemeral,
-      });
+      await ephemeralRespond(interaction, validationMsg(flexEndRes, locale));
       return;
     }
 
@@ -369,12 +365,12 @@ export const rechercheScrim = {
     }
 
     if (!rankRes.ok) {
-      await interactReply(interaction, { content: validationMsg(rankRes, locale), flags: MessageFlags.Ephemeral });
+      await ephemeralRespond(interaction, validationMsg(rankRes, locale));
       return;
     }
 
     if (!formatRes.ok) {
-      await interactReply(interaction, { content: validationMsg(formatRes, locale), flags: MessageFlags.Ephemeral });
+      await ephemeralRespond(interaction, validationMsg(formatRes, locale));
       return;
     }
 
@@ -382,26 +378,19 @@ export const rechercheScrim = {
 
     const nombreDeGamesOpt = interaction.options.getInteger('nombre_de_games');
     if (nombreDeGamesOpt != null && formatRes.value !== FORMAT_SCRIM_SERIE_KEY) {
-      await interactReply(interaction, {
-        content:
-          t(locale, 'findScrim.nombreDeGamesFormat'),
-        flags: MessageFlags.Ephemeral,
-      });
+      await ephemeralRespond(interaction, t(locale, 'findScrim.nombreDeGamesFormat'));
       return;
     }
 
     const contactRes = validateContactUser(contact);
     if (!contactRes.ok) {
-      await interactReply(interaction, { content: validationMsg(contactRes, locale), flags: MessageFlags.Ephemeral });
+      await ephemeralRespond(interaction, validationMsg(contactRes, locale));
       return;
     }
 
     const multiOpggRes = validateMultiOpggUrl(multiOpggRaw, gameKey);
     if (!multiOpggRes.ok) {
-      await interactReply(interaction, {
-        content: validationMsg(multiOpggRes, locale),
-        flags: MessageFlags.Ephemeral,
-      });
+      await ephemeralRespond(interaction, validationMsg(multiOpggRes, locale));
       return;
     }
     const multiOpggUrl = multiOpggRes.value;
@@ -418,10 +407,7 @@ export const rechercheScrim = {
     if (structureRaw) {
       const partnerRow = ctx.stmts.getPartnerGuildByGuildId.get(structureRaw.trim());
       if (!partnerRow) {
-        await interactReply(interaction, {
-          content: t(locale, 'findScrim.structureInvalid'),
-          flags: MessageFlags.Ephemeral,
-        });
+        await ephemeralRespond(interaction, t(locale, 'findScrim.structureInvalid'));
         return;
       }
       structureGuildId = structureRaw.trim();
@@ -434,10 +420,7 @@ export const rechercheScrim = {
 
     const activeLimit = checkActiveScrimLimit(ctx.stmts, interaction.user.id);
     if (!activeLimit.ok) {
-      await interactReply(interaction, {
-        content: t(locale, 'findScrim.activeLimit', { max: MAX_ACTIVE_SCRIMS_PER_USER }),
-        flags: MessageFlags.Ephemeral,
-      });
+      await ephemeralRespond(interaction, t(locale, 'findScrim.activeLimit', { max: MAX_ACTIVE_SCRIMS_PER_USER }));
       return;
     }
 
@@ -446,10 +429,7 @@ export const rechercheScrim = {
       interaction.user.id,
     );
     if (!burst.ok && burst.remainingSeconds != null) {
-      await interactReply(interaction, {
-        content: t(locale, 'findScrim.cooldown', { seconds: burst.remainingSeconds }),
-        flags: MessageFlags.Ephemeral,
-      });
+      await ephemeralRespond(interaction, t(locale, 'findScrim.cooldown', { seconds: burst.remainingSeconds }));
       return;
     }
 
@@ -460,10 +440,7 @@ export const rechercheScrim = {
     if (!windowCheck.ok) {
       const winMin = Math.round(scrimModerationEnvWindowMs() / 60000);
       const winLimit = scrimModerationEnvWindowLimit();
-      await interactReply(interaction, {
-        content: t(locale, 'findScrim.windowLimit', { limit: winLimit, min: winMin }),
-        flags: MessageFlags.Ephemeral,
-      });
+      await ephemeralRespond(interaction, t(locale, 'findScrim.windowLimit', { limit: winLimit, min: winMin }));
       return;
     }
 
@@ -475,18 +452,11 @@ export const rechercheScrim = {
         game_key: gameKey,
         user_id: interaction.user.id,
       });
-      await interactReply(interaction, {
-        content:
-          t(locale, 'findScrim.noTargets'),
-        flags: MessageFlags.Ephemeral,
-      });
+      await ephemeralRespond(interaction, t(locale, 'findScrim.noTargets'));
       return;
     }
 
-    await interactReply(interaction, {
-      content: t(locale, 'findScrim.sending'),
-      flags: MessageFlags.Ephemeral,
-    });
+    await ephemeralRespond(interaction, t(locale, 'findScrim.sending'));
 
     const now = Date.now();
     const originGuild = interaction.guildId ?? 'DM';

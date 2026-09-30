@@ -14,6 +14,8 @@ import {
 import { runTransientDiscord } from '../services/discordApiGuard.js';
 import { enqueueDiscordTask } from '../services/discordTaskQueue.js';
 import {
+  interactDeferReply,
+  interactEditReply,
   interactFollowUp,
   interactReply,
 } from '../utils/interactionDiscord.js';
@@ -112,6 +114,9 @@ export const spammer = {
         return;
       }
 
+      // ACK avant fetch Discord (évite 10062 si le salon de signalement est lent / indisponible).
+      await interactDeferReply(interaction, { flags: MessageFlags.Ephemeral });
+
       const channel = await runTransientDiscord(
         () => interaction.client.channels.fetch(reportChannelId),
         {
@@ -123,9 +128,8 @@ export const spammer = {
         logger.error('spammer — salon signalement introuvable ou non texte', {
           channel_id: reportChannelId,
         });
-        await interactReply(interaction, {
+        await interactEditReply(interaction, {
           content: t(locale, 'reportSpam.channelInaccessible'),
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
@@ -174,9 +178,8 @@ export const spammer = {
             } catch {
               /* ignore */
             }
-            await interactReply(interaction, {
+            await interactEditReply(interaction, {
               content: MOD_FAIL_USER,
-              flags: MessageFlags.Ephemeral,
             });
             return;
           }
@@ -207,9 +210,8 @@ export const spammer = {
         } catch {
           /* ignore */
         }
-        await interactReply(interaction, {
+        await interactEditReply(interaction, {
           content: MOD_FAIL_USER,
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
@@ -221,9 +223,8 @@ export const spammer = {
         target.id,
       );
 
-      await interactReply(interaction, {
+      await interactEditReply(interaction, {
         content: t(locale, 'reportSpam.success'),
-        flags: MessageFlags.Ephemeral,
       });
     } catch (err) {
       logger.error('spammer', {

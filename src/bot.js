@@ -27,8 +27,7 @@ import {
 import { getGuildLocale, t } from './i18n/index.js';
 import {
   interactAutocompleteRespond,
-  interactFollowUp,
-  interactReply,
+  notifyCommandErrorToUser,
 } from './utils/interactionDiscord.js';
 import { configureDiscordLogger, logger } from './utils/logger.js';
 import { isPersistentBroadcastEnabled } from './utils/persistentBroadcastFlag.js';
@@ -151,18 +150,7 @@ export async function startBot() {
         flags: MessageFlags.Ephemeral,
       };
 
-      try {
-        if (interaction.replied || interaction.deferred) {
-          await interactFollowUp(interaction, payload);
-        } else {
-          await interactReply(interaction, payload);
-        }
-      } catch (replyErr) {
-        logger.error('Impossible d’envoyer le message d’erreur à l’utilisateur', {
-          message:
-            replyErr instanceof Error ? replyErr.message : String(replyErr),
-        });
-      }
+      await notifyCommandErrorToUser(interaction, err, payload, logger);
     }
   });
 

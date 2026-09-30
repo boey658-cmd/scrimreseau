@@ -156,6 +156,12 @@ describe('Phase 3J — channel 10003 terminal (hot-loop fix)', () => {
   it('B — 10003 channel → failed_terminal, exactement 1 fetch, pas de reclaim', async () => {
     await withTempDb(async (db, stmts) => {
       const postId = seedClosedPost(db, stmts);
+      stmts.upsertGuildChannel.run({
+        guild_id: 'g1',
+        channel_id: 'c-gone',
+        game_key: 'league_of_legends',
+        created_at: Date.now(),
+      });
       insertOrchestratedScrimLifecycleOperation(stmts, {
         scrimPostDbId: postId,
         guildId: 'g1',
@@ -187,6 +193,49 @@ describe('Phase 3J — channel 10003 terminal (hot-loop fix)', () => {
       assert.strictEqual(op.next_attempt_at, null);
       assert.ok(Number(op.attempt_count) <= SCRIM_LIFECYCLE_MAX_ATTEMPTS);
       assert.ok(Number(op.attempt_count) >= 1);
+      const dest = db
+        .prepare(`SELECT 1 AS ok FROM guild_game_channels WHERE guild_id = ? AND channel_id = ?`)
+        .get('g1', 'c-gone');
+      assert.equal(dest, undefined, 'destination 10003 retirée de guild_game_channels');
+    });
+  });
+
+  it('B2 — 10004 guild → terminal sans cleanup channel destination', async () => {
+    await withTempDb(async (db, stmts) => {
+      const postId = seedClosedPost(db, stmts);
+      stmts.upsertGuildChannel.run({
+        guild_id: 'g-gone',
+        channel_id: 'c-keep',
+        game_key: 'league_of_legends',
+        created_at: Date.now(),
+      });
+      insertOrchestratedScrimLifecycleOperation(stmts, {
+        scrimPostDbId: postId,
+        guildId: 'g-gone',
+        channelId: 'c-keep',
+        messageId: 'm-gkeep',
+        operationType: LIFECYCLE_OP_TYPE_EDIT,
+        targetStatus: 'closed_expired',
+        eventKey: `close:${postId}:closed_expired:m-gkeep`,
+        payloadJson: JSON.stringify({ v: 2, content: null, embeds: [] }),
+      });
+
+      const err = Object.assign(new Error('Unknown Guild'), { code: 10004 });
+      const { client, counters } = buildPrefetchClient({
+        guildFetch: async () => { throw err; },
+      });
+
+      startDiscordTaskQueue();
+      startScrimLifecycleDispatcher(client, stmts);
+      await drainScrimLifecycleDispatcher(client, stmts, { timeoutMs: 5_000 });
+      for (let i = 0; i < 10; i += 1) await runScrimLifecycleDispatcherPass(client, stmts);
+
+      assert.strictEqual(counters.guild, 1);
+      assert.strictEqual(counters.channel, 0);
+      const dest = db
+        .prepare(`SELECT channel_id FROM guild_game_channels WHERE guild_id = ? AND channel_id = ?`)
+        .get('g-gone', 'c-keep');
+      assert.ok(dest, '10004 ne doit pas supprimer la destination channel');
     });
   });
 
