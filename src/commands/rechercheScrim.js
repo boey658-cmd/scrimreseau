@@ -388,6 +388,23 @@ export const rechercheScrim = {
       return;
     }
 
+    // Contact ≠ auteur : membership serveur officiel fail-closed (pas de 2e fetch si contact === auteur).
+    if (contactRes.userId !== interaction.user.id) {
+      const contactGuildGate = await checkScrimReseauPublicGuildMembership(
+        interaction.client,
+        contactRes.userId,
+        locale,
+        {
+          failClosedOnError: true,
+          refusalKey: 'publicGate.contactRefusal',
+        },
+      );
+      if (!contactGuildGate.ok) {
+        await ephemeralRespond(interaction, contactGuildGate.content);
+        return;
+      }
+    }
+
     const multiOpggRes = validateMultiOpggUrl(multiOpggRaw, gameKey);
     if (!multiOpggRes.ok) {
       await ephemeralRespond(interaction, validationMsg(multiOpggRes, locale));

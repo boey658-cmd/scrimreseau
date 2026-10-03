@@ -189,6 +189,7 @@ export const pt = {
   'embed.unknownTime': 'Hora desconhecida',
   'gate.refusalBody': '🔒 O acesso ao ScrimRéseau é aprovado manualmente para manter a rede limpa e ativa.\n\nPara pedires acesso:\n• abre um ticket no Discord do ScrimRéseau\n• envia um link de convite para o teu servidor\n• indica o canal destinado aos anúncios de scrims\n\nApós a aprovação, o teu servidor receberá automaticamente os anúncios de scrims da rede. 🙂',
   'publicGate.refusal': 'Olá! Para usares este comando, tens de estar no Discord do ScrimRéseau: {url}\n\nDepois de entrares, podes procurar scrims a partir do teu servidor. Assim, os outros jogadores conseguem encontrar-te e contactar-te mais facilmente.\n\nOs restantes comandos do bot continuam disponíveis.',
+  'publicGate.contactRefusal': 'O contacto selecionado tem de entrar no servidor oficial ScrimRéseau no Discord antes de poder ser usado como contacto: {url}',
   'restrictions.wrongChannel': '❌ Não podes usar este comando neste canal.',
   'restrictions.noPermission': '❌ Não tens permissão para usar este comando.',
   'restrictions.configError': '❌ Não foi possível verificar a configuração do servidor. Tenta novamente mais tarde.',

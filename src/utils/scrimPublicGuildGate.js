@@ -46,11 +46,38 @@ export function buildScrimReseauPublicMembershipRefusalContent(inviteUrl, locale
 }
 
 /**
+ * @param {string} inviteUrl
+ * @param {string} [locale]
+ * @returns {string}
+ */
+export function buildScrimReseauPublicContactMembershipRefusalContent(inviteUrl, locale = 'fr') {
+  return t(locale, 'publicGate.contactRefusal', { url: inviteUrl });
+}
+
+/**
  * @param {import('discord.js').Client} client
  * @param {string} userId
+ * @param {string} [locale]
+ * @param {{
+ *   failClosedOnError?: boolean,
+ *   refusalKey?: string,
+ * }} [options]
+ *   `failClosedOnError` défaut false = comportement historique fail-open (sauf 10007).
+ *   `refusalKey` défaut `publicGate.refusal` (auteur) ; contact utilise `publicGate.contactRefusal`.
  * @returns {Promise<{ ok: true } | { ok: false, content: string }>}
  */
-export async function checkScrimReseauPublicGuildMembership(client, userId, locale = 'fr') {
+export async function checkScrimReseauPublicGuildMembership(
+  client,
+  userId,
+  locale = 'fr',
+  options = {},
+) {
+  const failClosedOnError = options?.failClosedOnError === true;
+  const refusalKey =
+    typeof options?.refusalKey === 'string' && options.refusalKey
+      ? options.refusalKey
+      : 'publicGate.refusal';
+
   const guildId = getScrimReseauPublicGuildIdFromEnv();
   if (!guildId) {
     logger.warn(
@@ -60,6 +87,7 @@ export async function checkScrimReseauPublicGuildMembership(client, userId, loca
   }
 
   const inviteUrl = getScrimReseauPublicInviteUrlForMessage();
+  const refusalContent = () => t(locale, refusalKey, { url: inviteUrl });
 
   let guild;
   try {
@@ -71,10 +99,16 @@ export async function checkScrimReseauPublicGuildMembership(client, userId, loca
       guild_id: guildId,
       message: err instanceof Error ? err.message : String(err),
     });
+    if (failClosedOnError) {
+      return { ok: false, content: refusalContent() };
+    }
     return { ok: true };
   }
 
   if (!guild) {
+    if (failClosedOnError) {
+      return { ok: false, content: refusalContent() };
+    }
     return { ok: true };
   }
 
@@ -90,7 +124,7 @@ export async function checkScrimReseauPublicGuildMembership(client, userId, loca
     if (code === DISCORD_UNKNOWN_MEMBER) {
       return {
         ok: false,
-        content: buildScrimReseauPublicMembershipRefusalContent(inviteUrl, locale),
+        content: refusalContent(),
       };
     }
 
@@ -100,6 +134,9 @@ export async function checkScrimReseauPublicGuildMembership(client, userId, loca
       code,
       message: err instanceof Error ? err.message : String(err),
     });
+    if (failClosedOnError) {
+      return { ok: false, content: refusalContent() };
+    }
     return { ok: true };
   }
 }

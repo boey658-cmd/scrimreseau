@@ -236,6 +236,7 @@ export const fr = {
 
   // ── Gate serveur public ScrimRéseau ──────────────────────────────────
   'publicGate.refusal': 'Bonjour, pour utiliser cette commande, tu dois être présent sur le Discord ScrimRéseau : {url}\n\nUne fois dedans, tu pourras faire tes recherches depuis ton propre serveur. Cela permet aux autres joueurs de pouvoir te retrouver et te contacter plus facilement pour organiser les scrims.\n\nLes autres commandes du bot restent disponibles.',
+  'publicGate.contactRefusal': 'Le contact sélectionné doit rejoindre le serveur officiel ScrimRéseau avant de pouvoir être utilisé comme contact : {url}',
 
   // ── Restrictions salon / permissions ────────────────────────────────
   'restrictions.wrongChannel': '❌ Tu ne peux pas utiliser cette commande dans ce salon.',

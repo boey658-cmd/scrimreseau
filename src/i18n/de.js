@@ -189,6 +189,7 @@ export const de = {
   'embed.unknownTime': 'Unbekannte Zeit',
   'gate.refusalBody': '🔒 Der Zugriff auf ScrimRéseau wird manuell freigeschaltet, damit das Netzwerk sauber und aktiv bleibt.\n\nSo beantragst du Zugriff:\n• Öffne ein Ticket auf dem ScrimRéseau-Discord\n• Sende einen Einladungslink zu deinem Server\n• Nenne den Kanal für Scrim-Ankündigungen\n\nNach der Freischaltung empfängt dein Server die Scrim-Ankündigungen des Netzwerks automatisch. 🙂',
   'publicGate.refusal': 'Hallo! Um diesen Befehl zu verwenden, musst du dem ScrimRéseau-Discord beitreten: {url}\n\nDanach kannst du auf deinem eigenen Server nach Scrims suchen. Andere Spieler können dich so leichter finden und kontaktieren.\n\nDie übrigen Bot-Befehle bleiben verfügbar.',
+  'publicGate.contactRefusal': 'Der ausgewählte Kontakt muss dem offiziellen ScrimRéseau-Discord beitreten, bevor er als Kontakt verwendet werden kann: {url}',
   'restrictions.wrongChannel': '❌ Du kannst diesen Befehl in diesem Kanal nicht verwenden.',
   'restrictions.noPermission': '❌ Du hast keine Berechtigung für diesen Befehl.',
   'restrictions.configError': '❌ Die Serverkonfiguration konnte nicht geprüft werden. Versuche es später erneut.',

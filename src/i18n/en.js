@@ -234,6 +234,7 @@ export const en = {
 
   // ── Gate serveur public ──────────────────────────────────────────────
   'publicGate.refusal': 'Hello, to use this command, you must be a member of the ScrimRéseau Discord: {url}\n\nOnce inside, you can make your searches from your own server. This allows other players to find and contact you more easily to organize scrims.\n\nOther bot commands remain available.',
+  'publicGate.contactRefusal': 'The selected contact must join the official ScrimRéseau Discord server before they can be used as a contact: {url}',
 
   // ── Restrictions ─────────────────────────────────────────────────────
   'restrictions.wrongChannel': '❌ You cannot use this command in this channel.',
