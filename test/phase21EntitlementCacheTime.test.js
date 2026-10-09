@@ -324,19 +324,19 @@ describe('Phase 2.1 — frontières temporelles (fake clock)', () => {
     });
   });
 
-  it('7. P3 expire → FREE → destinations 10 → 1 immédiat', async () => {
+  it('7. P3 expire → FREE → destinations 11 → 1 immédiat', async () => {
     await withTempDb(async (db, stmts) => {
-      seedReceptionChannels(db, 10);
+      seedReceptionChannels(db, 11);
       const endsAt = T0 + 5_000;
       grant(db, stmts, {
         planKey: 'P3', source: 'gift', startsAt: T0, endsAt,
       });
 
-      assert.equal(getLimit(GUILD, 'reception_channels', { nowMs: endsAt - 1, stmts }), 10);
+      assert.equal(getLimit(GUILD, 'reception_channels', { nowMs: endsAt - 1, stmts }), 11);
       assert.equal(
         listActiveReceptionDestinationsForGame(stmts, UI_PRIMARY_GAME_KEY, { nowMs: endsAt - 1 })
           .filter((d) => d.guild_id === GUILD).length,
-        10,
+        11,
       );
 
       // Warm cache juste avant

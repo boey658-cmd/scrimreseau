@@ -77,7 +77,7 @@ export const PLAN_P2 = Object.freeze({
 export const PLAN_P3 = Object.freeze({
   planKey: 'P3',
   tier: 3,
-  limits: Object.freeze({ reception_channels: 10 }),
+  limits: Object.freeze({ reception_channels: 11 }),
   features: Object.freeze({
     ...PREMIUM_FEATURES_OFF,
     multi_reception_channels: true,

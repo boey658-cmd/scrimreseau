@@ -305,8 +305,8 @@ describe('Phase 2 — quotas add FREE/P1/P2/P3', () => {
   it('P2: 4 OK, 5 refus', async () => {
     await assertAddUntilLimit('P2', 4);
   });
-  it('P3: 10 OK, 11 refus', async () => {
-    await assertAddUntilLimit('P3', 10);
+  it('P3: 11 OK, 12 refus', async () => {
+    await assertAddUntilLimit('P3', 11);
   });
 
   it('add duplicate => RECEPTION_CHANNEL_ALREADY_EXISTS', async () => {
@@ -683,7 +683,7 @@ describe('Phase 2 — concurrence quota race-safe', () => {
 describe('Phase 2 — performance discovery 100 guilds', () => {
   it('destination discovery ~1000 max sans N+1 visible (cache entitlement)', async () => {
     await withTempDb(async (db, stmts) => {
-      // 50 FREE (1) + 30 P1 (2) + 15 P2 (4) + 5 P3 (10) = 50+60+60+50 = 220 dest
+      // 50 FREE (1) + 30 P1 (2) + 15 P2 (4) + 5 P3 (11) = 50+60+60+55 = 225 dest
       for (let i = 0; i < 50; i++) {
         const g = String(200000000000000000n + BigInt(i));
         seedChannels(db, g, 1, { startN: 1000 + i * 20 });
@@ -701,14 +701,14 @@ describe('Phase 2 — performance discovery 100 guilds', () => {
       for (let i = 0; i < 5; i++) {
         const g = String(230000000000000000n + BigInt(i));
         grantPlan(db, stmts, g, 'P3', Date.now() + i);
-        seedChannels(db, g, 10, { startN: 4000 + i * 20 });
+        seedChannels(db, g, 11, { startN: 4000 + i * 20 });
       }
       clearEntitlementCache();
 
       const t0 = Date.now();
       const dest = listActiveReceptionDestinationsForGame(stmts, UI_PRIMARY_GAME_KEY);
       const elapsed = Date.now() - t0;
-      assert.equal(dest.length, 50 + 60 + 60 + 50);
+      assert.equal(dest.length, 50 + 60 + 60 + 55);
       assert.ok(elapsed < 5000, `discovery trop lente: ${elapsed}ms`);
     });
   });

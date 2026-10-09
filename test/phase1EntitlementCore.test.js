@@ -80,7 +80,7 @@ describe('Phase 1 — planCatalog', () => {
     assert.equal(PLAN_FREE.limits.reception_channels, 1);
     assert.equal(PLAN_P1.limits.reception_channels, 2);
     assert.equal(PLAN_P2.limits.reception_channels, 4);
-    assert.equal(PLAN_P3.limits.reception_channels, 10);
+    assert.equal(PLAN_P3.limits.reception_channels, 11);
   });
 
   it('tiers ordonnés FREE < P1 < P2 < P3', () => {
@@ -572,7 +572,7 @@ describe('Phase 1 — limits via API', () => {
       });
       clearEntitlementCache();
       bindEntitlementStore(stmts);
-      assert.equal(getLimit(GUILD, 'reception_channels', { nowMs: T0 + 1, stmts, bypassCache: true }), 10);
+      assert.equal(getLimit(GUILD, 'reception_channels', { nowMs: T0 + 1, stmts, bypassCache: true }), 11);
       assert.equal(canUseFeature(GUILD, 'elo_channel_filters', { nowMs: T0 + 1, stmts, bypassCache: true }), true);
       assert.equal(getLimit(GUILD, 'unknown', { stmts, bypassCache: true }), 0);
     });
